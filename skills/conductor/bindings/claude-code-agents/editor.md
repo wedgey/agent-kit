@@ -1,5 +1,5 @@
 ---
-name: conductor-editor
+name: editor
 description: Only for a conductor brief, never for ordinary tasks. Conductor's editor. Applies a brief with nothing left to decide, or runs a command and reports.
 model: haiku
 effort: low

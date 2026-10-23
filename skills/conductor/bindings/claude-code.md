@@ -34,19 +34,19 @@ Besides `AGENTS.md`, read `CLAUDE.md` and `.claude/skills/` in the repo.
 
 ## Spawning by role
 
-Spawn each role as its role agent. Setup installs them from `claude-code-agents/`. Each one carries its tier's model and effort, the tools its role may not use, its rules and the report shape, so the brief needs only GOAL, SCOPE, CONTEXT, ACCEPTANCE and GATE.
+Spawn each role as its role agent. The conductor plugin ships them from `claude-code-agents/`, and Claude Code scopes each name to the plugin. Each one carries its tier's model and effort, the tools its role may not use, its rules and the report shape, so the brief needs only GOAL, SCOPE, CONTEXT, ACCEPTANCE and GATE.
 
 | Role | `subagent_type` | Default tier | Without the role agent |
 |---|---|---|---|
-| explorer | `conductor-explorer` | bulk-read | `Explore` |
-| implementer | `conductor-implementer` | strong-code | `general-purpose` |
-| editor | `conductor-editor` | mechanical | `general-purpose` |
-| reviewer | `conductor-reviewer` | frontier | `general-purpose` |
-| verifier | `conductor-verifier` | frontier | `general-purpose` |
+| explorer | `conductor:explorer` | bulk-read | `Explore` |
+| implementer | `conductor:implementer` | strong-code | `general-purpose` |
+| editor | `conductor:editor` | mechanical | `general-purpose` |
+| reviewer | `conductor:reviewer` | frontier | `general-purpose` |
+| verifier | `conductor:verifier` | frontier | `general-purpose` |
 
 To escalate, pass both `model` and `effort` from the tier table, and keep the spawn's `description` unchanged so the retry reads as the same piece of work. A per-spawn `model` replaces the agent's model, but the agent's `effort` stays unless you pass one.
 
-If `subagent_type` is unknown, the role agents are not installed. Tell the operator to run `/conductor setup`, then use the fallback type, pass `model` and `effort` on every spawn, and paste the body of `claude-code-agents/conductor-<role>.md` (everything below its frontmatter) into the brief.
+If `subagent_type` is unknown, the plugin is not installed or not enabled in this session. Tell the operator to run `/conductor:conductor setup`, then use the fallback type, pass `model` and `effort` on every spawn, and paste the body of `claude-code-agents/<role>.md` (everything below its frontmatter) into the brief.
 
 The explorer, reviewer and verifier agents cannot edit or write files but can still run shell commands. After one of them, or any fallback spawn of those roles, returns, run `git status` and treat any change as a failed gate.
 

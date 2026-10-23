@@ -1,5 +1,17 @@
 {
   "name": "agent-kit",
-  "owner": { "name": "Desmond Poon" },
-  "plugins": [{ "name": "session-activity", "source": "./plugins/session-activity" }]
+  "owner": {
+    "name": "Desmond Poon"
+  },
+  "description": "Personal catalog of agent skills and Claude Code plugins",
+  "plugins": [
+    {
+      "name": "conductor",
+      "source": "./"
+    },
+    {
+      "name": "session-activity",
+      "source": "./plugins/session-activity"
+    }
+  ]
 }
