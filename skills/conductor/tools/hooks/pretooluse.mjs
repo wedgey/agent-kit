@@ -99,7 +99,10 @@ const taskQueue = (tasks) => {
   return /e2e|playwright|cypress/.test(task) ? "e2e" : "tests";
 };
 
-/** The queue a head belongs in, "tests" or "e2e", or null when it is not heavy, is scoped or watches. */
+/**
+ * The queue a head belongs in, "tests" or "e2e", or null when it is not heavy, is scoped or watches.
+ * Scoping frees only the tests queue: every e2e run boots a dev server and a browser whatever its scope.
+ */
 export function heavyQueue(head) {
   const [tool, ...args] = head;
   if (args.some((a) => INFO_ANYWHERE.has(a)) || isShortInfo(tool, args)) return null;
@@ -138,9 +141,9 @@ export function heavyQueue(head) {
     case "make":
       return taskQueue(positional(args));
     case "playwright":
-      return args[0] === "test" && !scoped(args) ? "e2e" : null;
+      return args[0] === "test" ? "e2e" : null;
     case "cypress":
-      return args[0] === "run" && !args.some((a) => a === "--spec" || a.startsWith("--spec=")) ? "e2e" : null;
+      return args[0] === "run" ? "e2e" : null;
     case "gradle":
     case "gradlew":
       return tests(args.some((a) => GRADLE_TASKS.has(a)) && !args.includes("--tests"));
@@ -173,7 +176,8 @@ function packageScriptQueue(tool, args) {
   if (name === undefined) return null;
   const forwarded = args.slice(nameAt + 1);
   if (isRun ? SCRIPT.test(name) : PM_SHORT.has(name) || (tool !== "npm" && name !== PM_INSTALL && SCRIPT.test(name))) {
-    return scoped(forwarded) ? null : taskQueue([name]);
+    const queue = taskQueue([name]);
+    return queue === "e2e" || !scoped(forwarded) ? queue : null;
   }
   return !isRun && (tool === "pnpm" || tool === "yarn") ? heavyQueue([name, ...forwarded]) : null;
 }
