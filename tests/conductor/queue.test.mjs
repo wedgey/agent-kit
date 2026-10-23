@@ -55,6 +55,8 @@ import {
   stateDir,
   statusText,
   stopSlot,
+  lockHolders,
+  orphanProcess,
   statusJson,
   memoryAdmits,
   meminfo as meminfoOf,
@@ -338,6 +340,28 @@ describe("memory admission and the status shape", () => {
     expect(treeCpuPct(a, b, 9, 1000)).toBeNull();
     expect(treeMemKb(b, 1, (pid) => (pid === 3 ? "" : `Name: x\nVmRSS:\t  ${pid * 10} kB\n`))).toBe(30);
     expect(treeMemKb(b, 1, () => { throw new Error("gone"); })).toBeNull();
+  });
+});
+
+describe("orphaned slots", () => {
+  const stat = (start) => `1 (x) S ${Array.from({ length: 50 }, (_, i) => (i === 18 ? String(start) : "0")).join(" ")}`;
+  it("finds every process with the lock open by its fd links, and nothing for an unreadable file", () => {
+    const deps = { pids: () => ["1", "2", "3"], fds: (pid) => (pid === 3 ? ["5"] : pid === 2 ? (() => { throw new Error("EACCES"); })() : ["4", "9"]), link: (pid, fd) => (fd === "9" || pid === 3 ? "/q/slot-0" : "/dev/null"), real: (f) => f };
+    expect(lockHolders("/q/slot-0", deps)).toEqual([1, 3]);
+    expect(lockHolders("/q/slot-0", { ...deps, real: () => { throw new Error("ENOENT"); } })).toEqual([]);
+  });
+
+  it("names the earliest-started holder with its cwd, command line and age, and nothing when none is found", () => {
+    const files = { "/proc/7/stat": stat(500), "/proc/8/stat": stat(100), "/proc/8/cmdline": "bash\0-c\0sleep 9\0", "/proc/uptime": "11.00 3.0" };
+    const readFile = (f) => {
+      if (f in files) return files[f];
+      throw new Error("ENOENT");
+    };
+    expect(orphanProcess("/q/slot-0", { lockHolders: () => [7, 8], readFile, readlink: () => "/w/lane" })).toEqual({
+      pid: 8, startTime: 100, cwd: "/w/lane", command: "bash -c sleep 9", ageMs: 10_000,
+    });
+    expect(orphanProcess("/q/slot-0", { lockHolders: () => [] })).toEqual({});
+    expect(holderLine({ slot: 2, orphan: true, pid: 8, ageMs: 10_000, cwd: "/w", command: "x" })).toBe("slot 2: orphaned run (no record), pid 8, 10s, /w, x");
   });
 });
 
@@ -1089,10 +1113,58 @@ describe("real multi-process queue", () => {
     await until(() => existsSync(running) && listHolders(qdir()).length === 1, "command running");
     process.kill(listHolders(qdir())[0].pid, "SIGKILL");
     await orphan.done;
-    expect(queueSnapshot(qdir(), { sample: false }).holders).toEqual([{ slot: 0, orphan: true }]);
+    const [orphaned] = queueSnapshot(qdir(), { sample: false }).holders;
+    expect(orphaned).toMatchObject({ slot: 0, orphan: true, cwd: process.cwd() });
+    expect(orphaned.command).toMatch(/orphan-done/);
+    expect(orphaned.ageMs).toBeGreaterThanOrEqual(0);
+    expect(orphaned.ageMs).toBeLessThan(30_000);
+    expect(processStartTime(orphaned.pid)).toBe(orphaned.startTime);
     const next = start(["--", process.execPath, "-e", `require("fs").writeFileSync(${JSON.stringify(seen)}, String(require("fs").existsSync(${JSON.stringify(orphanDone)})))`]);
     expect((await next.done).code).toBe(0);
     expect(readFileSync(seen, "utf8")).toBe("true");
+  });
+
+  it("finds an orphaned slot's process by its lock fd, reports it in status, and stop frees the slot", { timeout: 30_000 }, async () => {
+    const running = path.join(tmp, "running");
+    const done = path.join(tmp, "done");
+    const orphan = start(["--", "bash", "-c", `touch ${running}; sleep 20; touch ${done}`]);
+    await until(() => existsSync(running) && listHolders(qdir()).length === 1, "command running");
+    process.kill(listHolders(qdir())[0].pid, "SIGKILL");
+    await orphan.done;
+    const [h] = statusOf().queues[0].holders;
+    expect(h).toMatchObject({ slot: 0, state: "orphan", cwd: process.cwd() });
+    expect(h.command).toMatch(/^bash -c touch .*sleep 20/);
+    expect(typeof h.pid).toBe("number");
+    expect(h.memKb).toBeGreaterThan(0);
+    const { code, json } = cli("stop", "q", "0");
+    expect(code).toBe(0);
+    expect(json).toMatchObject({ ok: true, killed: 0 });
+    expect(json.stopped).toBeGreaterThanOrEqual(2);
+    const t0 = Date.now();
+    expect((await start(["--", process.execPath, "-e", "0"]).done).code).toBe(0);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(existsSync(done)).toBe(false);
+  });
+
+  it("move says when priority blocks it or the waiter is already there, and moves nothing then", { timeout: 30_000 }, async () => {
+    const release = path.join(tmp, "release");
+    const holder = start(["--", process.execPath, "-e", `const t = setInterval(() => require("fs").existsSync(${JSON.stringify(release)}) && clearInterval(t), 20)`]);
+    await until(() => listHolders(qdir()).length === 1, "holder");
+    const gate = start(["--priority=gate", "--", process.execPath, "-e", "1"]);
+    await until(() => tickets() === 1, "gate ticket");
+    const normal = start(["--", process.execPath, "-e", "2"]);
+    await until(() => tickets() === 2, "normal ticket");
+    const line = () => freshTickets(listTickets(qdir()), Date.now());
+    const id = (w) => line().find((t) => t.pid === w.child.pid).ticket;
+    const before = line().map((t) => [t.ticket, t.createdAt]);
+    expect(cli("move", id(normal), "top")).toEqual({ code: 1, json: { ok: false, reason: "a normal run can't pass a gate run" } });
+    expect(cli("move", id(normal), "up").json).toEqual({ ok: false, reason: "a normal run can't pass a gate run" });
+    expect(cli("move", id(gate), "down").json).toEqual({ ok: false, reason: "a gate run can't drop behind a normal run" });
+    expect(cli("move", id(gate), "top")).toEqual({ code: 0, json: { ok: true, note: "already at the top" } });
+    expect(cli("move", id(normal), "down").json).toEqual({ ok: true, note: "already at the bottom" });
+    expect(line().map((t) => [t.ticket, t.createdAt])).toEqual(before);
+    writeFileSync(release, "x");
+    await Promise.all([holder.done, gate.done, normal.done]);
   });
 
   it("gives up within a poll of --timeout, not a whole backoff late", { timeout: 30_000 }, async () => {

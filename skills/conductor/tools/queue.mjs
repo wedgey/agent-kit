@@ -18,6 +18,7 @@
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import {
   accessSync,
+  existsSync,
   constants as fsConstants,
   mkdirSync,
   readdirSync,
@@ -364,12 +365,66 @@ export const truncate = (text, max = COMMAND_SHOWN) =>
   text.length > max ? `${text.slice(0, max - 1)}…` : text;
 
 export function holderLine(h, now = Date.now()) {
-  if (h.orphan) return `slot ${h.slot}: held (no record; orphaned run)`;
+  if (h.orphan && !h.pid) return `slot ${h.slot}: held (no record; orphaned run)`;
+  if (h.orphan) return `slot ${h.slot}: orphaned run (no record), pid ${h.pid}, ${formatAge(h.ageMs ?? 0)}, ${h.cwd ?? "?"}, ${truncate(h.command ?? "?")}`;
   return `slot ${h.slot}: ${h.state ?? "unknown"}, ${formatAge(now - h.acquiredAt)}, ${h.cwd}, ${truncate(h.command)}`;
 }
 
 export function waiterLine(t, rank, now = Date.now()) {
   return `#${rank + 1} ${t.priority}: ${formatAge(now - (t.enqueuedAt ?? t.createdAt))}, ${t.cwd}, ${truncate(t.command)}`;
+}
+
+/**
+ * Every process with `file` open, found by its /proc/<pid>/fd links the way fuser(1) does. Slow on
+ * a busy box (one readdir per process), so callers ask only about a slot held with no record.
+ */
+export function lockHolders(file, deps = {}) {
+  const list = deps.pids ?? (() => readdirSync("/proc").filter((n) => /^\d+$/.test(n)));
+  const fds = deps.fds ?? ((pid) => readdirSync(`/proc/${pid}/fd`));
+  const link = deps.link ?? ((pid, fd) => readlinkSync(`/proc/${pid}/fd/${fd}`));
+  let target;
+  let pids;
+  try {
+    target = (deps.real ?? realpathSync)(file);
+    pids = list();
+  } catch {
+    return [];
+  }
+  return pids.map(Number).filter((pid) => {
+    try {
+      return fds(pid).some((fd) => safeLink(() => link(pid, fd)) === target);
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * The run behind an orphaned slot: the earliest-started of the processes holding its lock (a
+ * waiter's `flock -n` probe holds it for an instant too), with its cwd, command line and age.
+ * Empty when nothing can be found.
+ */
+export function orphanProcess(file, deps = {}) {
+  const read = deps.readFile ?? readText;
+  const holders = (deps.lockHolders ?? lockHolders)(file)
+    .map((pid) => ({ pid, startTime: processStartTime(pid, read) }))
+    .filter((p) => p.startTime !== null)
+    .sort((a, b) => a.startTime - b.startTime);
+  if (holders.length === 0) return {};
+  const { pid, startTime } = holders[0];
+  let cwd = null;
+  let command = null;
+  let ageMs = null;
+  try {
+    cwd = (deps.readlink ?? readlinkSync)(`/proc/${pid}/cwd`);
+  } catch {}
+  try {
+    command = read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean).join(" ") || null;
+  } catch {}
+  try {
+    ageMs = Math.max(0, Math.round(Number(read("/proc/uptime").split(" ")[0]) * 1000 - (startTime / CLOCK_TICKS) * 1000));
+  } catch {}
+  return { pid, startTime, cwd, command, ageMs };
 }
 
 const lockBusy = (spawn, file) => spawn("flock", ["-n", file, "true"], { stdio: "ignore" }).status === 1;
@@ -400,12 +455,13 @@ export function queueSnapshot(dir, deps = {}) {
   for (const name of files) {
     const slot = Number(name.slice("slot-".length));
     if (held.has(slot) || Date.now() > budgetEnd) continue;
-    if (lockBusy(spawn, path.join(dir, name))) orphans.push({ slot, orphan: true });
+    const file = path.join(dir, name);
+    if (lockBusy(spawn, file)) orphans.push({ slot, orphan: true, ...(deps.orphanProcess ?? orphanProcess)(file) });
   }
-  const sampled = deps.sample === false ? recorded : withActivity(recorded, deps);
-  const holders = [...sampled.map((h) => ({ ...h, ageMs: now - h.acquiredAt })), ...orphans].sort(
-    (a, b) => a.slot - b.slot,
-  );
+  const found = orphans.filter((o) => o.pid);
+  const live = [...recorded.map((h) => ({ ...h, ageMs: now - h.acquiredAt })), ...found];
+  const sampled = deps.sample === false ? live : withActivity(live, deps);
+  const holders = [...sampled, ...orphans.filter((o) => !o.pid)].sort((a, b) => a.slot - b.slot);
   // Lock files are never deleted, so after a resize they overcount; live records are the truth.
   const slots = Math.max(0, ...[...recorded, ...waiters].map((r) => r.slots ?? 0));
   return slots > 0
@@ -441,20 +497,16 @@ export function statusJson(queues, env = process.env, deps = {}) {
       name: q.name,
       slots: q.slots,
       slotsSource: q.slotsSource,
-      holders: q.holders.map((h) =>
-        h.orphan
-          ? { slot: h.slot, pid: null, cwd: null, command: null, ageMs: null, state: "orphan", cpuPct: null, memKb: null }
-          : {
-              slot: h.slot,
-              pid: h.pid,
-              cwd: orNull(h.cwd),
-              command: orNull(h.command),
-              ageMs: orNull(h.ageMs),
-              state: h.state ?? "unknown",
-              cpuPct: orNull(h.cpuPct),
-              memKb: orNull(h.memKb),
-            },
-      ),
+      holders: q.holders.map((h) => ({
+        slot: h.slot,
+        pid: orNull(h.pid),
+        cwd: orNull(h.cwd),
+        command: orNull(h.command),
+        ageMs: orNull(h.ageMs),
+        state: h.orphan ? "orphan" : (h.state ?? "unknown"),
+        cpuPct: orNull(h.cpuPct),
+        memKb: orNull(h.memKb),
+      })),
       waiters: q.waiters.map((w) => ({
         ticket: w.ticket,
         pid: w.pid,
@@ -867,11 +919,17 @@ function stillRunning(pid, startTime, readFile = readText) {
  * SIGTERM to a slot holder's whole process tree, then SIGKILL to what is left after `graceMs`.
  * The tree is read once, before any signal: a child whose parent died is reparented and lost.
  */
-export function stopSlot(env, queue, slot, { graceMs = STOP_GRACE_MS, kill = process.kill } = {}) {
-  if (!validQueueName(queue)) return { ok: false, reason: `invalid queue name ${queue}` };
-  const holder = listHolders(queueDir(env, queue)).find((h) => h.slot === Number(slot));
-  if (!holder) return { ok: false, reason: `no live holder in slot ${slot} of ${queue}` };
-  const tree = (treePids(snapshotProc(), holder.pid) ?? [holder.pid]).map((pid) => [pid, processStartTime(pid)]);
+export function stopSlot(env, queue, slot, { graceMs = STOP_GRACE_MS, kill = process.kill, spawn = spawnSync } = {}) {
+  if (!validQueueName(queue) || !/^\d+$/.test(String(slot))) return { ok: false, reason: `invalid queue or slot ${queue} ${slot}` };
+  const dir = queueDir(env, queue);
+  const holder = listHolders(dir).find((h) => h.slot === Number(slot));
+  const lock = path.join(dir, `slot-${slot}`);
+  // An orphaned slot has no record: every process still holding its lock is the run.
+  const roots = holder ? [holder.pid] : existsSync(lock) && lockBusy(spawn, lock) ? lockHolders(lock) : [];
+  if (roots.length === 0) return { ok: false, reason: `no live holder in slot ${slot} of ${queue}` };
+  const snap = snapshotProc();
+  const pids = new Set(roots.flatMap((r) => treePids(snap, r) ?? [r]));
+  const tree = [...pids].map((pid) => [pid, processStartTime(pid)]);
   const signal = (sig, list) => {
     for (const [pid] of list) {
       try {
@@ -914,10 +972,18 @@ export function moveTicket(env, ticket, where) {
   const mine = all.find((t) => t.ticket === ticket);
   if (!mine) return { ok: false, reason: `no waiting ticket ${ticket}` };
   const line = all.filter((t) => t.priority === mine.priority);
+  const at = line.indexOf(mine);
+  const toward = where === "down" ? 1 : -1;
+  if (at === (toward < 0 ? 0 : line.length - 1)) {
+    // At the end of its own priority already: a step further would cross into another one.
+    const other = all[all.indexOf(mine) + toward];
+    if (other && toward < 0) return { ok: false, reason: `a ${mine.priority} run can't pass a ${other.priority} run` };
+    if (other) return { ok: false, reason: `a ${mine.priority} run can't drop behind a ${other.priority} run` };
+    return { ok: true, note: toward < 0 ? "already at the top" : "already at the bottom" };
+  }
   const keys = line.map((t) => t.createdAt);
   const order = line.filter((t) => t !== mine);
-  const at = line.indexOf(mine);
-  order.splice(where === "top" ? 0 : where === "up" ? Math.max(0, at - 1) : Math.min(order.length, at + 1), 0, mine);
+  order.splice(where === "top" ? 0 : where === "up" ? at - 1 : at + 1, 0, mine);
   let last = -Infinity;
   order.forEach((t, i) => {
     // Strictly increasing, so equal keys never fall back to the pid tiebreak.
