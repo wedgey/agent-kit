@@ -7,7 +7,7 @@ Design docs per entry: see [CONTEXT-MAP.md](./CONTEXT-MAP.md).
 ## Entries
 
 - [`skills/conductor`](./skills/conductor/SKILL.md): the agent mode that sets how a coding agent plans, delegates and verifies, packaged as the `conductor` plugin.
-  It also ships a box-wide queue for heavy checks and a hook that keeps agents from waiting in loops.
+  It also ships a box-wide queue for heavy checks, and a Bash hook that queues heavy commands in place and keeps agents from waiting in loops.
 - [`plugins/session-activity`](./plugins/session-activity/README.md): a Claude Code pane of the session's todo list, subagents and background servers.
 
 Install a plugin from this catalog:
@@ -30,5 +30,6 @@ Conductor's tests need Node 24 and nothing else. Node does not expand a folder, 
 
 ```
 node --test 'tests/conductor/*.test.mjs'
+claude plugin test .    # the Bash mod's hooks, tests/conductor/*.test.ts
 CONDUCTOR_BANNED='<regex>' tools/check-conductor.sh
 ```

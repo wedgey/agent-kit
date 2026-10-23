@@ -5,13 +5,13 @@ Read only during `/conductor:conductor setup`.
 ## The package
 
 - Conductor's package is the `conductor` plugin in the `agent-kit` marketplace. Install it with `/plugin marketplace add wedgey/agent-kit`, then `/plugin install conductor@agent-kit`. `/plugin uninstall conductor@agent-kit` removes it.
-- It ships the skill as `conductor:conductor`, the five role agents as `conductor:<role>`, a `PreToolUse` hook on `Bash` that runs `tools/hooks/pretooluse.mjs`, and a `SessionStart` hook that adds the pointer to every session's context. The hook reads the pointer from `setup.md` and writes `/conductor` as `/conductor:conductor`.
+- It ships the skill as `conductor:conductor`, the five role agents as `conductor:<role>`, a mod, `hooks/queue-mod.mjs`, whose `tool.call` hook on `Bash` queues heavy commands in place and denies wait loops (it asks `tools/hooks/decide.mjs` about any heavy or queued command), and a `SessionStart` hook that adds the pointer to every session's context. The hook reads the pointer from `setup.md` and writes `/conductor` as `/conductor:conductor`.
 - It is installed and enabled when `claude plugin list --json` has an entry with `"id": "conductor@agent-kit"` and `"enabled": true`. A session started with `claude --plugin-dir <checkout>` loads it without an install and is not in that list. Then `conductor:conductor` among this session's skills is the proof.
 - Disabled: `/plugin enable conductor@agent-kit`, then `/reload-plugins` or a new session.
 - In headless `-p` mode, the doctor needs permission to run `claude plugin list` and read the files named below. Without it, say which check could not run.
 - Suggest a slot count, and never write it. When `~/.claude/settings.json` has no `env.CONDUCTOR_QUEUE_SLOTS_TESTS`, suggest adding `CONDUCTOR_QUEUE_SLOTS_TESTS` = a quarter of `nproc`, at least 1, to that `env`. The hook and the queue both read it. Without it a queue runs one command at a time.
 
-A repo that runs its own queue sets `"env": {"CONDUCTOR_QUEUE_MANAGED": "1"}` in its own `.claude/settings.json`. The hook reads that file in the repo a command runs in, and then only denies wait loops there. `CONDUCTOR_HOOKS=off` bypasses it.
+A repo that runs its own queue sets `"env": {"CONDUCTOR_QUEUE_MANAGED": "1"}` in its own `.claude/settings.json`. The hook reads that file in the repo a command runs in, and then only denies wait loops there. `CONDUCTOR_HOOKS=off` bypasses it. `CONDUCTOR_QUEUE_MIN_FREE_MB` (default 4096) is the free memory a second slot needs.
 
 ## Doctor
 
