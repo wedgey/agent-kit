@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentMetrics, AgentRow, HeavyQueue, Orphan, QueueHolder, QueueWaiter, ShellTask, SpawnInfo, TodoItem, TodoList, TodoStatus, Verdict } from '../types'
+import type { AgentMetrics, AgentRow, HeavyQueue, Orphan, QueueHolder, QueueStatus, QueueWaiter, ShellTask, SpawnInfo, TodoItem, TodoList, TodoStatus, Verdict } from '../types'
 import {
   agentName,
   applyTodos,
@@ -52,7 +52,6 @@ import {
   usageTokens,
   holderUsage,
   queueOutcome,
-  isOwnCwd,
   exclusive,
   parseQueueStatus,
   place,
@@ -86,6 +85,8 @@ const branchA = atom({ plugin: 'session-activity', key: 'branch' } as const, { b
 const spendA = atom({ plugin: 'session-activity', key: 'spend' } as const, {})
 const queueA = atom({ plugin: 'session-activity', key: 'queue' } as const, null)
 const queueNoteA = atom({ plugin: 'session-activity', key: 'queueNote' } as const, '')
+// Pids in this session's process tree when the queue was last read: what marks a run "you".
+const queueOwnA = atom({ plugin: 'session-activity', key: 'queueOwn' } as const, [])
 
 // $.state lives as long as the process; a resumed session in a new process gets its todos back from here.
 const TODOS_KEY = 'todos:'
@@ -153,6 +154,8 @@ const ranCommands = new Map<string, string>()
 const agentCalls = new Map<string, { effort?: string; isolation?: string }>()
 let branchAt = 0
 let queueAt = 0
+// The conductor install whose queue.mjs was missing; a new install path is looked at again.
+let queueToolMissing: string | undefined
 let prLookup: { branch: string; at: number; pr?: number } | undefined
 
 const metricsOf = async ($: $, id: string, fn: (m: AgentMetrics) => AgentMetrics) =>
@@ -279,14 +282,19 @@ async function maybeOpen($: $) {
   if (!panes.some(p => p.id === PANE)) void $.ui.open({ id: PANE, title: 'Session activity' })
 }
 
-async function scan($: $, now: number) {
-  const [rows, ports] = await Promise.all([processTable($), listeningPorts($)])
-  const alive = new Set(rows.map(r => r.pid))
+async function liveRoot($: $, rows: readonly ProcRow[]): Promise<number> {
   let rootPid = await read($, rootPidA)
-  if (!alive.has(rootPid)) {
+  if (!rows.some(r => r.pid === rootPid)) {
     rootPid = await sessionRoot($).catch(() => 0)
     await update($, rootPidA, () => rootPid)
   }
+  return rootPid
+}
+
+async function scan($: $, now: number) {
+  const [rows, ports] = await Promise.all([processTable($), listeningPorts($)])
+  const alive = new Set(rows.map(r => r.pid))
+  const rootPid = await liveRoot($, rows)
   const shells = await read($, shellsA)
   const taken = new Set(shells.flatMap(s => (s.shellPid ? [s.shellPid] : [])))
   const found: Orphan[] = []
@@ -419,11 +427,19 @@ async function restoreTodos($: $) {
 async function queueTool($: $): Promise<string | undefined> {
   try {
     const installed: unknown = JSON.parse(await $.fs.read(`${await configDir($)}/plugins/installed_plugins.json`))
-    const root = pluginInstallPath(installed, 'conductor', await $.session.cwd())
-    return root ? `${root}/skills/conductor/tools/queue.mjs` : undefined
-  } catch {
-    return undefined
-  }
+    // Only agent-kit's conductor speaks queue.mjs's protocol; a same-named plugin elsewhere does not.
+    const root = pluginInstallPath(installed, 'conductor@agent-kit', await $.session.cwd())
+    if (!root || root === queueToolMissing) return undefined
+    const tool = `${root}/skills/conductor/tools/queue.mjs`
+    if ((await $.fs.stat(tool).catch(() => undefined))?.kind === 'file') return tool
+    queueToolMissing = root
+  } catch {}
+  return undefined
+}
+
+async function readQueue($: $, tool: string): Promise<QueueStatus | undefined> {
+  const out = await $.process.run(['node', tool, 'status', '--json'], { timeoutMs: QUEUE_TIMEOUT_MS }).catch(() => undefined)
+  return out?.exitCode === 0 ? parseQueueStatus(out.stdout) : undefined
 }
 
 // The status call samples CPU for about a second, so two never run at once; nor do two button commands.
@@ -446,24 +462,37 @@ async function pollQueueOnce($: $, isForced: boolean) {
     if (last) await update($, queueA, () => null)
     return
   }
-  const out = await $.process.run(['node', tool, 'status', '--json'], { timeoutMs: QUEUE_TIMEOUT_MS }).catch(() => undefined)
-  const status = out?.exitCode === 0 ? parseQueueStatus(out.stdout) : undefined
+  const status = await readQueue($, tool)
   // A failed read keeps the last status rather than blinking the section away.
-  if (status) await update($, queueA, () => status)
+  if (status) {
+    const { busy, waiting } = queueTotals(status)
+    const own = busy + waiting > 0 ? await sessionPids($) : []
+    await update($, queueA, () => status)
+    await update($, queueOwnA, () => own)
+  }
   await refreshStatus($)
 }
 
-async function queueAct($: $, what: string, args: string[]) {
-  await exclusive(queueButton, () => queueActOnce($, what, args))
+// This session's process tree: everything under its root, whatever folder it runs in.
+async function sessionPids($: $): Promise<number[]> {
+  const rows = await processTable($).catch(() => [])
+  return treeOf(rows, await liveRoot($, rows)).map(r => r.pid)
+}
+
+// `refuse` sees the tool and may answer a note instead of running the command.
+type Refuse = (tool: string) => Promise<string | undefined>
+
+async function queueAct($: $, what: string, args: string[], refuse?: Refuse) {
+  await exclusive(queueButton, () => queueActOnce($, what, args, refuse))
 }
 
 // A button's queue command; its outcome is the section's note line.
-async function queueActOnce($: $, what: string, args: string[]) {
+async function queueActOnce($: $, what: string, args: string[], refuse?: Refuse) {
   let note: string
   try {
     const tool = await queueTool($)
     if (!tool) throw new Error('the conductor plugin is not installed')
-    note = queueOutcome(what, await $.process.run(['node', tool, ...args], { timeoutMs: QUEUE_TIMEOUT_MS }))
+    note = (await refuse?.(tool)) ?? queueOutcome(what, await $.process.run(['node', tool, ...args], { timeoutMs: QUEUE_TIMEOUT_MS }))
   } catch (err) {
     note = `${what}: failed: ${err instanceof Error ? err.message : String(err)}`
   }
@@ -479,7 +508,14 @@ async function stopHolder($: $, q: HeavyQueue, h: QueueHolder) {
     answer => answer === 'Stop it',
     () => false,
   )
-  if (isYes) await queueAct($, what, ['stop', q.name, String(h.slot)])
+  if (!isYes) return
+  // queue.mjs stops whatever holds the slot now, which may be a run that took it while the question was open.
+  await queueAct($, what, ['stop', q.name, String(h.slot)], async tool => {
+    const status = await readQueue($, tool)
+    if (!status) return `${what}: not done (could not read the queue)`
+    const now = status.queues.find(x => x.name === q.name)?.holders.find(x => x.slot === h.slot)
+    return now?.pid === h.pid && now.command === h.command ? undefined : `${q.name} slot ${h.slot} changed hands; not stopped`
+  })
 }
 
 async function refreshStatus($: $) {
@@ -842,8 +878,9 @@ export const register: Register = (on, options) => {
       read($, spendA),
       $.clock.now(),
     ])
-    const [queue, queueNote] = await Promise.all([read($, queueA), read($, queueNoteA)])
-    const sessionCwd = queue ? await $.session.cwd() : ''
+    const [queue, queueNote, queueOwn] = await Promise.all([read($, queueA), read($, queueNoteA), read($, queueOwnA)])
+    const queueCount = queue ? queueTotals(queue) : { busy: 0, waiting: 0 }
+    const isQueueBusy = queueCount.busy + queueCount.waiting > 0
 
     const toggle = (key: string) => () =>
       void update($, expandedA, list => (list.includes(key) ? list.filter(k => k !== key) : [...list, key]))
@@ -1040,10 +1077,9 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    const isEmpty = agents.length === 0 && shells.length === 0 && orphans.length === 0 && todos.items.length === 0 && !queue
+    const isEmpty = agents.length === 0 && shells.length === 0 && orphans.length === 0 && todos.items.length === 0 && !isQueueBusy
 
-    const isOwn = (pid: number | null, cwd: string | null) =>
-      (pid !== null && shells.some(s => s.pids.includes(pid))) || (cwd !== null && isOwnCwd(cwd, sessionCwd))
+    const isOwn = (pid: number | null) => pid !== null && (queueOwn.includes(pid) || shells.some(s => s.pids.includes(pid)))
     const queueRow = (key: string, glyph: string, color: string, left: string, right: (JSX.Element | false)[]) => (
       <Box key={key} flexDirection="row" justifyContent="space-between" gap={1}>
         <Box flexShrink={1} minWidth={0}>
@@ -1064,7 +1100,7 @@ export const register: Register = (on, options) => {
       // Without a process there is nothing to stop.
       const isGone = holder.pid === null
       return queueRow(key, holder.state === 'unknown' ? '◌' : '●', mark ? 'warning' : 'suggestion', `${q.name}  ${isGone ? '(process gone)' : where(holder.cwd, holder.command)}`, [
-        isOwn(holder.pid, holder.cwd) && <Text color="suggestion">you</Text>,
+        isOwn(holder.pid) && <Text color="suggestion">you</Text>,
         mark !== undefined && <Text color="warning">{mark}</Text>,
         !isNarrow && holder.ageMs !== null && <Text dimColor>{formatDuration(holder.ageMs)}</Text>,
         !isNarrow && usage !== undefined && <Text dimColor>{usage}</Text>,
@@ -1075,7 +1111,7 @@ export const register: Register = (on, options) => {
       const key = `queue:${w.ticket}`
       const move = (to: 'top' | 'up' | 'down') => () => void queueAct($, `move ${w.command ?? w.ticket} ${to === 'top' ? 'to the top' : to}`, ['move', w.ticket, to])
       return queueRow(key, '○', 'inactive', `#${i + 1} ${q.name}  ${where(w.cwd, w.command)}`, [
-        isOwn(w.pid, w.cwd) && <Text color="suggestion">you</Text>,
+        isOwn(w.pid) && <Text color="suggestion">you</Text>,
         w.priority === 'gate' && <Text color="suggestion">gate</Text>,
         <Text dimColor>{`waiting ${formatDuration(w.waitedMs)}`}</Text>,
         <Button key={`${key}:top`} label="top" dimColor onPress={move('top')} />,
@@ -1083,8 +1119,8 @@ export const register: Register = (on, options) => {
         <Button key={`${key}:down`} label="↓" dimColor onPress={move('down')} />,
       ])
     }
-    const waiting = queue ? queueTotals(queue).waiting : 0
-    const queueSection = queue && (
+    const waiting = queueCount.waiting
+    const queueSection = queue && isQueueBusy && (
       <Box flexDirection="column" marginBottom={1}>
         <Text wrap="truncate-end">
           <Text bold>QUEUE</Text>

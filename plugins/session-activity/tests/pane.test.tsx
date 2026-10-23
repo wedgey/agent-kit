@@ -309,6 +309,9 @@ type Host = {
   store?: Record<string, unknown>
   statuses?: (string | undefined)[]
   node?: (args: readonly string[]) => Promise<{ exitCode: number; stdout: string; stderr?: string } | undefined> | { exitCode: number; stdout: string; stderr?: string } | undefined
+  // `ps` rows; the pane's own `sh` (pid 50) is a child of pid 100.
+  ps?: string
+  stats?: string[]
 }
 
 function quietHost(
@@ -356,6 +359,7 @@ function quietHost(
     return { value: names.map(f => ({ name: f.slice(dir.length + 1), kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }
   })
   on('fs.stat', (_$, e) => {
+    host.stats?.push(e.path)
     const to = real(e.path)
     const text = files[to]
     if (text === undefined && !Object.keys(files).some(f => f.startsWith(`${to}/`))) throw new Error('ENOENT')
@@ -365,7 +369,12 @@ function quietHost(
   on('process.run', async (_$, e) => {
     const ran = e.argv[0] === 'node' ? await host.node?.(e.argv.slice(1)) : undefined
     if (ran !== undefined) return { value: { stderr: '', isStdoutTruncated: false, isStderrTruncated: false, ...ran } }
-    const stdout = e.argv[0] === 'git' ? (status.length > 1 ? status.shift()! : status[0]!) : e.argv[0] === 'sh' ? branch : ''
+    const isSelf = e.argv[0] === 'sh' && e.argv[2]?.startsWith('echo "self')
+    const stdout =
+      e.argv[0] === 'git' ? (status.length > 1 ? status.shift()! : status[0]!) :
+      host.ps !== undefined && isSelf ? `self 50\n   50   100    50  0.0  100 sh -c ps\n${host.ps}` :
+      host.ps !== undefined && e.argv[0] === 'ps' ? host.ps :
+      e.argv[0] === 'sh' ? branch : ''
     return { value: { exitCode: e.argv[0] === 'gh' ? 1 : 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('turn.step', async function* (_$, e) {
@@ -1050,19 +1059,38 @@ const QUEUE_FIXTURE = {
 
 type QueueAnswer = { exitCode: number; stdout: string; stderr?: string }
 
+// The session (root 100) runs 124 through its shell 110; 457 and 999, in the same folder, belong to another session.
+const QUEUE_PS = [
+  '  100     1   100  0.0 90000 claude',
+  `  110   100   110  0.0  4096 /bin/bash -c source /s.sh && eval 'pnpm test:changed' < /dev/null`,
+  '  124   110   110  0.0  4096 node vitest',
+  '  900     1   900  0.0 90000 claude',
+  '  457   900   457  0.0  4096 pnpm build',
+  '  999   900   999  0.0  4096 pnpm lint',
+].join('\n')
+
 function queueHost(
   on: On,
   answers: Record<string, QueueAnswer> = {},
-  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown } = {},
+  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; installs?: Record<string, string>; hasTool?: boolean; stats?: string[] } = {},
 ) {
   const calls: string[][] = []
-  const files: Record<string, string> = opts.isInstalled === false ? {} : { '/home/me/.claude/plugins/installed_plugins.json': installed({ 'conductor@agent-kit': CONDUCTOR }) }
+  const installs = opts.installs ?? { 'conductor@agent-kit': CONDUCTOR }
+  const files: Record<string, string> =
+    opts.isInstalled === false
+      ? {}
+      : {
+          '/home/me/.claude/plugins/installed_plugins.json': installed(installs),
+          ...(opts.hasTool === false ? {} : Object.fromEntries(Object.values(installs).map(root => [`${root}/skills/conductor/tools/queue.mjs`, '']))),
+        }
   quietHost(on, files, [''], undefined, undefined, {}, {
     statuses: opts.statuses,
+    stats: opts.stats,
+    ps: QUEUE_PS,
     node: args => {
-      if (args[0] !== QUEUE_TOOL) return undefined
+      if (!args[0]?.endsWith('/skills/conductor/tools/queue.mjs')) return undefined
       calls.push(args.slice(1))
-      if (args[1] === 'status') return { exitCode: 0, stdout: JSON.stringify(opts.status ?? QUEUE_FIXTURE) }
+      if (args[1] === 'status') return { exitCode: 0, stdout: JSON.stringify(typeof opts.status === 'function' ? opts.status() : (opts.status ?? QUEUE_FIXTURE)) }
       return answers[args[1] ?? ''] ?? { exitCode: 0, stdout: '{"ok":true}' }
     },
   })
@@ -1070,7 +1098,7 @@ function queueHost(
   return calls
 }
 
-test('the QUEUE section lists holders with their state and waiters in rank order, this session\'s own marked', async ($, on) => {
+test('the QUEUE section lists holders with their state and waiters in rank order, only runs in this session\'s process tree marked', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   const statuses: (string | undefined)[] = []
   queueHost(on, {}, { statuses })
@@ -1086,7 +1114,7 @@ test('the QUEUE section lists holders with their state and waiters in rank order
     '● e2e  (process gone) orphan',
     '◌ build  q-plain pnpm build 30s [stop]',
     '○ #1 tests  rd-441 pnpm typecheck gate waiting 1m05s [top] [↑] [↓]',
-    '○ #2 tests  web pnpm build you waiting 5s [top] [↑] [↓]',
+    '○ #2 tests  web pnpm build waiting 5s [top] [↑] [↓]',
   ])
   expect(await ui.find({ key: 'queue:e2e:0:stop' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'idle' })).toMatchObject({ props: { color: 'warning' } })
@@ -1117,6 +1145,46 @@ test('stop asks first: a yes runs queue stop and says what it did, a no or a dis
   await ui.press({ key: 'queue:tests:0:stop' })
   expect(calls.filter(c => c[0] === 'stop')).toEqual([['stop', 'tests', '0']])
   expect(await ui.find({ type: 'Text', text: 'stop tests slot 0: 3 processes stopped, 1 killed' })).toBeDefined()
+})
+
+test('a slot that changed hands while the question was open is not stopped', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  let isAsked = false
+  const [tests, ...rest] = QUEUE_FIXTURE.queues
+  const taken = { ...QUEUE_FIXTURE, queues: [{ ...tests!, holders: [{ ...tests!.holders[0]!, pid: 999, command: 'pnpm lint' }, tests!.holders[1]!] }, ...rest] }
+  const calls = queueHost(on, {}, { status: () => (isAsked ? taken : QUEUE_FIXTURE) })
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
+    isAsked = true
+    const question = (e.questions[0] as { question: string }).question
+    return { result: { questions: e.questions, answers: { [question]: 'Stop it' } } }
+  })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'queue:tests:0:stop' })
+  expect(calls.filter(c => c[0] === 'stop')).toEqual([])
+  expect(await ui.find({ type: 'Text', text: 'tests slot 0 changed hands; not stopped' })).toBeDefined()
+})
+
+test('a conductor without queue.mjs, or one from another marketplace, runs no queue call', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const reads: string[] = []
+  const calls = queueHost(on, {}, { installs: { 'conductor@other': '/plugins/other', 'conductor@agent-kit': '/plugins/old-conductor' }, hasTool: false, stats: reads })
+  await openPane($)
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /QUEUE/ })).toBeUndefined()
+  expect(calls).toEqual([])
+  expect(reads.filter(p => p.endsWith('queue.mjs'))).toEqual(['/plugins/old-conductor/skills/conductor/tools/queue.mjs'])
+})
+
+test('an idle queue draws no section and leaves the empty state', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const idle = { ...QUEUE_FIXTURE, queues: QUEUE_FIXTURE.queues.map(q => ({ ...q, holders: [], waiters: [] })) }
+  queueHost(on, {}, { status: idle })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /QUEUE/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Nothing running/ })).toBeDefined()
 })
 
 test('the move buttons run queue move and say so', async ($, on) => {

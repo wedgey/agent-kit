@@ -118,6 +118,7 @@ declare module 'claude-code' {
       spend: Record<string, number>
       queue: QueueStatus | null
       queueNote: string
+      queueOwn: number[]
     }
   }
 }

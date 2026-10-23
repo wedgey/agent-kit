@@ -34,7 +34,6 @@ import {
   shortMemory,
   holderUsage,
   queueOutcome,
-  isOwnCwd,
   exclusive,
   parseQueueStatus,
   place,
@@ -216,16 +215,9 @@ describe('queue', () => {
       'stop tests slot 7: not done (no live holder in slot 7 of tests)',
     )
     expect(queueOutcome('move x up', { exitCode: 0, stdout: '{"ok":true}', stderr: '' })).toBe('move x up: done')
+    expect(queueOutcome('move x to the top', { exitCode: 0, stdout: '{"ok":true,"note":"already at the top"}', stderr: '' })).toBe('move x to the top: already at the top')
     expect(queueOutcome('move x up', { exitCode: 2, stdout: 'Error: boom', stderr: 'node: boom\n' })).toBe('move x up: failed: node: boom')
     expect(queueOutcome('move x up', { exitCode: 2, stdout: '', stderr: '' })).toBe('move x up: failed: exit 2')
-  })
-
-  test("a cwd is this session's when under its cwd and not inside a worktree below it", () => {
-    expect(isOwnCwd('/workspace', '/workspace')).toBe(true)
-    expect(isOwnCwd('/workspace/apps/web', '/workspace')).toBe(true)
-    expect(isOwnCwd('/workspace/.worktrees/q-plain', '/workspace')).toBe(false)
-    expect(isOwnCwd('/workspace/.worktrees/q-plain/apps', '/workspace/.worktrees/q-plain')).toBe(true)
-    expect(isOwnCwd('/workspace2', '/workspace')).toBe(false)
   })
 
   test('a call made while one is running is skipped, and the next one after it runs', async () => {
@@ -560,6 +552,10 @@ describe('delegates', () => {
     expect(pluginInstallPath(installed, 'missing', '/repo')).toBeUndefined()
     expect(pluginInstallPath({ plugins: { 'old@m': { installPath: '/c/old' } } }, 'old', '/repo')).toBe('/c/old')
     expect(pluginInstallPath('garbage', 'conductor', '/repo')).toBeUndefined()
+    expect(pluginInstallPath({ plugins: { conductors: { installPath: '/c/s' } } }, 'conductor', '/repo')).toBeUndefined()
+    expect(pluginInstallPath({ plugins: { conductor: { installPath: '/c/bare' } } }, 'conductor', '/repo')).toBe('/c/bare')
+    const twoMarkets = { plugins: { 'conductor@other': { installPath: '/c/other' }, 'conductor@agent-kit': { installPath: '/c/kit' } } }
+    expect(pluginInstallPath(twoMarkets, 'conductor@agent-kit', '/repo')).toBe('/c/kit')
   })
 
   test("a plugin's agents are its agents/ folder plus what its manifest lists", () => {

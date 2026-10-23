@@ -434,7 +434,10 @@ type PluginInstall = { scope?: string; projectPath?: string; installPath?: strin
 export function pluginInstallPath(installed: unknown, plugin: string, cwd: string): string | undefined {
   const plugins = (installed as { plugins?: Record<string, PluginInstall | PluginInstall[]> } | null)?.plugins ?? {}
   const installs = Object.entries(plugins)
-    .filter(([key]) => key.slice(0, key.lastIndexOf('@')) === plugin || key === plugin)
+    .filter(([key]) => {
+      const at = key.lastIndexOf('@')
+      return (at < 0 ? key : key.slice(0, at)) === plugin || key === plugin
+    })
     .flatMap(([, v]) => [v].flat())
   const inProject = installs.find(i => i.projectPath && (cwd === i.projectPath || cwd.startsWith(`${i.projectPath}/`)))
   return (inProject ?? installs.find(i => i.scope === undefined || i.scope === 'user'))?.installPath
@@ -474,13 +477,14 @@ export const holderUsage = (h: { cpuPct: number | null; memKb: number | null }) 
 
 // queue.mjs answers JSON on stdout whatever its exit code (a refusal is exit 1, `{ ok: false, reason }`).
 export function queueOutcome(what: string, out: { exitCode: number; stdout: string; stderr: string }): string {
-  let r: { ok?: boolean; stopped?: number; killed?: number; reason?: string }
+  let r: { ok?: boolean; stopped?: number; killed?: number; reason?: string; note?: string }
   try {
     r = JSON.parse(out.stdout)
   } catch {
     return `${what}: failed: ${out.stderr.trim() || `exit ${out.exitCode}`}`
   }
   if (!r?.ok) return `${what}: not done (${r?.reason ?? (out.stderr.trim() || `exit ${out.exitCode}`)})`
+  if (r.note) return `${what}: ${r.note}`
   return r.stopped === undefined ? `${what}: done` : `${what}: ${r.stopped} processes stopped${r.killed ? `, ${r.killed} killed` : ''}`
 }
 
@@ -488,10 +492,6 @@ export const cores = (pct: number): string => `${(Math.max(0, pct) / 100).toFixe
 
 // Where a run is: its worktree's name, else its last folder.
 export const place = (cwd: string) => /\/\.worktrees\/([^/]+)/.exec(cwd)?.[1] ?? cwd.split('/').filter(Boolean).pop() ?? cwd
-
-// Under the session's folder but not in a worktree below it, which is another session's.
-export const isOwnCwd = (cwd: string, sessionCwd: string) =>
-  cwd === sessionCwd || (cwd.startsWith(`${sessionCwd}/`) && !cwd.slice(sessionCwd.length).includes('/.worktrees/'))
 
 export function parseQueueStatus(stdout: string): QueueStatus | undefined {
   try {
