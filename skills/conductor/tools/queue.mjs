@@ -7,7 +7,7 @@
  *   queue.mjs run [--queue=<name>] [--slots=<n>] [--priority=gate|normal] [--timeout=<minutes>] -- <command...>
  *   queue.mjs status [--json]
  *   queue.mjs stop <queue> <slot>
- *   queue.mjs move <ticket> top|up|down
+ *   queue.mjs move <waiter> top|up|down
  *
  * State lives under `<stateDir>/v1/<queue>/`:
  *   slot-<i>                  flock lock file; the kernel frees it when the holder dies
@@ -684,7 +684,7 @@ const USAGE =
   "usage: queue.mjs run [--queue=<name>] [--slots=<n>] [--priority=gate|normal] [--timeout=<minutes>] -- <command...>\n" +
   "       queue.mjs status [--json]\n" +
   "       queue.mjs stop <queue> <slot>\n" +
-  "       queue.mjs move <ticket> top|up|down\n";
+  "       queue.mjs move <waiter> top|up|down\n";
 
 export function runDirect(command, env, spawn = spawnSync) {
   return exitCodeFor(spawn(command[0], command.slice(1), { stdio: "inherit", env }));

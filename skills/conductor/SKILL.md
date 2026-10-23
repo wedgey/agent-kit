@@ -35,7 +35,7 @@ Playbooks use these. The binding says how each one works in your harness.
 - **spawn** a delegate for a role, with a brief.
 - **fork** a delegate that inherits this conversation.
 - **continue** a delegate or lane that is still running, with a new instruction.
-- **dispatch** a lane: a long-running delegate that owns one ticket and runs its whole playbook, in its own worktree, with a lane brief.
+- **dispatch** a lane, which is a long-running delegate that owns one ticket and runs its whole playbook, in its own worktree, with a lane brief.
 - **wait** for a lane's report or for it to go idle, without polling.
 - **stop** a lane whose ticket has merged or that you are replacing.
 - **ask** the operator a question with options.

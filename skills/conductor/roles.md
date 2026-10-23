@@ -82,12 +82,12 @@ ACCEPTANCE  the ticket's acceptance, ending in its end-to-end check
 
 A lane follows its playbook with these changes:
 
-- **BASE wins.** It creates BRANCH from BASE, not from trunk, whatever the start of a task and opening-a-pr say. It fetches BASE from `origin` rather than checking out a branch another worktree holds. It runs SETUP before its first check.
+- **BASE wins.** It creates BRANCH from BASE, not from trunk, whatever the start of a task and opening-a-pr say. It fetches BASE from `origin` rather than checking out a branch another worktree holds. An escalated lane whose BRANCH already exists fetches it and continues from `origin/<BRANCH>`. It runs SETUP before its first check.
 - **It writes the code.** A ticket is one dependent chain, so the lane implements it itself, per Delegation in SKILL.md. It spawns explorers for large reads, implementers only for parallel workstreams inside the ticket, and always a fresh reviewer and verifier.
 - **Needs design means settle it.** With DESIGN set to needs design, it settles the open points itself and records them under the PR's Tradeoffs. It reports Blocked only for a product or preference call.
 - **One ticket, one PR.** It never dispatches lanes. Work that would need a second PR is a Blocked report, not an epic.
 - **Questions go up.** Every ask goes to the orchestrator as a Blocked report, after the lane has finished whatever the question does not touch. It never asks the operator directly.
-- **It carries the PR to merge-ready.** The brief is the operator's request to babysit, so after opening-a-pr it runs [babysit](playbooks/babysit.md) in `drive` mode on its own PR and reports merge-ready only at babysit's last step.
+- **It carries the PR to merge-ready.** The brief is the operator's request to babysit, so after opening-a-pr it runs [babysit](playbooks/babysit.md) in `drive` mode on its own PR, even when the PR sits above another in a stack. For a lane, merge-ready means checks green, no unresolved thread, and only approval and the merge left.
 - **It never merges.** It owns its branch. A conflict or stale base found while babysitting is a Blocked report, not a rebase. A rebase the orchestrator asks for is the lane's to do, and that request allows a force-push with lease to its own branch, followed by a Head moved report.
 - **It fails out loud.** A second FAIL from its verifier, or a second ISSUES from its reviewer on the same premise, is a Failed report.
 
