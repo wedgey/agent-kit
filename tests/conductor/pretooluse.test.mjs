@@ -47,6 +47,10 @@ describe("heavy command classifier", () => {
     ["npm exec -- vitest run", "tests"],
     ["pnpm build", "tests"],
     ["pnpm run typecheck", "tests"],
+    ["pnpm ci:local", "tests"],
+    ["pnpm run ci", "tests"],
+    ["npm run ci:check", "tests"],
+    ["yarn ci:check", "tests"],
     ["pnpm vitest run", "tests"],
     ["pnpm tsc --noEmit", "tests"],
     ["yarn test", "tests"],
@@ -119,6 +123,9 @@ describe("heavy command classifier", () => {
     "make lint",
     "pnpm test:watch",
     "npm install",
+    "npm ci",
+    "pnpm ci",
+    "bun ci",
     "pnpm lint",
     "vitest --version",
     "tsc --help",
@@ -154,6 +161,7 @@ describe("heavy command classifier", () => {
     "npm run e2e:open",
     "yarn e2e:headed",
     "pnpm build:dev",
+    "pnpm ci:watch",
     "turbo run test:watch",
   ])("never queues the watch mode %s", (command) => expect(queueOf(command)).toBeNull());
 });

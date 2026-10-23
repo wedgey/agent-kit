@@ -32,7 +32,9 @@ const VITEST_NO_RUN = new Set(["watch", "dev", "list"]);
 const NAME_FILTER = /^(-[ktg]|--(testNamePattern|test-name-pattern|grep|filter))(=|$)/;
 const SOURCE_FILE = /\.(py|[cm]?[jt]sx?|rb|exs?|go|rs|java|kt|cs|swift)(:\d+)*$/;
 const VALUE_FLAGS = new Set(["-c", "--config"]);
-const SCRIPT = /^(test|build|typecheck|e2e)(:.+)?$/;
+const SCRIPT = /^(test|build|typecheck|e2e|ci)(:.+)?$/;
+// A bare `ci` without `run` is the package manager's clean install, not the script.
+const PM_INSTALL = "ci";
 const NEVER_EXITS = /:(watch|ui|open|dev|headed)(:|$)/;
 const PM_SHORT = new Set(["test", "build", "typecheck", "e2e"]);
 const GRADLE_TASKS = new Set(["test", "build", "check", "assemble"]);
@@ -170,7 +172,7 @@ function packageScriptQueue(tool, args) {
   const name = args[nameAt];
   if (name === undefined) return null;
   const forwarded = args.slice(nameAt + 1);
-  if (isRun ? SCRIPT.test(name) : PM_SHORT.has(name) || (tool !== "npm" && SCRIPT.test(name))) {
+  if (isRun ? SCRIPT.test(name) : PM_SHORT.has(name) || (tool !== "npm" && name !== PM_INSTALL && SCRIPT.test(name))) {
     return scoped(forwarded) ? null : taskQueue([name]);
   }
   return !isRun && (tool === "pnpm" || tool === "yarn") ? heavyQueue([name, ...forwarded]) : null;
