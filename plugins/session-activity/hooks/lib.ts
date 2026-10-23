@@ -349,14 +349,19 @@ export function groupTodos<T extends Pick<TodoItem, 'status'>>(items: readonly T
 
 // `owner/repo` of a GitHub URL: an issue link, or a remote over https or ssh.
 export const repoOf = (url: string | undefined) => {
-  const m = url === undefined ? null : /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/?#]|$)/.exec(url)
+  const m = url === undefined ? null : /github\.com[/:](?!(?:orgs|users|enterprises)\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/?#]|$)/.exec(url)
   return m ? `${m[1]}/${m[2]}` : undefined
 }
 
+// The repo a bare `#N` belongs to: the list link's when it is an issue or PR, else the branch's origin.
+export const contextRepo = (link: string | undefined, branchRepo: string | undefined) =>
+  (link && /github\.com\/[^/]+\/[^/]+\/(?:issues|pull)\/\d+/.test(link) ? repoOf(link) : undefined) ?? branchRepo
+
 export type Ticket = { label: string; href?: string }
 
-// A leading `#12`, `repo#12`, `owner/repo#12`, or a GitHub issue or PR URL.
-const TICKET = /^(?:https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(issues|pull)\/(\d+)\S*|(?:([\w.-]+)\/)?([\w.-]+)?#(\d+)\b)/
+// A leading `#12`, `owner/repo#12`, or a GitHub issue or PR URL. An owner-less `name#12` is no ticket, so `C#9` stays text.
+// shortcut: a leading `#1 priority` still reads as ticket #1; require the `ticket` field if that bites.
+const TICKET = /^(?:https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(issues|pull)\/(\d+)\S*|(?:([\w.-]+)\/([\w.-]+))?#(\d+)\b)/
 
 function readTicket(text: string, repo: string | undefined): { ticket: Ticket; length: number } | undefined {
   const m = TICKET.exec(text)
@@ -373,11 +378,15 @@ function readTicket(text: string, repo: string | undefined): { ticket: Ticket; l
 // An item's ticket (its `ticket` field, else one leading its text) and the text left to show.
 export function ticketOf(item: Pick<TodoItem, 'content' | 'ticket'>, repo?: string): { ticket?: Ticket; text: string } {
   const lead = readTicket(item.content, repo)
-  const given = item.ticket?.trim() ? (readTicket(item.ticket.trim(), repo)?.ticket ?? { label: item.ticket.trim() }) : undefined
+  const raw = item.ticket?.trim()
+  const given = raw ? (readTicket(raw, repo)?.ticket ?? (/^https?:\/\//.test(raw) ? urlTicket(raw) : { label: raw })) : undefined
   const ticket = given ?? lead?.ticket
   const text = lead && (!given || lead.ticket.label === given.label) ? item.content.slice(lead.length).replace(/^[\s:·—–-]+/, '') : item.content
   return { ...(ticket ? { ticket } : {}), text }
 }
+
+// A ticket URL GitHub's forms miss (Linear, Jira, a discussion): its last path segment links to it.
+const urlTicket = (url: string): Ticket => ({ label: url.replace(/[?#].*$/, '').replace(/\/+$/, '').split('/').pop() ?? url, href: url })
 
 export function todoTitle(item: Pick<TodoItem, 'content' | 'ticket'>, repo?: string): string {
   const { ticket, text } = ticketOf(item, repo)
@@ -423,13 +432,15 @@ export function pluginInstallPath(installed: unknown, plugin: string, cwd: strin
     .filter(([key]) => key.slice(0, key.lastIndexOf('@')) === plugin || key === plugin)
     .flatMap(([, v]) => [v].flat())
   const inProject = installs.find(i => i.projectPath && (cwd === i.projectPath || cwd.startsWith(`${i.projectPath}/`)))
-  return (inProject ?? installs.find(i => i.scope === 'user') ?? installs[0])?.installPath
+  return (inProject ?? installs.find(i => i.scope === undefined || i.scope === 'user'))?.installPath
 }
 
-// Where a plugin's agents live, relative to its root: `agents/` always, plus each file or folder its manifest lists.
+// Where a plugin's agents live, relative to its root: `agents/` always, plus each `./` file or folder its manifest lists.
+// The caller still checks where each lands, as a symbolic link can lead out of the root.
 export function pluginAgentPaths(manifest: unknown): string[] {
   const listed = [(manifest as { agents?: unknown } | null)?.agents ?? []].flat().filter((p): p is string => typeof p === 'string')
-  return ['agents', ...listed.map(p => p.replace(/^\.\//, '').replace(/\/$/, ''))]
+  const inside = listed.filter(p => p.startsWith('./') && !p.split('/').includes('..'))
+  return ['agents', ...inside.map(p => p.slice(2).replace(/\/$/, ''))]
 }
 
 export const modelMatches = (want: string, ran: string) => want === 'inherit' || ran.includes(want)

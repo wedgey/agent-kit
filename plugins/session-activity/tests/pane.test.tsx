@@ -310,20 +310,34 @@ function quietHost(
   status: string[] = [''],
   env: Record<string, string> = { HOME: '/home/me' },
   branch = 'feat/x\norigin/main\n2\n1\n',
+  links: Record<string, string> = {},
 ) {
+  // A symbolic link: a path under `from` lands under `to`.
+  const real = (path: string) => {
+    for (const [from, to] of Object.entries(links)) if (path === from || path.startsWith(`${from}/`)) return `${to}${path.slice(from.length)}`
+    return path
+  }
   on('ui.panes', () => ({ value: [] }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.status', () => ({ value: undefined }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('fs.read', (_$, e) => {
-    const text = files[e.path]
+    const text = files[real(e.path)]
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
   on('fs.list', (_$, e) => {
-    const names = Object.keys(files).filter(f => f.startsWith(`${e.path}/`) && !f.slice(e.path.length + 1).includes('/'))
-    return { value: names.map(f => ({ name: f.slice(e.path.length + 1), kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }
+    const dir = real(e.path)
+    const names = Object.keys(files).filter(f => f.startsWith(`${dir}/`) && !f.slice(dir.length + 1).includes('/'))
+    return { value: names.map(f => ({ name: f.slice(dir.length + 1), kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }
+  })
+  on('fs.stat', (_$, e) => {
+    const to = real(e.path)
+    const text = files[to]
+    if (text === undefined && !Object.keys(files).some(f => f.startsWith(`${to}/`))) throw new Error('ENOENT')
+    const kind = text === undefined ? ('dir' as const) : ('file' as const)
+    return { value: { kind, size: text?.length ?? 0, mtimeMs: 0, isLink: to !== e.path, ...(e.resolve ? { realPath: to } : {}) } }
   })
   on('process.run', (_$, e) => {
     const stdout = e.argv[0] === 'git' ? (status.length > 1 ? status.shift()! : status[0]!) : e.argv[0] === 'sh' ? branch : ''
@@ -399,6 +413,8 @@ test('an agent sits under the step in progress when it was spawned, with its ver
 
   status = 'completed'
   await writeTodos($, { items: STEPS.map(s => (s.content === 'Build in small units' ? { ...s, status: 'completed' } : s)) })
+  await openPane($)
+  await openPane($)
   ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
   await ui.press({ key: 'todos:done' })
   expect(await ui.find({ type: 'Text', text: '1 agent ✓' })).toBeDefined()
@@ -480,8 +496,8 @@ test('the same brief spawned again on another model is an escalation; on the sam
 
 
 const QUEUE = [
-  { content: 'agent-kit#7 Ship the role agents', status: 'completed' },
-  { content: 'Conductor as a root plugin: skill, agents, queue, hooks', ticket: 'agent-kit#9', status: 'in_progress' },
+  { content: 'wedgey/agent-kit#7 Ship the role agents', status: 'completed' },
+  { content: 'Conductor as a root plugin: skill, agents, queue, hooks', ticket: 'wedgey/agent-kit#9', status: 'in_progress' },
   { content: '#554 Rerun failed e2e once + flaky ledger', status: 'pending' },
   { content: 'Session-activity pane: now/next split, per-item ticket', status: 'pending' },
   { content: 'https://github.com/wedgey/contexory/pull/560 Queue status line', status: 'pending' },
@@ -500,9 +516,6 @@ const conductorTree = (configDir = '/home/me/.claude', root = ROOT) => ({
   [`${root}/${BINDINGS}/implementer.md`]: '---\nname: implementer\nmodel: sonnet\neffort: medium\ndisallowedTools: Agent\n---\n',
   [`${root}/${BINDINGS}/reviewer.md`]: '---\nname: reviewer\nmodel: opus\neffort: high\ndisallowedTools: Agent, Edit, Write\n---\n',
 })
-
-// The test runtime has a console; the engine's types leave it out with the DOM.
-declare const console: { log: (...data: unknown[]) => void }
 
 // The drawing as plain text: a row Box joins its children, a column Box stacks them, a Box width pads.
 function textOf(node: unknown): string {
@@ -531,7 +544,6 @@ test('todos draw as NOW, NEXT and a folded DONE, each item behind an aligned tic
 
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
   const drawn = textOf(await ui.find({ type: 'Box' }))
-  console.log(`\n${drawn}\n`)
   const lines = drawn.split('\n')
   const at = (pattern: RegExp) => lines.findIndex(l => pattern.test(l))
   expect(at(/^NOW$/)).toBeLessThan(at(/Conductor as a root plugin/))
@@ -554,7 +566,7 @@ test('todos draw as NOW, NEXT and a folded DONE, each item behind an aligned tic
 
   await ui.press({ key: 'todos:done' })
   expect(await ui.find({ key: 'todos:done', text: 'hide' })).toBeDefined()
-  expect((await ui.find({ key: 'todo:agent-kit#7 Ship the role agents:toggle' }))?.text).toBe('Ship the role agents')
+  expect((await ui.find({ key: 'todo:wedgey/agent-kit#7 Ship the role agents:toggle' }))?.text).toBe('Ship the role agents')
   expect(await ui.find({ type: 'Text', text: 'skip: not asked' })).toBeDefined()
   await ui.press({ key: 'todos:done' })
   expect(await ui.find({ key: 'todo:Measure routing:toggle' })).toBeUndefined()
@@ -574,25 +586,62 @@ test('the status line leads with the NOW item and its ticket', async ($, on) => 
   expect(statuses.at(-1)).toBe('◆ 2/7 agent-kit#9 Conductor as a root plugin: skill, agents, queue, hooks')
 })
 
-test('under 46 columns the NOW items and the first NEXT item stay; the rest fold behind buttons', async ($, on) => {
+test('under 46 columns the NOW item and the first NEXT item stay, ticket inline; the rest folds into one line', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   quietHost(on)
   on('agent.list', () => ({ value: [] }))
   await writeTodos($, { link: LINK, items: QUEUE })
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 40 } })
-  expect(await ui.find({ key: 'todo:Conductor as a root plugin: skill, agents, queue, hooks:toggle' })).toBeDefined()
-  expect(await ui.find({ key: 'todo:#554 Rerun failed e2e once + flaky ledger:toggle' })).toBeDefined()
-  expect(await ui.find({ key: 'todo:#561 Watch the merge queue:toggle' })).toBeUndefined()
-  expect(await ui.find({ key: 'todo:Map the subsystem:toggle' })).toBeUndefined()
-  expect(await ui.find({ key: 'todos:toggle', text: '+3 more' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'DONE · 2' })).toBeDefined()
+  const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
+  expect(lines.slice(2)).toEqual([
+    '◐ agent… Conductor as a root plugin: skill, agents, queue, hooks 0s',
+    '○ #554 Rerun failed e2e once + flaky ledger',
+    '[+3 more] DONE · 2 [show]',
+  ])
+  // The ticket is cut to 6 columns, so 40 columns keep at least 20 for the text.
+  expect(lines[2]!.indexOf('Conductor')).toBeLessThanOrEqual(40 - 20)
+  expect(await ui.find({ type: 'Link', text: 'agent…' })).toMatchObject({ props: { href: 'https://github.com/wedgey/agent-kit/issues/9' } })
 
   await ui.press({ key: 'todos:toggle' })
   expect(await ui.find({ key: 'todo:#561 Watch the merge queue:toggle' })).toBeDefined()
+  expect(await ui.find({ key: 'todos:toggle', text: 'fewer' })).toBeDefined()
   expect(await ui.find({ key: 'todo:Measure routing:toggle' })).toBeUndefined()
   await ui.press({ key: 'todos:done' })
   expect(await ui.find({ key: 'todo:Measure routing:toggle' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'skip' })).toBeDefined()
+})
+
+test('a done item stays out of the fold while an agent under it is running or needs a look, counted on the DONE line', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on)
+  const agents: { id: string; type: string; description: string; status: AgentStatus }[] = [
+    { id: 'b1', type: 'conductor:reviewer', description: 'Review A', status: 'completed' },
+    { id: 'b2', type: 'general-purpose', description: 'Watch B', status: 'running' },
+  ]
+  on('agent.list', () => ({ value: agents }))
+  let next = ''
+  on('agent.spawn', () => ({ model: 'opus', agentId: next }))
+  const items = (statuses: Record<string, string>) => ['A', 'B', 'C'].map(content => ({ content, status: statuses[content] ?? 'completed' }))
+
+  await writeTodos($, { items: items({ A: 'in_progress', B: 'pending' }) })
+  next = 'b1'
+  await spawn($, 'Review A', 'conductor:reviewer')
+  await runTurn($, 'b1', 'claude-opus-5-5', 'high', 'STATUS ISSUES')
+  await writeTodos($, { items: items({ B: 'in_progress' }) })
+  next = 'b2'
+  await spawn($, 'Watch B', 'general-purpose')
+  await writeTodos($, { items: items({}) })
+  await openPane($)
+
+  for (const bodyColumns of [120, 40]) {
+    const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns } })
+    expect(await ui.find({ type: 'Text', text: 'DONE · 3 · 1 ✗ · 1 running' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1 agent ✗' })).toBeDefined()
+    expect(await ui.find({ key: 'agent:b1:toggle' })).toBeDefined()
+    expect(await ui.find({ key: 'agent:b2:toggle' })).toBeDefined()
+    expect(await ui.find({ key: 'todo:C:toggle' })).toBeUndefined()
+    await ui.unmount()
+  }
 })
 
 test('a plugin agent listed in its manifest gets the routing check and the read-only guard', async ($, on) => {
@@ -611,9 +660,9 @@ test('a plugin agent listed in its manifest gets the routing check and the read-
   expect(await ui.find({ type: 'Text', text: /⚠ 1 file changed in the tree while this read-only agent ran/ })).toBeDefined()
 })
 
-async function routedRow(on: On, $: Engine, type: string, files: Record<string, string>, env?: Record<string, string>) {
+async function routedRow(on: On, $: Engine, type: string, files: Record<string, string>, env?: Record<string, string>, links?: Record<string, string>) {
   mock.clock(on, { now: 1_000_000 })
-  quietHost(on, files, [''], env)
+  quietHost(on, files, [''], env, undefined, links)
   on('agent.list', () => ({ value: [{ id: 'p1', type, description: 'Run it', status: 'completed' }] }))
   on('agent.spawn', () => ({ model: 'haiku', agentId: 'p1' }))
   await spawn($, 'Run it', type)
@@ -649,4 +698,17 @@ test('CLAUDE_CONFIG_DIR moves where installed plugins are read from', async ($, 
     '/plugins/lab/agents/runner.md': RUNNER,
   }
   expect(await routedRow(on, $, 'lab:runner', files, { HOME: '/home/me', CLAUDE_CONFIG_DIR: '/cfg' })).toMatch(/low ✓/)
+})
+
+test('manifest agent paths outside the plugin, by .., absolute path, symbolic link or size, are never read', async ($, on) => {
+  // Each file would route the row (✓) if it were read.
+  const outside = RUNNER
+  const files = {
+    '/home/me/.claude/plugins/installed_plugins.json': installed({ 'lab@kit': '/plugins/lab' }),
+    '/plugins/lab/.claude-plugin/plugin.json': JSON.stringify({ agents: ['../evil/runner.md', '/evil/runner.md', './linked/runner.md', './big.md'] }),
+    '/plugins/evil/runner.md': outside,
+    '/evil/runner.md': outside,
+    '/plugins/lab/big.md': `${outside}${'x'.repeat(300 * 1024)}`,
+  }
+  expect(await routedRow(on, $, 'lab:runner', files, undefined, { '/plugins/lab/linked': '/evil' })).not.toMatch(/✓/)
 })

@@ -12,7 +12,7 @@ import {
   groupTodos,
   pluginAgentPaths,
   pluginInstallPath,
-  repoOf,
+  contextRepo,
   ticketOf,
   todoTitle,
   modelMatches,
@@ -91,8 +91,8 @@ const VERDICT_COLOR: Record<Verdict, string> = { PASS: 'success', 'PASS+NOTES': 
 const TODO_DESCRIPTION = [
   'Your todo list for the current task, drawn for the user in the session-activity pane beside the chat.',
   'Use it wherever your instructions say to track steps in a todo list. Each call replaces the whole list.',
-  'Mark an item in_progress when you start it and completed as soon as it is done; an item that ships a PR is done only once nothing but its merge queue is left. Never delete a step you will not do: mark it skipped with the reason in `note`.',
-  'Start an item with its ticket, as `#123 Fix the login redirect` (or `repo#9` for another repo), or pass it as `ticket`.',
+  'Mark an item in_progress when you start it and completed as soon as it is done; an item whose work ends in a PR is done only when its PR is merge-ready and only the merge itself is left. Never delete a step you will not do: mark it skipped with the reason in `note`.',
+  'Start an item with its ticket, as `#123 Fix the login redirect` (or `owner/repo#9` for another repo), or pass it as `ticket`.',
   'Agents you spawn are listed under the item in progress when you spawn them.',
   '`title` heads the list (the kind of task, or the playbook it follows). `link` is the URL of the issue that holds the work state.',
 ].join(' ')
@@ -185,16 +185,13 @@ async function tailOf($: $, path: string) {
 }
 
 type AgentDef = ReturnType<typeof parseAgentDef>
-const pluginAgentDefs = new Map<string, Promise<AgentDef>>()
+const MAX_AGENT_FILE_BYTES = 256 * 1024
 
 const configDir = async ($: $) => (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '~'}/.claude`
 
 async function agentDef($: $, type: string): Promise<AgentDef> {
   if (type === 'fork' || type.includes('/')) return { isReadOnly: false }
-  if (type.includes(':')) {
-    if (!pluginAgentDefs.has(type)) pluginAgentDefs.set(type, pluginAgentDef($, type))
-    return pluginAgentDefs.get(type)!
-  }
+  if (type.includes(':')) return pluginAgentDef($, type)
   const dirs = [`${await $.session.cwd()}/.claude/agents`, `${await configDir($)}/agents`]
   for (const dir of dirs) {
     try {
@@ -205,7 +202,7 @@ async function agentDef($: $, type: string): Promise<AgentDef> {
 }
 
 // `<plugin>:<name>`: the installed plugin's agent files, matched by their frontmatter `name`.
-// shortcut: a plugin loaded with --plugin-dir is not found, as no hook can list loaded plugins' folders.
+// shortcut: a plugin loaded with --plugin-dir is not seen (no hook lists loaded plugins' folders); an installed copy of the same name is read instead.
 async function pluginAgentDef($: $, type: string): Promise<AgentDef> {
   const plugin = type.slice(0, type.indexOf(':'))
   const name = type.slice(type.lastIndexOf(':') + 1)
@@ -214,13 +211,17 @@ async function pluginAgentDef($: $, type: string): Promise<AgentDef> {
     const root = pluginInstallPath(installed, plugin, await $.session.cwd())
     if (!root) return { isReadOnly: false }
     const manifest: unknown = await $.fs.read(`${root}/.claude-plugin/plugin.json`).then(JSON.parse, () => ({}))
+    // $.fs takes any absolute path, so where each file lands is checked against the root as resolved the same way.
+    const realRoot = (await $.fs.stat(root, { resolve: true })).realPath ?? root
     for (const entry of pluginAgentPaths(manifest)) {
       const path = `${root}/${entry}`
       const files = path.endsWith('.md')
         ? [path]
         : await $.fs.list(path).then(list => list.filter(f => f.name.endsWith('.md')).map(f => `${path}/${f.name}`), () => [])
       for (const file of files) {
-        const text = await $.fs.read(file).catch(() => '')
+        const stat = await $.fs.stat(file, { resolve: true }).catch(() => undefined)
+        if (!stat?.realPath?.startsWith(`${realRoot}/`) || stat.kind !== 'file' || stat.size > MAX_AGENT_FILE_BYTES) continue
+        const text = await $.fs.read(stat.realPath).catch(() => '')
         if (agentName(text) === name) return parseAgentDef(text)
       }
     }
@@ -388,7 +389,7 @@ async function refreshStatus($: $) {
   if (orphans.length > 0) words.push(`⚠ ${orphans.length} orphan${orphans.length === 1 ? '' : 's'}`)
   const done = todos.items.filter(i => i.status === 'completed' || i.status === 'skipped').length
   const now = currentItem(todos)
-  const step = todos.items.length > 0 ? `◆ ${done}/${todos.items.length}${now ? ` ${todoTitle(now, repoOf(todos.link) ?? branch.repo)}` : ''}` : undefined
+  const step = todos.items.length > 0 ? `◆ ${done}/${todos.items.length}${now ? ` ${todoTitle(now, contextRepo(todos.link, branch.repo))}` : ''}` : undefined
   const line = [step, words.length > 0 ? `⚙ ${words.join(' · ')}` : undefined].filter(Boolean).join('  ')
   $.ui.status(line || undefined)
 }
@@ -909,14 +910,25 @@ export const register: Register = (on, options) => {
     const isBad = (a: AgentRow) =>
       a.status === 'failed' || (spawns[a.id]?.changedFiles ?? 0) > 0 || ['ISSUES', 'BLOCKED', 'FAIL'].includes(spawns[a.id]?.verdict ?? '')
 
-    const repo = repoOf(todos.link) ?? branch.repo
-    // One column wide enough for the longest ticket keeps every item's text aligned.
-    const ticketWidth = Math.max(0, ...todos.items.map(i => ticketOf(i, repo).ticket?.label.length ?? 0))
+    const repo = contextRepo(todos.link, branch.repo)
     const { now: nowItems, next: nextItems, done: doneItems } = groupTodos(todos.items)
+    // A done item stays out of the fold while an agent under it runs or needs a look.
+    const needsLook = (item: TodoItem) => agentsUnder(item.content).some(a => isAgentActive(a.status) || isBad(a))
+    const isNextOpen = !isNarrow || expanded.includes('todos')
+    const isDoneOpen = expanded.includes('todos:done')
+    const shownNext = isNextOpen ? nextItems : nextItems.slice(0, 1)
+    const shownDone = isDoneOpen ? doneItems : doneItems.filter(needsLook)
+    const badDone = doneItems.filter(i => agentsUnder(i.content).some(isBad)).length
+    const runningDone = doneItems.filter(i => agentsUnder(i.content).some(a => isAgentActive(a.status))).length
+    const doneWords = [`DONE · ${doneItems.length}`, badDone > 0 ? `${badDone} ✗` : '', runningDone > 0 ? `${runningDone} running` : ''].filter(Boolean)
+    const ticketCap = isNarrow ? 6 : 12
+    const clip = (label: string) => (label.length > ticketCap ? `${label.slice(0, ticketCap - 1)}…` : label)
+    // Wide, one column as wide as the longest shown ticket keeps the texts aligned; narrow, each ticket sits inline.
+    const ticketWidth = Math.max(0, ...[...nowItems, ...shownNext, ...shownDone].map(i => clip(ticketOf(i, repo).ticket?.label ?? '').length))
     const todoRow = (item: TodoItem) => {
       const key = `todo:${item.content}`
       const under = agentsUnder(item.content)
-      const isOpen = item.status === 'in_progress' ? !expanded.includes(key) : expanded.includes(key)
+      const isOpen = item.status === 'in_progress' || needsLook(item) ? !expanded.includes(key) : expanded.includes(key)
       const icon = TODO_ICON[item.status]
       const count = `${under.length} agent${under.length === 1 ? '' : 's'}`
       const right =
@@ -928,14 +940,16 @@ export const register: Register = (on, options) => {
               ? `${count} ${under.some(isBad) ? '✗' : '✓'}`
               : (item.note ?? '')
       const { ticket, text } = ticketOf(item, repo)
+      const label = ticket ? clip(ticket.label) : ''
+      const column = isNarrow ? (label ? label.length + 1 : 0) : ticketWidth > 0 ? ticketWidth + 1 : 0
       return (
         <Box key={key} flexDirection="column">
           <Box flexDirection="row" justifyContent="space-between" gap={1}>
             <Box flexDirection="row" flexShrink={1} minWidth={0}>
               <Text color={icon.color}>{icon.glyph} </Text>
-              {ticketWidth > 0 && (
-                <Box width={ticketWidth + 1} flexShrink={0}>
-                  {ticket && (ticket.href ? <Link href={ticket.href} label={ticket.label} /> : <Text dimColor>{ticket.label}</Text>)}
+              {column > 0 && (
+                <Box width={column} flexShrink={0}>
+                  {ticket && (ticket.href ? <Link href={ticket.href} label={label} /> : <Text dimColor>{label}</Text>)}
                 </Box>
               )}
               <Box flexShrink={1} minWidth={0}>
@@ -970,8 +984,7 @@ export const register: Register = (on, options) => {
           branch.pr ? `PR #${branch.pr}` : 'no PR',
         ].filter(Boolean)
       : []
-    const isNextOpen = !isNarrow || expanded.includes('todos')
-    const isDoneOpen = expanded.includes('todos:done')
+    const doneToggle = <Button key="todos:done" label={isDoneOpen ? 'hide' : 'show'} dimColor onPress={toggle('todos:done')} />
     const todoSection = todos.items.length > 0 && (
       <Box flexDirection="column" marginBottom={1}>
         <Box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -995,20 +1008,20 @@ export const register: Register = (on, options) => {
           <Text color="suggestion">{'━'.repeat(filled)}</Text>
           <Text dimColor>{'━'.repeat(barWidth - filled)}</Text>
         </Text>
-        {nowItems.length > 0 && <Text bold>NOW</Text>}
+        {!isNarrow && nowItems.length > 0 && <Text bold>NOW</Text>}
         {nowItems.map(todoRow)}
-        {nextItems.length > 0 && <Text bold>NEXT</Text>}
-        {(isNextOpen ? nextItems : nextItems.slice(0, 1)).map(todoRow)}
-        {isNarrow && nextItems.length > 1 && (
-          <Button key="todos:toggle" label={isNextOpen ? 'fewer' : `+${nextItems.length - 1} more`} dimColor onPress={toggle('todos')} />
-        )}
-        {doneItems.length > 0 && (
+        {!isNarrow && nextItems.length > 0 && <Text bold>NEXT</Text>}
+        {shownNext.map(todoRow)}
+        {(doneItems.length > 0 || (isNarrow && nextItems.length > 1)) && (
           <Box flexDirection="row" gap={1}>
-            <Text bold dimColor>{`DONE · ${doneItems.length}`}</Text>
-            <Button key="todos:done" label={isDoneOpen ? 'hide' : 'show'} dimColor onPress={toggle('todos:done')} />
+            {isNarrow && nextItems.length > 1 && (
+              <Button key="todos:toggle" label={isNextOpen ? 'fewer' : `+${nextItems.length - 1} more`} dimColor onPress={toggle('todos')} />
+            )}
+            {doneItems.length > 0 && <Text bold dimColor>{doneWords.join(' · ')}</Text>}
+            {doneItems.length > 0 && doneToggle}
           </Box>
         )}
-        {isDoneOpen && doneItems.map(todoRow)}
+        {shownDone.map(todoRow)}
       </Box>
     )
     const spend = Object.entries(spendTotals).sort((a, b) => b[1] - a[1])

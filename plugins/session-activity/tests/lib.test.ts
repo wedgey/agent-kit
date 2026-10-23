@@ -38,6 +38,7 @@ import {
   groupTodos,
   pluginAgentPaths,
   pluginInstallPath,
+  contextRepo,
   repoOf,
   ticketOf,
   todoTitle,
@@ -320,6 +321,17 @@ describe('tickets', () => {
     expect(repoOf('https://github.com/wedgey/agent-kit.git')).toBe('wedgey/agent-kit')
     expect(repoOf('https://gitlab.com/a/b')).toBeUndefined()
     expect(repoOf(undefined)).toBeUndefined()
+    expect(repoOf('https://github.com/orgs/wedgey/projects/4')).toBeUndefined()
+    expect(repoOf('https://github.com/users/wedgey/projects/1')).toBeUndefined()
+    expect(repoOf('https://github.com/enterprises/acme')).toBeUndefined()
+  })
+
+  test("the repo in context is the list link's when that is an issue or PR, else origin's", () => {
+    expect(contextRepo('https://github.com/wedgey/contexory/issues/550', 'wedgey/agent-kit')).toBe(REPO)
+    expect(contextRepo('https://github.com/wedgey/contexory/pull/12', undefined)).toBe(REPO)
+    expect(contextRepo('https://github.com/orgs/wedgey/projects/4', 'wedgey/agent-kit')).toBe('wedgey/agent-kit')
+    expect(contextRepo('https://github.com/wedgey/contexory', 'wedgey/agent-kit')).toBe('wedgey/agent-kit')
+    expect(contextRepo(undefined, undefined)).toBeUndefined()
   })
 
   test('a bare #N leads the text and links into the repo in context', () => {
@@ -330,14 +342,20 @@ describe('tickets', () => {
     expect(ticketOf({ content: '#554: Rerun' })).toEqual({ ticket: { label: '#554' }, text: 'Rerun' })
   })
 
-  test('repo#N takes the owner in context; owner/repo#N names its own', () => {
-    expect(ticketOf({ content: 'agent-kit#9 Conductor as a root plugin' }, REPO)).toEqual({
+  test('owner/repo#N names its own repo; an owner-less repo#N is no ticket', () => {
+    expect(ticketOf({ content: 'wedgey/agent-kit#9 Conductor as a root plugin' }, REPO)).toEqual({
       ticket: { label: 'agent-kit#9', href: 'https://github.com/wedgey/agent-kit/issues/9' },
       text: 'Conductor as a root plugin',
     })
     expect(ticketOf({ content: 'acme/tool#3 Bump' }, REPO).ticket).toEqual({ label: 'tool#3', href: 'https://github.com/acme/tool/issues/3' })
     expect(ticketOf({ content: 'wedgey/contexory#3 Bump' }, REPO).ticket?.label).toBe('#3')
-    expect(ticketOf({ content: 'agent-kit#9 x' }).ticket).toEqual({ label: 'agent-kit#9' })
+    expect(ticketOf({ content: 'agent-kit#9 x' }, REPO)).toEqual({ text: 'agent-kit#9 x' })
+    expect(ticketOf({ content: 'step#2 of the plan' }, REPO)).toEqual({ text: 'step#2 of the plan' })
+    expect(ticketOf({ content: 'C#9 interop' }, REPO)).toEqual({ text: 'C#9 interop' })
+  })
+
+  test('known limit: a leading "#1 priority" reads as ticket #1', () => {
+    expect(ticketOf({ content: '#1 priority: fix login' }, REPO).ticket?.label).toBe('#1')
   })
 
   test('a GitHub issue or PR URL keeps its own address', () => {
@@ -359,6 +377,15 @@ describe('tickets', () => {
     expect(ticketOf({ content: '#123 Fix', ticket: '#123' }, REPO).text).toBe('Fix')
     expect(ticketOf({ content: '#7 Fix', ticket: '#123' }, REPO).text).toBe('#7 Fix')
     expect(ticketOf({ content: 'Fix', ticket: 'JIRA-4' })).toEqual({ ticket: { label: 'JIRA-4' }, text: 'Fix' })
+  })
+
+  test('a ticket URL off GitHub links under its last path segment, never the whole URL', () => {
+    expect(ticketOf({ content: 'Fix', ticket: 'https://linear.app/acme/issue/ENG-12/' }, REPO)).toEqual({
+      ticket: { label: 'ENG-12', href: 'https://linear.app/acme/issue/ENG-12/' },
+      text: 'Fix',
+    })
+    expect(ticketOf({ content: 'Read', ticket: 'https://acme.atlassian.net/browse/OPS-7?focus=1' }).ticket?.label).toBe('OPS-7')
+    expect(ticketOf({ content: 'Read', ticket: 'https://github.com/wedgey/contexory/discussions/40' }, REPO).ticket?.label).toBe('40')
   })
 
   test('no ticket: the text as written, and a # inside it is no ticket', () => {
@@ -423,6 +450,8 @@ describe('delegates', () => {
     }
     expect(pluginInstallPath(installed, 'conductor', '/repo/.worktrees/a')).toBe('/c/cache/agent-kit/conductor/0.2.0')
     expect(pluginInstallPath(installed, 'conductor', '/elsewhere')).toBe('/c/cache/agent-kit/conductor/0.1.0')
+    const projectOnly = { plugins: { 'lab@kit': [{ scope: 'project', projectPath: '/other', installPath: '/c/lab' }] } }
+    expect(pluginInstallPath(projectOnly, 'lab', '/repo')).toBeUndefined()
     expect(pluginInstallPath(installed, 'missing', '/repo')).toBeUndefined()
     expect(pluginInstallPath({ plugins: { 'old@m': { installPath: '/c/old' } } }, 'old', '/repo')).toBe('/c/old')
     expect(pluginInstallPath('garbage', 'conductor', '/repo')).toBeUndefined()
@@ -432,6 +461,7 @@ describe('delegates', () => {
     expect(pluginAgentPaths({})).toEqual(['agents'])
     expect(pluginAgentPaths({ agents: ['./skills/a/implementer.md', './more/'] })).toEqual(['agents', 'skills/a/implementer.md', 'more'])
     expect(pluginAgentPaths({ agents: './custom' })).toEqual(['agents', 'custom'])
+    expect(pluginAgentPaths({ agents: ['../x.md', '/abs/x.md', './a/../../x.md', 'bare.md', './ok.md'] })).toEqual(['agents', 'ok.md'])
     expect(pluginAgentPaths(null)).toEqual(['agents'])
   })
 
