@@ -58,8 +58,32 @@ Every delegate that writes while another writes gets `isolation: "worktree"`. Di
 
 Delegates run in the background and notify on completion. Do not poll. Start the independent ones in one message so they run together.
 
+## Lanes
+
+A lane is a background subagent in its own worktree, spawned under the ticket's todo item so it groups there. It runs as long as the orchestrator's session does. Use a separate session (below) only when the epic must outlive this session, or the operator wants to take a lane over by hand.
+
+| Verb | Mechanism |
+|---|---|
+| dispatch | `Agent` with `subagent_type: "general-purpose"`, `isolation: "worktree"`, the lane brief as `prompt`, and the lane's tier as `model` and `effort`. That is `sonnet` and `medium`, or `opus` and `high` for a ticket that needs design or an escalated lane. Set `description` to the ticket, such as `#562 lane`. Not a role agent, because a lane must spawn its own delegates and the role agents cannot. Spawn it while the ticket's item is the one most recently marked in progress |
+| wait | A lane reports by ending its turn with the report as its text. Its completion notice carries it. A notice that says it is waiting on its own background work is interim, so keep waiting |
+| continue | `SendMessage` to the lane's agent id. It arrives between the lane's tool calls, or wakes it when idle |
+| stop | `TaskStop` with the lane's task id. Then `git worktree remove` its worktree once its branch is pushed |
+| read state | `git -C <worktree> log --oneline -3`, `gh pr view <branch>`, and the lane's last interim notice. Never its transcript file |
+
+The lane's worktree branches from `origin`'s default branch tip, not the local checkout. When BASE is a stacked parent, the lane runs `git fetch origin <parent>` and `git switch -c <BRANCH> origin/<parent>`, because the parent's own worktree still holds that branch.
+
+### When lanes must outlive this session
+
+Dispatch a separate session instead: `claude --bg --name <lane name> --permission-mode <your mode> --model <model> --effort <effort> "<lane brief>"`, with the lane's tier as above, from the repo's root, through the background verb. continue it with `SendMessage` to its name, read its state with `claude agents --json`, and stop it with `claude stop <id>`. Set the brief's REPORT TO to your session name so it can report by message. `ListAgents` prints your name on its first line. When you track the ticket, pass the lane's name in the todo tool's `lane` field so the pane can show it under the ticket. The pitfalls marked "separate sessions" apply only here.
+
 ## Pitfalls
 
+- **A fresh worktree is bare.** A subagent's `isolation: "worktree"` fires none of the repo's own worktree hooks, so dependencies are not installed. Put the repo's documented setup command in the brief's SETUP line. The lane runs it in the background before its first check. Observed on v2.1.309, 2026-10-23.
+- **A wrapped git is refused in a worktree lane.** The isolation guard refuses any `git` run behind another program, so a hook that rewrites commands, such as an output filter that prefixes them, leaves the lane unable to run git at all. Exclude git from such rewrites before the first epic. Observed on v2.1.309, 2026-10-23.
+- **Separate sessions: share a permission class with them.** A message between a session that bypasses permission prompts and one that prompts is held until the operator approves it, and nobody sees that prompt in a background session. Always pass `--permission-mode` with your own mode, and run epics from `auto` or `bypassPermissions`. Observed on v2.1.309, 2026-10-23.
+- **Separate sessions: they start on the dispatch folder's checkout.** They make their worktree only before their first edit, from whatever is checked out there, so BASE names `origin/<trunk>`. Observed on v2.1.309, 2026-10-23.
+- **Separate sessions: untrusted folders refuse them.** `claude --bg` fails with "Workspace not trusted" in a folder no interactive session has trusted. Observed on v2.1.309, 2026-10-23.
+- **Separate sessions: idle ones are reaped.** The supervisor stops a session that has sat idle and unattached for about an hour. A stopped session loses nothing, so resume it when its next instruction is ready. Per the agent view docs, read 2026-10-23.
 - **The advisor tool.** Every delegate's request carries a built-in `advisor` tool on `opus`, deferred so the delegate must find it by search. A delegate's search does not find it, an agent file cannot remove it, and no delegate has called it. A UI may show the advisor model and make routing look broken when it is not. Briefs say nothing about it. The doctor and the routing log still count its calls, because a call would be frontier spend outside the escalation rule. Observed on v2.1.308, 2026-10-22.
 - **Silent override.** `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` makes every spawn ignore the requested `model` without a message. A per-spawn `model` beats plain `CLAUDE_CODE_SUBAGENT_MODEL`. Per the sub-agents docs, read 2026-10-17.
 - **Fork locks the model.** A fork runs on the session model and takes no `model` or `effort`. It saves context, not cost.

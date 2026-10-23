@@ -1,6 +1,6 @@
 ---
 name: conductor
-description: How to work as a coding agent. Plan, delegate to the right model tier behind checks, verify on the real thing, and report so a person understands. Use for any coding task (investigate, fix a bug, build a feature, refactor, prototype, open, babysit or ship a PR) and for /conductor. `/conductor setup` checks the install.
+description: How to work as a coding agent. Plan, delegate to the right model tier behind checks, verify on the real thing, and report so a person understands. Runs a body of work that needs several PRs as an epic, with one lane per ticket. Use for any coding task (investigate, fix a bug, build a feature, run an epic, refactor, prototype, open, babysit or ship a PR) and for /conductor. `/conductor setup` checks the install.
 ---
 
 # Conductor
@@ -18,10 +18,12 @@ This folder holds everything conductor needs. Never route to a skill outside it.
 
 ## Start of every task
 
+If your brief says you are a lane, read roles.md "Lanes" first. Its rules win over the steps below.
+
 1. Read your harness's binding once per session. It maps the verbs below to real tools and the tiers to real models. With no binding for your harness, run every role on the session model and tell the operator routing is off.
 2. If `~/.config/conductor/local.md` exists, read it. It holds rules for this machine.
 3. Read the repo's own agent rules: `AGENTS.md`, the instruction files your binding names, and the repo's skills. Repo rules win over the local overlay, which wins over conductor.
-4. Match the task to a playbook below and read it.
+4. Match the task to a playbook below and read it. Size the work before you pick between feature and epic. See [Feature or epic](#feature-or-epic).
 5. **track** each step's bold lead as the first todos, copied word for word, with the playbook's name as the list's title. A step you will not do stays, marked skipped with its reason. Task-specific todos come after. Keep the list current so the operator can see the stage and what comes next. See [The todo list](#the-todo-list).
 6. Before the first edit of a playbook that changes code, branch off current `origin/<trunk>`. If the tree has unrelated work, use a fresh worktree.
 7. If the repo declares an issue tracker, the tracker holds the work state (plan, progress, what is next). The todo list holds this session's steps and the todos found on the way, and links to the tracker.
@@ -32,7 +34,10 @@ Playbooks use these. The binding says how each one works in your harness.
 
 - **spawn** a delegate for a role, with a brief.
 - **fork** a delegate that inherits this conversation.
-- **continue** a delegate that is still running, with a new instruction.
+- **continue** a delegate or lane that is still running, with a new instruction.
+- **dispatch** a lane: a long-running delegate that owns one ticket and runs its whole playbook, in its own worktree, with a lane brief.
+- **wait** for a lane's report or for it to go idle, without polling.
+- **stop** a lane whose ticket has merged or that you are replacing.
 - **ask** the operator a question with options.
 - **track** the work in the todo list the operator watches.
 - **show** a visual: a diagram, a mockup, a screenshot.
@@ -63,6 +68,16 @@ Each one says what you own, its steps, and what the reply must contain. Files ar
 - **opening-a-pr**: the end of every playbook that changes code.
 - **babysit**: drive an open PR or stack to merge-ready. Conflicts, review threads, CI.
 - **shipping**: land verified PRs, bottom-up.
+- **epic**: several tickets toward one outcome. Dispatch one lane per ticket, steer them, verify the whole.
+
+### Feature or epic
+
+Judge it by the work, not by how it was handed to you. An epic issue is not needed, and a ticket labelled epic can still be one feature.
+
+- **Feature** when the work ends in one PR a reviewer can judge in one sitting, with one verdict. Parallel parts inside it go to implementers.
+- **Epic** when it needs two or more PRs that ship and verify on their own: separate concerns the repo wants in separate PRs, a part others must land first, or more than one session's worth of context.
+
+When in doubt, start the feature playbook. Its step 3 sizes the decomposition, and a feature that needs two or more PRs switches to epic there. Say which you picked and why in one line.
 
 Nothing fits? Say which playbook is closest, adapt its steps in the todo list, and name what you changed.
 

@@ -10,6 +10,7 @@ Playbooks name roles. This table gives each role its tier. Your binding gives ea
 | editor | mechanical | Applies a brief with nothing left to decide, or runs a command and reports the result | Lint, typecheck, tests, or a diff limited to the named files |
 | reviewer | frontier | Reads a diff against the intent and the repo's standards, without running it | None. Judgment |
 | verifier | frontier | Runs the change on the real artifact and reports pass or fail with evidence | None. Judgment |
+| lane | strong-code, or frontier for a ticket that needs design | Runs one ticket's whole playbook, writing its code itself, to a merge-ready PR | Its own checks, then its reviewer and verifier, which run at their own tier |
 
 ## Tiers
 
@@ -58,6 +59,44 @@ OPEN       what it could not settle, and why
 A verifier's STATUS carries its verdict instead: PASS, PASS+NOTES, FAIL or BLOCKED.
 
 A delegate that can prove a problem reports ISSUES and lists every problem it can prove, not only the first.
+
+## Lanes
+
+A lane is the one delegate that runs a whole playbook. It owns one ticket from branch to merge-ready PR, in its own worktree, as its own orchestrator with its own delegates. Only the [epic](playbooks/epic.md) playbook dispatches lanes. It keeps its own context, can be steered while it works, and reports at fixed points, which is why a ticket gets a lane and not an implementer.
+
+The lane brief replaces SCOPE and REPORT, and adds what an agent needs to work alone. Its first line tells the agent it is a lane, because a lane starts like any other agent and would otherwise follow the ordinary start of a task.
+
+```
+LANE        You are a lane. Load conductor, then read roles.md "Lanes" before anything else
+TICKET      the ticket's URL, or the whole ticket when there is no tracker
+PLAYBOOK    the playbook it runs: feature, bug-fix or refactoring
+BASE        current origin/<trunk>, or the branch of the one merge-ready PR it stacks on
+BRANCH      the branch to work on. An escalated lane names the branch its first lane pushed
+SETUP       the repo's documented command that prepares a fresh worktree, if it has one
+DESIGN      "needs design" when the epic flagged it, with what is still open. Otherwise "specified"
+REPORT TO   only for a lane run as a separate session: the orchestrator's session name, to message
+OWNS        paths it may write. Paths other lanes own, which it must not touch
+CONTEXT     the graph's neighbours: what it needs and who needs it. Decisions already made
+ACCEPTANCE  the ticket's acceptance, ending in its end-to-end check
+```
+
+A lane follows its playbook with these changes:
+
+- **BASE wins.** It creates BRANCH from BASE, not from trunk, whatever the start of a task and opening-a-pr say. It fetches BASE from `origin` rather than checking out a branch another worktree holds. It runs SETUP before its first check.
+- **It writes the code.** A ticket is one dependent chain, so the lane implements it itself, per Delegation in SKILL.md. It spawns explorers for large reads, implementers only for parallel workstreams inside the ticket, and always a fresh reviewer and verifier.
+- **Needs design means settle it.** With DESIGN set to needs design, it settles the open points itself and records them under the PR's Tradeoffs. It reports Blocked only for a product or preference call.
+- **One ticket, one PR.** It never dispatches lanes. Work that would need a second PR is a Blocked report, not an epic.
+- **Questions go up.** Every ask goes to the orchestrator as a Blocked report, after the lane has finished whatever the question does not touch. It never asks the operator directly.
+- **It carries the PR to merge-ready.** The brief is the operator's request to babysit, so after opening-a-pr it runs [babysit](playbooks/babysit.md) in `drive` mode on its own PR and reports merge-ready only at babysit's last step.
+- **It never merges.** It owns its branch. A conflict or stale base found while babysitting is a Blocked report, not a rebase. A rebase the orchestrator asks for is the lane's to do, and that request allows a force-push with lease to its own branch, followed by a Head moved report.
+- **It fails out loud.** A second FAIL from its verifier, or a second ISSUES from its reviewer on the same premise, is a Failed report.
+
+It reports by ending its turn with the report, or by messaging REPORT TO when the brief sets it, and only at these points. Between them it keeps working. The orchestrator answers by message.
+
+- **Merge-ready.** The PR's full URL, the reviewer's STATUS and the verifier's verdict in one line each, and what it left out.
+- **Head moved.** After merge-ready, any push to its branch, with the new head, so lanes stacked on it can rebase.
+- **Blocked.** The one question it cannot settle, with the options it sees.
+- **Failed.** What it tried, the evidence, and what it would try next.
 
 ## Follow-ups
 
