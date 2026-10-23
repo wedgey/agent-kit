@@ -2,10 +2,11 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import { expect } from "./expect.mjs";
 
-import { processStartTime } from "../queue.mjs";
-import { fullQueueReason, readQueueStatus } from "./full-queue.mjs";
+import { processStartTime } from "../../skills/conductor/tools/queue.mjs";
+import { fullQueueReason, readQueueStatus } from "../../skills/conductor/tools/hooks/full-queue.mjs";
 
 const classify = (s) => (s.startsWith("heavy") ? "q" : null);
 const held = { cwd: "/w/lane-a", acquiredAt: 0, slot: 0 };

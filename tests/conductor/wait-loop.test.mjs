@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import { each, expect } from "./expect.mjs";
 
-import { waitLoopReason } from "./wait-loop.mjs";
+import { waitLoopReason } from "../../skills/conductor/tools/hooks/wait-loop.mjs";
 
 const DENY = [
   "until grep -q x f; do sleep 20; done",
@@ -51,11 +52,11 @@ const ALLOW = [
 ];
 
 describe("waitLoopReason", () => {
-  it.each(DENY)("denies %j", (command) => {
+  each(DENY)("denies %j", (command) => {
     expect(waitLoopReason(command, false)).toMatch(/run_in_background/);
   });
 
-  it.each(ALLOW)("allows %j", (command) => {
+  each(ALLOW)("allows %j", (command) => {
     expect(waitLoopReason(command, false)).toBeNull();
   });
 

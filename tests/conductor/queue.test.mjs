@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, it } from "node:test";
+import { expect } from "./expect.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -59,9 +60,9 @@ import {
   waitNotice,
   waiterLine,
   withActivity,
-} from "./queue.mjs";
+} from "../../skills/conductor/tools/queue.mjs";
 
-const QUEUE_MJS = fileURLToPath(new URL("./queue.mjs", import.meta.url));
+const QUEUE_MJS = fileURLToPath(new URL("../../skills/conductor/tools/queue.mjs", import.meta.url));
 let tmp;
 beforeEach(() => {
   tmp = mkdtempSync(path.join(os.tmpdir(), "queue-test-"));
@@ -849,7 +850,7 @@ describe("real multi-process queue", () => {
   };
   const tickets = () => (existsSync(path.join(qdir(), "tickets")) ? readdirSync(path.join(qdir(), "tickets")).length : 0);
 
-  it("admits waiters gate first, then first come first served", async () => {
+  it("admits waiters gate first, then first come first served", { timeout: 30_000 }, async () => {
     const out = path.join(tmp, "order");
     const mark = (name) => ["--", process.execPath, "-e", `require("fs").appendFileSync(${JSON.stringify(out)}, "${name}\\n")`];
     const holder = start(["--", process.execPath, "-e", "setTimeout(() => {}, 1500)"]);
@@ -874,9 +875,9 @@ describe("real multi-process queue", () => {
     expect(readFileSync(out, "utf8")).toBe("C\nA\nB\n");
     expect(tickets()).toBe(0);
     expect(listHolders(qdir())).toEqual([]);
-  }, 30_000);
+  });
 
-  it("lets a 2-slot waiter take slot-1 at once while a 1-slot waiter ahead of it is blocked on slot-0", async () => {
+  it("lets a 2-slot waiter take slot-1 at once while a 1-slot waiter ahead of it is blocked on slot-0", { timeout: 30_000 }, async () => {
     const out = path.join(tmp, "order");
     const mark = (name) => ["--", process.execPath, "-e", `require("fs").appendFileSync(${JSON.stringify(out)}, "${name}\\n")`];
     const holder = start(["--", process.execPath, "-e", "setTimeout(() => {}, 4000)"]);
@@ -892,9 +893,9 @@ describe("real multi-process queue", () => {
     expect(listHolders(qdir())).toHaveLength(1);
     one.child.kill("SIGKILL");
     await Promise.all([one.done, holder.done]);
-  }, 30_000);
+  });
 
-  it("keeps the slot held by the command itself when the holder process is SIGKILLed", async () => {
+  it("keeps the slot held by the command itself when the holder process is SIGKILLed", { timeout: 30_000 }, async () => {
     const orphanDone = path.join(tmp, "orphan-done");
     const seen = path.join(tmp, "seen");
     const running = path.join(tmp, "running");
@@ -906,9 +907,9 @@ describe("real multi-process queue", () => {
     const next = start(["--", process.execPath, "-e", `require("fs").writeFileSync(${JSON.stringify(seen)}, String(require("fs").existsSync(${JSON.stringify(orphanDone)})))`]);
     expect((await next.done).code).toBe(0);
     expect(readFileSync(seen, "utf8")).toBe("true");
-  }, 30_000);
+  });
 
-  it("gives up within a poll of --timeout, not a whole backoff late", async () => {
+  it("gives up within a poll of --timeout, not a whole backoff late", { timeout: 30_000 }, async () => {
     const holder = start(["--", process.execPath, "-e", "setTimeout(() => {}, 4000)"]);
     await until(() => listHolders(qdir()).length === 1, "holder");
     const t0 = Date.now();
@@ -917,9 +918,9 @@ describe("real multi-process queue", () => {
     expect(result.code).toBe(TIMEOUT_EXIT);
     expect(Date.now() - t0).toBeLessThan(1500 + 1000);
     await holder.done;
-  }, 30_000);
+  });
 
-  it("exits 76 with a queue-full line and never runs the command past --timeout", async () => {
+  it("exits 76 with a queue-full line and never runs the command past --timeout", { timeout: 30_000 }, async () => {
     const marker = path.join(tmp, "ran");
     const holder = start(["--", process.execPath, "-e", "setTimeout(() => {}, 1500)"]);
     await until(() => listHolders(qdir()).length === 1, "holder");
@@ -929,5 +930,5 @@ describe("real multi-process queue", () => {
     expect(result.stderr).toMatch(/queue full/);
     expect(existsSync(marker)).toBe(false);
     await holder.done;
-  }, 30_000);
+  });
 });

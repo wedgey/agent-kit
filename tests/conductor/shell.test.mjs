@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import { expect } from "./expect.mjs";
 
-import { codeOnly, commandSegments, segments, shellBodies } from "./shell.mjs";
+import { codeOnly, commandSegments, segments, shellBodies } from "../../skills/conductor/tools/hooks/shell.mjs";
 
 describe("segments", () => {
   it("ignores operators inside quotes and after escapes", () => {

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import { each, expect } from "./expect.mjs";
 
-import { bypassed, denyOutput } from "./hook-io.mjs";
+import { bypassed, denyOutput } from "../../skills/conductor/tools/hooks/hook-io.mjs";
 
 describe("denyOutput", () => {
   it("builds a PreToolUse deny with the reason", () => {
@@ -10,7 +11,7 @@ describe("denyOutput", () => {
 });
 
 describe("bypassed", () => {
-  it.each([
+  each([
     ["ls", {}, false],
     ["ls", { CI: "1" }, true],
     ["ls", { X: "off" }, true],

@@ -3,9 +3,10 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import { each, expect } from "./expect.mjs";
 
-import { classifyQueued, commandHead, decide, defaultSlots, heavyQueue } from "./pretooluse.mjs";
+import { classifyQueued, commandHead, decide, defaultSlots, heavyQueue } from "../../skills/conductor/tools/hooks/pretooluse.mjs";
 
 const bash = (command, extra = {}) => ({ tool_name: "Bash", tool_input: { command, ...extra } });
 const reason = (out) => out?.hookSpecificOutput?.permissionDecisionReason;
@@ -13,7 +14,7 @@ const queueOf = (command) => heavyQueue(commandHead(command));
 const none = { queueStatus: () => null };
 
 describe("heavy command classifier", () => {
-  it.each([
+  each([
     ["vitest run", "tests"],
     ["npx jest", "tests"],
     ["mocha", "tests"],
@@ -39,7 +40,7 @@ describe("heavy command classifier", () => {
     ["npm run e2e", "e2e"],
   ])("%s goes to %s", (command, queue) => expect(queueOf(command)).toBe(queue));
 
-  it.each([
+  each([
     "ls",
     "git status",
     "vitest src/a.test.ts",
@@ -136,7 +137,7 @@ describe("slots and queue names", () => {
 });
 
 describe("process wiring", () => {
-  const file = fileURLToPath(new URL("./pretooluse.mjs", import.meta.url));
+  const file = fileURLToPath(new URL("../../skills/conductor/tools/hooks/pretooluse.mjs", import.meta.url));
   const run = (stdin, env = {}) =>
     spawnSync("node", [file], { input: stdin, env: { ...process.env, CI: "", ...env }, encoding: "utf8" });
 

@@ -16,3 +16,12 @@ Install a plugin from this catalog:
 /plugin marketplace add wedgey/agent-kit
 /plugin install session-activity@agent-kit
 ```
+
+## Develop
+
+Conductor's tests need Node 24 and nothing else. Node does not expand a folder, so pass the glob in quotes.
+
+```
+node --test 'tests/conductor/*.test.mjs'
+CONDUCTOR_BANNED='<regex>' tools/check-conductor.sh
+```
