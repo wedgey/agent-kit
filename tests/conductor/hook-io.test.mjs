@@ -1,14 +1,7 @@
-import { describe, it } from "node:test";
+import { describe } from "node:test";
 import { each, expect } from "./expect.mjs";
 
-import { bypassed, denyOutput } from "../../skills/conductor/tools/hooks/hook-io.mjs";
-
-describe("denyOutput", () => {
-  it("builds a PreToolUse deny with the reason", () => {
-    const out = denyOutput("why").hookSpecificOutput;
-    expect([out.permissionDecision, out.permissionDecisionReason]).toEqual(["deny", "why"]);
-  });
-});
+import { bypassed } from "../../skills/conductor/tools/hooks/hook-io.mjs";
 
 describe("bypassed", () => {
   each([

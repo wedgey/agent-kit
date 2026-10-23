@@ -1,27 +1,16 @@
-#!/usr/bin/env node
+// agent-kit's copy is canonical. A repo may vendor it and must keep the protocol version and state layout.
 /**
- * Conductor's PreToolUse hook on Bash. It denies a wait loop, an unqueued heavy command
- * run directly (with the queued form to run instead), and a foreground queued command
- * whose queue has no free slot. Fails open on anything it cannot parse.
- *
- * `CONDUCTOR_HOOKS=off` in the environment or the command lets a command through. A repo
- * that runs its own queue sets `CONDUCTOR_QUEUE_MANAGED=1` in its `.claude/settings.json`
- * `env` and gets the wait-loop check only.
+ * Which Bash commands are heavy, which are already queued, and what the text alone decides.
+ * Pure: no Node built-ins, so a Claude Code mod can import it as well as `decide.mjs`.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-import { isDirectInvocation, parseRunArgs, resolveSlots } from "../queue.mjs";
-import { fullQueueReason, readQueueStatus } from "./full-queue.mjs";
-import { bypassed, denyOutput } from "./hook-io.mjs";
+import { bypassed } from "./hook-io.mjs";
 import { commandSegments } from "./shell.mjs";
 import { waitLoopReason } from "./wait-loop.mjs";
 
 export const BYPASS_ENV = "CONDUCTOR_HOOKS";
 export const MANAGED_ENV = "CONDUCTOR_QUEUE_MANAGED";
-const QUEUE_MJS = fileURLToPath(new URL("../queue.mjs", import.meta.url));
+export const BYPASS_HINT = `If this is a false positive, prefix the command with ${BYPASS_ENV}=off.`;
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const INFO_ANYWHERE = new Set(["--version", "--help", "--collect-only", "--co", "--fixtures", "--markers", "--listTests", "--showConfig", "--list"]);
@@ -43,7 +32,7 @@ const CARGO_HEAVY = new Set(["test", "build", "check", "clippy", "nextest"]);
 const GO_HEAVY = new Set(["test", "build", "vet"]);
 const PM_VALUE_FLAGS = new Set(["-C", "--dir", "--prefix", "--cwd"]);
 const NPM_VALUE_FLAGS = new Set([...PM_VALUE_FLAGS, "-w", "--workspace"]);
-const QUEUE_TOKEN = /queue\.mjs["']?$/;
+export const QUEUE_TOKEN = /queue\.mjs["']?$/;
 
 const runsAfter = (first, second) =>
   ((first === "pnpm" || first === "yarn") && (second === "exec" || second === "dlx")) ||
@@ -72,7 +61,7 @@ export function commandHead(segment) {
       if (second === "-m") tokens.splice(0, 2);
       else return tokens;
     } else {
-      tokens[0] = path.basename(first);
+      tokens[0] = first.slice(first.lastIndexOf("/") + 1);
       return tokens;
     }
   }
@@ -191,13 +180,6 @@ export function classifyQueued(segment) {
   return flag ? flag.slice("--queue=".length) : "default";
 }
 
-/** The slot count a `queue.mjs run` segment will run with, resolved as queue.mjs resolves it. */
-export function queuedSlots(segment, env) {
-  const head = commandHead(segment);
-  const parsed = parseRunArgs(head.slice(head.findIndex((t) => QUEUE_TOKEN.test(t)) + 2));
-  return resolveSlots({ flag: parsed.slots, env, queue: classifyQueued(segment) });
-}
-
 /** The first segment that runs a heavy command outside the queue, as { segment, queue }, or null. */
 export function findUnqueuedHeavy(command) {
   for (const segment of commandSegments(command)) {
@@ -211,72 +193,21 @@ export function findUnqueuedHeavy(command) {
 export const shellQuote = (text) => `'${text.replaceAll("'", `'\\''`)}'`;
 
 /** The whole command under the queue, so a `cd` or a pipe still applies. bash, because `&>` under dash backgrounds the command. */
-export function queuedForm(command, queue, queueMjs = QUEUE_MJS) {
+export function queuedForm(command, queue, queueMjs) {
   return `node ${shellQuote(queueMjs)} run --queue=${queue} -- bash -c ${shellQuote(command)}`;
 }
 
+/** Whether any segment already runs through `queue.mjs run`. */
+export const hasQueued = (command) => commandSegments(command).some((s) => classifyQueued(s) !== null);
+
 /**
- * Whether the repo holding `cwd` runs its own queue, from its `.claude/settings.json` `env`.
- * The session env is only a fallback outside any repo, because it stays fixed while the session moves between checkouts.
+ * What the command text alone decides: `{ pass: true }`, `{ deny }` for a wait loop, or
+ * `{ host: true }` when only the queue's state can decide (a heavy or a queued command).
+ * `env` needs only `CI` and `CONDUCTOR_HOOKS`.
  */
-export function repoManaged(cwd, env) {
-  const fallback = env[MANAGED_ENV] === "1";
-  if (typeof cwd !== "string" || cwd === "") return fallback;
-  let top = path.resolve(cwd);
-  while (!existsSync(path.join(top, ".git"))) {
-    if (path.dirname(top) === top) return fallback;
-    top = path.dirname(top);
-  }
-  try {
-    return JSON.parse(readFileSync(path.join(top, ".claude", "settings.json"), "utf8"))?.env?.[MANAGED_ENV] === "1";
-  } catch {
-    return false;
-  }
+export function triage(command, background, env) {
+  if (typeof command !== "string" || bypassed(command, env, BYPASS_ENV)) return { pass: true };
+  const waiting = waitLoopReason(command, background, BYPASS_HINT);
+  if (waiting) return { deny: waiting };
+  return findUnqueuedHeavy(command) || hasQueued(command) ? { host: true } : { pass: true };
 }
-
-export function decide(input, env, deps = {}) {
-  const command = input?.tool_name === "Bash" ? input.tool_input?.command : null;
-  if (typeof command !== "string" || bypassed(command, env, BYPASS_ENV)) return null;
-  const background = input.tool_input.run_in_background;
-  const hint = `If this is a false positive, prefix the command with ${BYPASS_ENV}=off.`;
-  const waiting = waitLoopReason(command, background, hint);
-  if (waiting) return denyOutput(waiting);
-  if (repoManaged(input.cwd, env)) return null;
-  const heavy = findUnqueuedHeavy(command);
-  if (heavy) {
-    return denyOutput(
-      `"${heavy.segment}" is a heavy command and every repo on this box shares one queue. ` +
-        `Run the whole command as: ${queuedForm(command, heavy.queue, deps.queueMjs)}\n` +
-        `Run it in the background and wait for the completion notice. ${hint}`,
-    );
-  }
-  try {
-    const slots = new Map();
-    for (const segment of commandSegments(command)) {
-      const name = classifyQueued(segment);
-      if (name && !slots.has(name)) slots.set(name, queuedSlots(segment, env));
-    }
-    const status = deps.queueStatus ?? ((name) => readQueueStatus(env, name, slots.get(name) ?? resolveSlots({ env, queue: name })));
-    const full = fullQueueReason(command, background, (name) => {
-      try {
-        return status(name);
-      } catch {
-        return null;
-      }
-    }, deps.classify ?? classifyQueued);
-    return full ? denyOutput(full) : null;
-  } catch {
-    return null;
-  }
-}
-
-/* c8 ignore start -- process wiring */
-if (isDirectInvocation(process.argv[1], import.meta.url)) {
-  let out = null;
-  try {
-    out = decide(JSON.parse(readFileSync(0, "utf8")), process.env);
-  } catch {}
-  if (out) process.stdout.write(JSON.stringify(out));
-  process.exit(0);
-}
-/* c8 ignore stop */
