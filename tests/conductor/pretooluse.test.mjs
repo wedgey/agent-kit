@@ -1,12 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { each, expect } from "./expect.mjs";
 
-import { defaultSlots } from "../../skills/conductor/tools/hooks/defaults.mjs";
 import {
   classifyQueued,
   commandHead,
@@ -71,6 +70,19 @@ describe("heavy command classifier", () => {
     ["swift test", "tests"],
     ["deno test", "tests"],
     ["node --test", "tests"],
+    ["cargo check", "tests"],
+    ["cargo clippy --all-targets", "tests"],
+    ["cargo nextest run", "tests"],
+    ["go build ./...", "tests"],
+    ["go vet ./...", "tests"],
+    ["pnpm -C apps/web test", "tests"],
+    ["pnpm --dir apps/web run build", "tests"],
+    ["npm --prefix x test", "tests"],
+    ["npm -w web run test", "tests"],
+    ["npm --workspace web test", "tests"],
+    ["yarn --cwd x test", "tests"],
+    ["yarn workspace web test", "tests"],
+    ["pnpm -w test", "tests"],
     ["vitest run --config vitest.config.ts", "tests"],
     ["playwright test", "e2e"],
     ["npx cypress run", "e2e"],
@@ -116,6 +128,13 @@ describe("heavy command classifier", () => {
     "pytest --collect-only",
     "jest --listTests",
     "cargo test -- --list",
+    "cargo nextest run my_filter",
+    "go vet ./pkg/a",
+    "pytest --co -q",
+    "pytest --fixtures",
+    "pytest --markers",
+    "jest --showConfig",
+    "vitest list",
   ])("%s passes", (command) => expect(queueOf(command)).toBeNull());
 
   each([
@@ -129,6 +148,13 @@ describe("heavy command classifier", () => {
     "tsc --watch --noEmit",
     "pnpm test --watch",
     "npm test -- --watch",
+    "pnpm test:ui",
+    "pnpm test:e2e:ui",
+    "pnpm run test:e2e:watch",
+    "npm run e2e:open",
+    "yarn e2e:headed",
+    "pnpm build:dev",
+    "turbo run test:watch",
   ])("never queues the watch mode %s", (command) => expect(queueOf(command)).toBeNull());
 });
 
@@ -143,13 +169,13 @@ describe("decide", () => {
 
   it("denies an unqueued heavy command with the whole command queued and no slot count", () => {
     const text = reason(decide(bash("cd pkg && pytest | tail -5"), {}, { ...none, queueMjs: "/skill/tools/queue.mjs" }));
-    expect(text).toContain(`node '/skill/tools/queue.mjs' run --queue=tests -- sh -c 'cd pkg && pytest | tail -5'`);
+    expect(text).toContain(`node '/skill/tools/queue.mjs' run --queue=tests -- bash -c 'cd pkg && pytest | tail -5'`);
     expect(text).not.toMatch(/--slots/);
     expect(text).toContain("background");
   });
 
   it("allows an already queued heavy command when the queue has room", () => {
-    const command = "node /skill/tools/queue.mjs run --queue=tests -- sh -c 'pytest'";
+    const command = "node /skill/tools/queue.mjs run --queue=tests -- bash -c 'pytest'";
     expect(decide(bash(command), {}, { queueStatus: () => ({ slots: 2, holders: [], waiters: [] }) })).toBeNull();
   });
 
@@ -159,7 +185,7 @@ describe("decide", () => {
   });
 
   it("denies a foreground queued command on a full queue, naming the holder", () => {
-    const command = "node /skill/tools/queue.mjs run --queue=e2e -- sh -c 'playwright test'";
+    const command = "node /skill/tools/queue.mjs run --queue=e2e -- bash -c 'playwright test'";
     const status = () => ({ slots: 1, holders: [{ slot: 0, cwd: "/w/lane-a", acquiredAt: Date.now() }], waiters: [] });
     expect(reason(decide(bash(command), {}, { queueStatus: status }))).toMatch(/"e2e" queue is full \(held by lane-a/);
     expect(decide(bash(command, { run_in_background: true }), {}, { queueStatus: status })).toBeNull();
@@ -173,11 +199,11 @@ describe("decide", () => {
       path.join(holders, "slot-0.json"),
       JSON.stringify({ pid: process.pid, startTime: processStartTime(process.pid), cwd: "/w/lane-a", acquiredAt: Date.now() }),
     );
-    const queued = "node /s/queue.mjs run --queue=tests -- sh -c 'pytest'";
+    const queued = "node /s/queue.mjs run --queue=tests -- bash -c 'pytest'";
     const env = { CONDUCTOR_QUEUE_DIR: dir };
     expect(reason(decide(bash(queued), env))).toMatch(/"tests" queue is full/);
     expect(decide(bash(queued), { ...env, CONDUCTOR_QUEUE_SLOTS_TESTS: "2" })).toBeNull();
-    expect(decide(bash("node /s/queue.mjs run --queue=tests --slots=2 -- sh -c 'pytest'"), env)).toBeNull();
+    expect(decide(bash("node /s/queue.mjs run --queue=tests --slots=2 -- bash -c 'pytest'"), env)).toBeNull();
   });
 
   it("managed mode leaves heavy commands alone but still denies a wait loop", () => {
@@ -202,7 +228,7 @@ describe("decide", () => {
     const dir = tmp("cq-");
     mkdirSync(path.join(dir, "v1", "tests"), { recursive: true });
     const env = { CONDUCTOR_QUEUE_DIR: dir };
-    expect(decide(bash("node /s/queue.mjs run --queue=tests -- sh -c 'pytest'"), env)).toBeNull();
+    expect(decide(bash("node /s/queue.mjs run --queue=tests -- bash -c 'pytest'"), env)).toBeNull();
   });
 });
 
@@ -232,11 +258,14 @@ describe("managed is decided for the repo the command runs in", () => {
     expect(reason(decide(inRepo(top), { CONDUCTOR_QUEUE_MANAGED: "1" }, none))).toMatch(/heavy command/);
   });
 
-  it("falls back to the session env without a cwd or a settings file", () => {
+  it("a repo without a settings file is not managed, whatever the session env says", () => {
+    expect(repoManaged(repo(), { CONDUCTOR_QUEUE_MANAGED: "1" })).toBe(false);
+  });
+
+  it("falls back to the session env only outside any repo", () => {
     const env = { CONDUCTOR_QUEUE_MANAGED: "1" };
     expect(repoManaged(undefined, env)).toBe(true);
     expect(repoManaged(undefined, {})).toBe(false);
-    expect(repoManaged(repo(), env)).toBe(true);
     expect(repoManaged(path.join(tmp("missing-"), "gone"), env)).toBe(true);
     expect(decide(bash("pytest"), env, none)).toBeNull();
   });
@@ -250,12 +279,6 @@ describe("managed is decided for the repo the command runs in", () => {
 });
 
 describe("slots and queue names", () => {
-  it("suggests tests at a quarter of the cores, at least 1, and e2e at 1", () => {
-    expect(defaultSlots("tests", 16)).toBe(4);
-    expect(defaultSlots("tests", 2)).toBe(1);
-    expect(defaultSlots("e2e", 16)).toBe(1);
-  });
-
   it("resolves a queued segment's slots exactly as queue.mjs does", () => {
     const viaQueue = (segment, env) => {
       const argv = segment.split(/\s+/);
@@ -295,6 +318,17 @@ describe("process wiring", () => {
   it("prints the queued form for pytest, and nothing when managed", () => {
     expect(run(JSON.stringify(bash("pytest"))).stdout).toContain("run --queue=tests");
     expect(run(JSON.stringify(bash("pytest")), { CONDUCTOR_QUEUE_MANAGED: "1" }).stdout).toBe("");
+  });
+
+  it("the suggested form keeps a bash redirect in the foreground and its exit code", () => {
+    const bin = tmp("bin-");
+    writeFileSync(path.join(bin, "pytest"), "#!/bin/sh\necho ran\nexit 7\n");
+    chmodSync(path.join(bin, "pytest"), 0o755);
+    const log = path.join(bin, "log");
+    const env = { PATH: `${bin}:${process.env.PATH}`, CONDUCTOR_QUEUE_DIR: tmp("cq-") };
+    const ran = spawnSync("bash", ["-c", queuedForm(`pytest &> ${log}`, "tests")], { env: { ...process.env, ...env, CI: "" }, encoding: "utf8" });
+    expect(ran.status).toBe(7);
+    expect(readFileSync(log, "utf8")).toBe("ran\n");
   });
 
   it("the suggested form runs the whole command under the queue and keeps its exit code", () => {

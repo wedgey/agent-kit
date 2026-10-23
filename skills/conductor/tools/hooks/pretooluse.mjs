@@ -24,17 +24,23 @@ export const MANAGED_ENV = "CONDUCTOR_QUEUE_MANAGED";
 const QUEUE_MJS = fileURLToPath(new URL("../queue.mjs", import.meta.url));
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-const INFO_ANYWHERE = new Set(["--version", "--help", "--collect-only", "--listTests", "--list"]);
+const INFO_ANYWHERE = new Set(["--version", "--help", "--collect-only", "--co", "--fixtures", "--markers", "--listTests", "--showConfig", "--list"]);
 const PYTEST = new Set(["pytest", "py.test"]);
 const WATCH = /^--(watch|watchAll|ui)(=|$)/;
 const WATCH_SHORT_TOOLS = new Set(["tsc", "jest", "vitest"]);
+const VITEST_NO_RUN = new Set(["watch", "dev", "list"]);
 const NAME_FILTER = /^(-[ktg]|--(testNamePattern|test-name-pattern|grep|filter))(=|$)/;
 const SOURCE_FILE = /\.(py|[cm]?[jt]sx?|rb|exs?|go|rs|java|kt|cs|swift)(:\d+)*$/;
 const VALUE_FLAGS = new Set(["-c", "--config"]);
-const SCRIPT = /^(test|build|typecheck|e2e)(:(?!watch).+)?$/;
+const SCRIPT = /^(test|build|typecheck|e2e)(:.+)?$/;
+const NEVER_EXITS = /:(watch|ui|open|dev|headed)(:|$)/;
 const PM_SHORT = new Set(["test", "build", "typecheck", "e2e"]);
 const GRADLE_TASKS = new Set(["test", "build", "check", "assemble"]);
 const MVN_GOALS = new Set(["test", "verify", "package", "install"]);
+const CARGO_HEAVY = new Set(["test", "build", "check", "clippy", "nextest"]);
+const GO_HEAVY = new Set(["test", "build", "vet"]);
+const PM_VALUE_FLAGS = new Set(["-C", "--dir", "--prefix", "--cwd"]);
+const NPM_VALUE_FLAGS = new Set([...PM_VALUE_FLAGS, "-w", "--workspace"]);
 const QUEUE_TOKEN = /queue\.mjs["']?$/;
 
 const runsAfter = (first, second) =>
@@ -80,13 +86,13 @@ const scoped = (args) =>
 /** A lone `-h` asks for help. A lone `-v` asks for the version, except to pytest, where it means verbose. */
 const isShortInfo = (tool, args) => args.length === 1 && (args[0] === "-h" || (args[0] === "-v" && !PYTEST.has(tool)));
 
-const isWatch = (tool, args) =>
+const neverQueued = (tool, args) =>
   args.some((a) => WATCH.test(a)) ||
   (WATCH_SHORT_TOOLS.has(tool) && args.includes("-w")) ||
-  (tool === "vitest" && (args[0] === "watch" || args[0] === "dev"));
+  (tool === "vitest" && VITEST_NO_RUN.has(args[0]));
 
 const taskQueue = (tasks) => {
-  const task = tasks.find((t) => SCRIPT.test(t));
+  const task = tasks.find((t) => SCRIPT.test(t) && !NEVER_EXITS.test(t));
   if (!task) return null;
   return /e2e|playwright|cypress/.test(task) ? "e2e" : "tests";
 };
@@ -96,7 +102,7 @@ export function heavyQueue(head) {
   const [tool, ...args] = head;
   if (args.some((a) => INFO_ANYWHERE.has(a)) || isShortInfo(tool, args)) return null;
   // A watch run never exits, so a queued one would hold its slot forever.
-  if (isWatch(tool, args)) return null;
+  if (neverQueued(tool, args)) return null;
   const tests = (heavy) => (heavy ? "tests" : null);
   switch (tool) {
     case "vitest":
@@ -116,9 +122,11 @@ export function heavyQueue(head) {
     case "tsc":
       return tests(!args.some((a) => /\.[cm]?tsx?$/.test(a)));
     case "go":
-      return tests(args[0] === "test" && !args.some((a) => a === "-run" || a.startsWith("-run=")) && !positional(args.slice(1)).some((a) => !a.includes("...")));
-    case "cargo":
-      return tests(["test", "build"].includes(args[0]) && !args.some((a) => a === "-p" || a === "--package" || a.startsWith("--package=")) && !(args[0] === "test" && positional(args.slice(1)).length > 0));
+      return tests(GO_HEAVY.has(args[0]) && !args.some((a) => a === "-run" || a.startsWith("-run=")) && !positional(args.slice(1)).some((a) => !a.includes("...")));
+    case "cargo": {
+      const filters = args[0] === "test" ? args.slice(1) : args[0] === "nextest" ? args.slice(2) : [];
+      return tests(CARGO_HEAVY.has(args[0]) && !args.some((a) => a === "-p" || a === "--package" || a.startsWith("--package=")) && positional(filters).length === 0);
+    }
     case "next":
       return tests(args[0] === "build");
     case "turbo":
@@ -149,11 +157,18 @@ export function heavyQueue(head) {
 
 function packageScriptQueue(tool, args) {
   if (hasFilter(args)) return null;
-  const at = args.findIndex((a) => !a.startsWith("-"));
+  const valueFlags = tool === "npm" ? NPM_VALUE_FLAGS : PM_VALUE_FLAGS;
+  const nextWord = (from) => {
+    let i = from;
+    while (i < args.length && args[i].startsWith("-")) i += valueFlags.has(args[i]) ? 2 : 1;
+    return i;
+  };
+  let at = nextWord(0);
+  if (tool === "yarn" && args[at] === "workspace") at = nextWord(at + 2);
   const isRun = args[at] === "run" || args[at] === "run-script";
-  const nameAt = isRun ? args.findIndex((a, i) => i > at && !a.startsWith("-")) : at;
-  if (at < 0 || nameAt < 0) return null;
+  const nameAt = isRun ? nextWord(at + 1) : at;
   const name = args[nameAt];
+  if (name === undefined) return null;
   const forwarded = args.slice(nameAt + 1);
   if (isRun ? SCRIPT.test(name) : PM_SHORT.has(name) || (tool !== "npm" && SCRIPT.test(name))) {
     return scoped(forwarded) ? null : taskQueue([name]);
@@ -189,14 +204,14 @@ export function findUnqueuedHeavy(command) {
 
 export const shellQuote = (text) => `'${text.replaceAll("'", `'\\''`)}'`;
 
-/** The whole command under the queue, so a `cd` or a pipe around the heavy part still applies. */
+/** The whole command under the queue, so a `cd` or a pipe still applies. bash, because `&>` under dash backgrounds the command. */
 export function queuedForm(command, queue, queueMjs = QUEUE_MJS) {
-  return `node ${shellQuote(queueMjs)} run --queue=${queue} -- sh -c ${shellQuote(command)}`;
+  return `node ${shellQuote(queueMjs)} run --queue=${queue} -- bash -c ${shellQuote(command)}`;
 }
 
 /**
  * Whether the repo holding `cwd` runs its own queue, from its `.claude/settings.json` `env`.
- * The session env is only a fallback, because it stays fixed while the session moves between checkouts.
+ * The session env is only a fallback outside any repo, because it stays fixed while the session moves between checkouts.
  */
 export function repoManaged(cwd, env) {
   const fallback = env[MANAGED_ENV] === "1";
@@ -206,14 +221,8 @@ export function repoManaged(cwd, env) {
     if (path.dirname(top) === top) return fallback;
     top = path.dirname(top);
   }
-  let text;
   try {
-    text = readFileSync(path.join(top, ".claude", "settings.json"), "utf8");
-  } catch (error) {
-    return error.code === "ENOENT" ? fallback : false;
-  }
-  try {
-    return JSON.parse(text)?.env?.[MANAGED_ENV] === "1";
+    return JSON.parse(readFileSync(path.join(top, ".claude", "settings.json"), "utf8"))?.env?.[MANAGED_ENV] === "1";
   } catch {
     return false;
   }
