@@ -11,6 +11,6 @@
 - Never wrap a queued command in another lock. Holding one while waiting for the other deadlocks the lanes.
 - Before you spawn delegates that verify, count the queue's slots. They are `CONDUCTOR_QUEUE_SLOTS_<QUEUE>`, or 1 when it is unset. `queue.mjs status` shows nothing on a fresh box. Run no more of them at once than that.
 
-The hook that `/conductor setup` installs denies a wait loop and an unqueued heavy command, and names what to run instead. A repo with its own queue marks itself managed, as the binding's setup file says, and the hook then only checks for wait loops.
+The hook that conductor's package installs denies a wait loop and an unqueued heavy command, and names what to run instead. A repo with its own queue marks itself managed, as the binding's setup file says, and the hook then only checks for wait loops.
 
 **Example.** Three verifiers want the e2e suite and the queue has one slot. Spawn one, background its run, and spawn the next when its notice arrives.

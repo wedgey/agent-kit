@@ -130,8 +130,12 @@ _Avoid_: Guideline, best practice, value
 
 ## Configuration
 
+**Package**:
+The one installable unit that gives a harness conductor: the skill, its role agents, its hooks and the always-on pointer. Installing it adds every piece and uninstalling it removes every piece. For Claude Code it is a plugin.
+_Avoid_: Bundle, distribution
+
 **Setup**:
-Conductor's own step that writes the always-on pointer into a harness's user-level instructions, installs any role agents, and runs the doctor.
+Conductor's own step that confirms the package is installed, runs the doctor, and lists what an older install left behind. It writes no files.
 _Avoid_: Install, bootstrap, init
 
 **Local overlay**:

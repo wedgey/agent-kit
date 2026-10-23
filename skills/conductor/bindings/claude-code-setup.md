@@ -1,33 +1,22 @@
 # Binding: Claude Code, setup
 
-Read only during `/conductor setup`.
+Read only during `/conductor:conductor setup`.
 
-## Setup data
+## The package
 
-- The user-level instruction file is `~/.claude/CLAUDE.md`. Create it if missing.
-- In headless `-p` mode, setup needs permission to read the skill folder and write the files above. Without it, setup stops and writes nothing.
-- The skill is discoverable from any repo when `SKILL.md` exists at `~/.claude/skills/conductor/` or `~/.agents/skills/conductor/`.
-- Install every file in `claude-code-agents/` to `~/.claude/agents/`. A file that already matches stays. A file that differs is replaced. Leave every other file in that folder alone. New agents usually load into the running session within seconds, even when the folder was just created. Observed on v2.1.308, 2026-10-22.
-- Install the PreToolUse hook into `~/.claude/settings.json`, created as `{}` if missing. Edit only `hooks.PreToolUse`.
-  - The hook's path is the installed skill that step 2 found. When the skill is in both `~/.claude/skills/conductor/` and `~/.agents/skills/conductor/`, use `~/.claude`. When it is only in `~/.agents/skills/conductor/`, the object's `$HOME/.claude/...` becomes `$HOME/.agents/...`.
-  - A conductor hook is an inner hook object `{type, command, timeout}` whose `command` contains `conductor/tools/hooks/pretooluse.mjs`. Match on "contains", because the command ends with a quote.
-  - If the only conductor hook equals the object below, change nothing. Otherwise replace the first conductor hook with it and remove every other conductor hook.
-  - Remove a matcher group only once removing conductor hooks has left its `hooks` list empty.
-  - Append a new `{ "matcher": "Bash", "hooks": [<the object below>] }` group only when no conductor hook object exists in `hooks.PreToolUse`.
-  - Never touch any other hook object, group or key.
-  - Show the diff in the reply.
-
-```json
-{ "type": "command", "command": "node \"$HOME/.claude/skills/conductor/tools/hooks/pretooluse.mjs\"", "timeout": 5 }
-```
-
+- Conductor's package is the `conductor` plugin in the `agent-kit` marketplace. Install it with `/plugin marketplace add wedgey/agent-kit`, then `/plugin install conductor@agent-kit`. `/plugin uninstall conductor@agent-kit` removes it.
+- It ships the skill as `conductor:conductor`, the five role agents as `conductor:<role>`, a `PreToolUse` hook on `Bash` that runs `tools/hooks/pretooluse.mjs`, and a `SessionStart` hook that adds the pointer to every session's context.
+- It is installed and enabled when `claude plugin list --json` has an entry with `"id": "conductor@agent-kit"` and `"enabled": true`. A session started with `claude --plugin-dir <checkout>` loads it without an install and is not in that list. Then `conductor:conductor` among this session's skills is the proof.
+- Disabled: `/plugin enable conductor@agent-kit`, then `/reload-plugins` or a new session.
+- The plugin root is two levels above this skill's base directory. Its `hooks/session-start.mjs` prints the pointer.
+- In headless `-p` mode, the doctor needs permission to run `claude plugin list` and read the files named below. Without it, say which check could not run.
 - Suggest a slot count, and never write it. When `~/.claude/settings.json` has no `env.CONDUCTOR_QUEUE_SLOTS_TESTS`, suggest adding `CONDUCTOR_QUEUE_SLOTS_TESTS` = a quarter of `nproc`, at least 1, to that `env`. The hook and the queue both read it. Without it a queue runs one command at a time.
 
 A repo that runs its own queue sets `"env": {"CONDUCTOR_QUEUE_MANAGED": "1"}` in its own `.claude/settings.json`. The hook reads that file in the repo a command runs in, and then only denies wait loops there. `CONDUCTOR_HOOKS=off` bypasses it.
 
 ## Doctor
 
-Spawn each role agent once with no `model` or `effort`, so each runs on its own defaults. Add one `conductor-editor` probe with `model: sonnet` and `effort: medium` to prove escalation overrides the defaults. Spawn them all in one message. If a role agent is not found because it was just installed, stop and tell the operator to start a new session and run `/conductor setup` again. Install will find every file matching, and the doctor runs there. Use this brief.
+Spawn each role agent by its scoped name, `conductor:<role>`, once with no `model` or `effort`, so each runs on its own defaults. Add one `conductor:editor` probe with `model: sonnet` and `effort: medium` to prove escalation overrides the defaults. Spawn them all in one message. If a role agent is not found, the plugin is not loaded in this session. Say so, give the enable steps above, and stop. Use this brief.
 
 ```
 GOAL: report which model you run on. Put the exact model name or ID stated in your system prompt on the DID line and report PASS. There is no gate and nothing to decide.
@@ -50,9 +39,20 @@ Output this table.
 | Role agent | Tier | Requested | Ran | Effort | Match | Advisor calls |
 |---|---|---|---|---|---|---|
 
-Then check the hook.
+Then check the hook and the pointer, and report each on its own line below the table, `Hook:` and `Pointer:`, not as rows in it.
 
-- `~/.claude/settings.json` has exactly one conductor hook object, the file its command names exists, and its group's `matcher` matches `Bash`.
-- Pipe `{"tool_name":"Bash","tool_input":{"command":"until grep -q x f; do sleep 20; done"}}` to `env -u CI node <installed skill>/tools/hooks/pretooluse.mjs`. It must print JSON with `"permissionDecision":"deny"`.
+- **Hook.** Run `until true; do sleep 1; done` with the `Bash` tool. The registered hook must deny it with a reason that starts `Do not block the turn by sleeping or polling.` It cannot hang, because `until true` ends at once when nothing denies it. Then pipe `{"tool_name":"Bash","tool_input":{"command":"until grep -q x f; do sleep 20; done"}}` to `env -u CI node <skill base directory>/tools/hooks/pretooluse.mjs`. It must print JSON with `"permissionDecision":"deny"`.
+- **Pointer.** This session's context must hold the pointer from the `SessionStart` hook. It begins `Conductor governs how you work in every repo.` and names `/conductor:conductor`. If it is missing while the plugin is loaded, run `node <plugin root>/hooks/session-start.mjs` and report what it prints.
 
-Report both on one `Hook:` line below the table, not as a row in it.
+## Leftovers of the old install
+
+Before the plugin, setup wrote these files. Each one now doubles a piece the plugin ships. A second pointer names the old command, a second `conductor` skill loads beside `conductor:conductor`, unscoped copies of the role agents load beside the plugin's, and a second hook runs on every `Bash` call. List each one found, with its removal. Never remove one yourself.
+
+| Leftover | Found when | Removal |
+|---|---|---|
+| Pointer block | `~/.claude/CLAUDE.md` has a `<!-- conductor:start -->` line | Delete the lines from `<!-- conductor:start -->` through `<!-- conductor:end -->`, both markers included, and nothing else. With GNU sed: `sed -i '/^<!-- conductor:start -->$/,/^<!-- conductor:end -->$/d' ~/.claude/CLAUDE.md` |
+| Role agents | `ls ~/.claude/agents/conductor-*.md` lists files | `rm` each file it lists, for example `rm ~/.claude/agents/conductor-*.md` |
+| Skill copy | `~/.claude/skills/conductor` exists | `rm -r ~/.claude/skills/conductor`. If it is a symlink, `rm ~/.claude/skills/conductor` removes only the link |
+| Settings hook | `~/.claude/settings.json` `hooks.PreToolUse` holds an inner hook object whose `command` contains `conductor/tools/hooks/pretooluse.mjs` | Remove each such object, and its matcher group only when that leaves the group's `hooks` empty. Touch nothing else. This command does it and rewrites the file with two-space indent: `node -e 'const fs=require("fs"),f=process.argv[1],m="conductor/tools/hooks/pretooluse.mjs",s=JSON.parse(fs.readFileSync(f,"utf8")),own=(h)=>String(h.command).includes(m);s.hooks.PreToolUse=s.hooks.PreToolUse.flatMap((g)=>g.hooks?.some(own)?(g.hooks=g.hooks.filter((h)=>!own(h))).length?[g]:[]:[g]);fs.writeFileSync(f,JSON.stringify(s,null,2)+"\n")' ~/.claude/settings.json` |
+
+After removing any of them, start a new session so the plugin's pieces are the only ones loaded.

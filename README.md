@@ -6,7 +6,7 @@ Design docs per entry: see [CONTEXT-MAP.md](./CONTEXT-MAP.md).
 
 ## Entries
 
-- [`skills/conductor`](./skills/conductor/SKILL.md): the agent mode that sets how a coding agent plans, delegates and verifies. `/conductor setup` installs it.
+- [`skills/conductor`](./skills/conductor/SKILL.md): the agent mode that sets how a coding agent plans, delegates and verifies, packaged as the `conductor` plugin.
   It also ships a box-wide queue for heavy checks and a hook that keeps agents from waiting in loops.
 - [`plugins/session-activity`](./plugins/session-activity/README.md): a Claude Code pane of the session's todo list, subagents and background servers.
 
@@ -14,7 +14,14 @@ Install a plugin from this catalog:
 
 ```
 /plugin marketplace add wedgey/agent-kit
+/plugin install conductor@agent-kit
 /plugin install session-activity@agent-kit
+```
+
+Installing `conductor` gives the machine its skill, its five role agents, the queue and its hooks, and the start-of-task pointer. `/conductor:conductor setup` then checks the install and lists anything an older install left behind. Uninstall removes all of it:
+
+```
+/plugin uninstall conductor@agent-kit
 ```
 
 ## Develop

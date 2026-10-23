@@ -1,6 +1,6 @@
 ---
 name: conductor
-description: How to work as a coding agent. Plan, delegate to the right model tier behind checks, verify on the real thing, and report so a person understands. Use for any coding task (investigate, fix a bug, build a feature, refactor, prototype, open, babysit or ship a PR) and for /conductor. `/conductor setup` installs the always-on pointer.
+description: How to work as a coding agent. Plan, delegate to the right model tier behind checks, verify on the real thing, and report so a person understands. Use for any coding task (investigate, fix a bug, build a feature, refactor, prototype, open, babysit or ship a PR) and for /conductor. `/conductor setup` checks the install.
 ---
 
 # Conductor
@@ -13,7 +13,7 @@ This folder holds everything conductor needs. Never route to a skill outside it.
 - `playbooks/`: the steps for each kind of task.
 - `principles/`: rules of judgment, read only when one applies.
 - `bindings/<harness>.md`: the only place a model or tool is named.
-- `tools/`: the box queue for heavy checks (`queue.mjs`) and the hooks setup installs.
+- `tools/`: the box queue for heavy checks (`queue.mjs`) and the hooks the harness's package registers.
 - `setup.md`: what `/conductor setup` does. On `/conductor setup`, follow it and nothing else.
 
 ## Start of every task
