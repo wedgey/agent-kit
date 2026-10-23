@@ -257,6 +257,10 @@ describe("the body a typed queued form runs", () => {
     ["rg 'node .*queue\\.mjs run'", []],
     ['pgrep -af "node.*queue.mjs run"', []],
     ["cat > doc.md <<'EOF'\nnode /s/queue.mjs run -- pnpm test\nEOF", []],
+    ["cat <<'EOF'\n$(node /s/queue.mjs run -- touch /tmp/x)\nEOF", []],
+    ["git commit -m \"$(cat <<'EOF'\nmentions node /s/queue.mjs run -- pnpm test\nEOF\n)\"", []],
+    ["echo '$(node /s/queue.mjs run -- touch /tmp/x)'", []],
+    ["echo $'it\\'s' \"node /s/queue.mjs run -- x\"", []],
   ])("%s runs %j", (command, bodies) => expect(queuedBodies(command)).toEqual(bodies));
 
   each([
@@ -281,6 +285,14 @@ describe("the body a typed queued form runs", () => {
     "{ node /s/queue.mjs run -- touch /tmp/x; }",
     "env node /s/queue.mjs run -- touch /tmp/x",
     "/usr/bin/node /s/queue.mjs run -- touch /tmp/x",
+    'echo "$(node /s/queue.mjs run -- touch /tmp/x)"',
+    'echo "`node /s/queue.mjs run -- touch /tmp/x`"',
+    "cat <<EOF\n$(node /s/queue.mjs run -- touch /tmp/x)\nEOF",
+    "cat <<EOF\n`node /s/queue.mjs run -- touch /tmp/x`\nEOF",
+    'echo "$(echo "x"; node /s/queue.mjs run -- touch /tmp/x)"',
+    'echo "a $(echo "$(node /s/queue.mjs run -- touch /tmp/x)")"',
+    "echo $'it\\'s' \"$(node /s/queue.mjs run -- touch /tmp/x)\"",
+    "# it's\nnode /s/queue.mjs run -- touch /tmp/x; ls",
   ])("denies %j, whose body cannot be checked", (command) => expect(queuedBodies(command)).toBeNull());
 
   it("names the plain command a heredoc or a flagged shell runs, when it can", () => {
@@ -301,6 +313,11 @@ describe("the body a typed queued form runs", () => {
     expect(typedQueued("node ".repeat(20_000))).toBeNull();
     expect(typedQueued(`echo ${"node queue.mjs ".repeat(7_000)}`)).toBeNull();
     expect(Date.now() - start).toBeLessThan(300);
+  });
+
+  it("denies a nesting too deep to read when it names queue.mjs, and passes it otherwise", () => {
+    expect(queuedBodies(`${"$(".repeat(50_000)}node /s/queue.mjs run -- touch /tmp/x`)).toBeNull();
+    expect(queuedBodies(`echo ${"$(".repeat(50_000)}`)).toEqual([]);
   });
 
   each(["it's", 'say "hi"', "a; b", "echo $(date) `id`", "a\nb", "a\\'b"])("round-trips %j through its queued form", (command) =>

@@ -5,7 +5,7 @@
  */
 
 import { bypassed } from "./hook-io.mjs";
-import { commandSegments, segments, shellBodies, shellWords, withoutHeredocs } from "./shell.mjs";
+import { codeTexts, commandSegments, segments, shellBodies, shellWords } from "./shell.mjs";
 import { waitLoopReason } from "./wait-loop.mjs";
 
 export const BYPASS_ENV = "CONDUCTOR_HOOKS";
@@ -258,8 +258,15 @@ function callsQueue(segment) {
   return head[0] === "node" && at > 0 && !READ_ONLY_SUBCOMMANDS.has(head[at + 1]);
 }
 
-/** Whether any command start in the text, heredoc bodies and quoted text aside, calls the queue. */
-const typesQueued = (command) => segments(withoutHeredocs(command), true).some(callsQueue);
+/** Whether any command start in the text or in a substitution it runs calls the queue. Quoted words and heredoc bodies are not command starts. */
+function typesQueued(command) {
+  try {
+    return codeTexts(command).some((text) => segments(text, true).some(callsQueue));
+  } catch {
+    // Too deep to read: any mention of the queue counts, and the strict parse then denies it.
+    return unquoted(command).includes("queue.mjs");
+  }
+}
 
 /** The argv after a `queue.mjs run ... --`, or null when the text is not exactly that one call. */
 function queuedArgv(text) {

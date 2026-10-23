@@ -185,6 +185,13 @@ describe('the Bash gate', () => {
     expect(w.ran).toEqual([])
   })
 
+  test('denies a typed queued form run by a command substitution inside double quotes', async ($, on) => {
+    const w = harness(on, () => '', { CONDUCTOR_HOOKS: 'off' })
+    const r = await bash($, 'echo "$(node /p/skills/conductor/tools/queue.mjs run -- touch /tmp/x)"')
+    expect(r.deny).toMatch(/cannot check/)
+    expect(w.ran).toEqual([])
+  })
+
   test('passes everything when bypassed, wait loops included', async ($, on) => {
     const w = harness(on, () => '', { CONDUCTOR_HOOKS: 'off' })
     await bash($, 'pytest')

@@ -159,3 +159,78 @@ export function shellWords(text) {
   if (word !== null) words.push(word);
   return words;
 }
+
+const WORD_START = /[\s;&|()]/;
+const MAX_DEPTH = 64;
+
+/**
+ * The command's code, then the code of every command substitution it runs (`$(...)` or backticks:
+ * bare, inside double quotes, or in a heredoc whose delimiter is unquoted), each read the same way.
+ * A text keeps its quoted words but loses its substitutions, comments and heredoc bodies, so
+ * `segments` over it finds every command start. Single quotes and quoted-delimiter heredocs stay inert.
+ * Throws a RangeError past MAX_DEPTH nested substitutions.
+ */
+export function codeTexts(command) {
+  const texts = [];
+  const n = command.length;
+  /** Reads substitutions in double-quote-like text from i up to stop, or to `"` when stop is null. */
+  const quoted = (i, stop, depth) => {
+    let out = "";
+    while (i < (stop ?? n) && (stop !== null || command[i] !== '"')) {
+      if (command[i] === "\\") out += command.slice(i, (i += 2));
+      else if (command[i] === "`") i = code(i + 1, "`", depth + 1);
+      else if (command.startsWith("$(", i)) i = code(i + 2, ")", depth + 1);
+      else out += command[i++];
+    }
+    return [i, out];
+  };
+  /** Reads code from i up to the closing `end`, pushing its text; returns the index after it. */
+  const code = (i, end, depth) => {
+    if (depth > MAX_DEPTH) throw new RangeError("command substitutions nest too deep to read");
+    let out = "";
+    const heredocs = [];
+    while (i < n && command[i] !== end) {
+      const ch = command[i];
+      if (ch === "\\") out += command.slice(i, (i += 2));
+      else if (ch === "'" || (ch === "$" && command[i + 1] === "'")) {
+        let j = command.indexOf("'", i) + 1;
+        while (j < n && command[j] !== "'") j += ch === "$" && command[j] === "\\" ? 2 : 1;
+        out += command.slice(i, (i = Math.min(j + 1, n)));
+      } else if (ch === '"') {
+        const [at, text] = quoted(i + 1, null, depth);
+        out += `"${text}"`;
+        i = at + 1;
+      } else if (ch === "`") i = code(i + 1, "`", depth + 1);
+      else if (command.startsWith("$(", i)) i = code(i + 2, ")", depth + 1);
+      else if (ch === "(") {
+        i = code(i + 1, ")", depth + 1);
+        out += ";";
+      } else if (ch === "#" && (i === 0 || WORD_START.test(command[i - 1]))) {
+        while (i < n && command[i] !== "\n") i += 1;
+      } else if (command.startsWith("<<", i) && command[i + 2] !== "<") {
+        const m = /^<<-?[ \t]*((?:[^\s;&|<>()]|'[^']*'|"[^"]*")+)/.exec(command.slice(i, i + 4096));
+        if (m) heredocs.push({ tag: m[1].replace(/['"\\]/g, ""), live: !/['"\\]/.test(m[1]) });
+        const len = m ? m[0].length : 2;
+        out += command.slice(i, (i += len));
+      } else if (ch === "\n" && heredocs.length) {
+        out += ch;
+        i += 1;
+        for (const { tag, live } of heredocs.splice(0)) {
+          let end = i;
+          while (end < n) {
+            const eol = command.indexOf("\n", end);
+            const line = command.slice(end, eol < 0 ? n : eol);
+            if (line.replace(/^\t+/, "") === tag) break;
+            end = eol < 0 ? n : eol + 1;
+          }
+          if (live) quoted(i, end, depth);
+          i = Math.min(command.indexOf("\n", end) + 1 || n, n);
+        }
+      } else out += command[i++];
+    }
+    texts.push(out);
+    return i + 1;
+  };
+  code(0, undefined, 0);
+  return texts;
+}
