@@ -304,6 +304,13 @@ const spawn = ($: Engine, description: string, subagentType: string, extra: { mo
 const openPane = ($: Engine) =>
   $.command.run({ command: 'activity', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
 
+type Host = {
+  sessionId?: string
+  store?: Record<string, unknown>
+  statuses?: (string | undefined)[]
+  node?: (args: readonly string[]) => Promise<{ exitCode: number; stdout: string } | undefined> | { exitCode: number; stdout: string } | undefined
+}
+
 function quietHost(
   on: On,
   files: Record<string, string> = {},
@@ -311,7 +318,20 @@ function quietHost(
   env: Record<string, string> = { HOME: '/home/me' },
   branch = 'feat/x\norigin/main\n2\n1\n',
   links: Record<string, string> = {},
+  host: Host = {},
 ) {
+  const store = host.store ?? {}
+  on('session.id', () => ({ value: host.sessionId ?? 's1' }))
+  on('store.get', (_$, e) => ({ value: store[e.key] }))
+  on('store.set', (_$, e) => {
+    store[e.key] = e.value
+    return { value: undefined }
+  })
+  on('store.delete', (_$, e) => {
+    delete store[e.key]
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: Object.keys(store) }))
   // A symbolic link: a path under `from` lands under `to`.
   const real = (path: string) => {
     for (const [from, to] of Object.entries(links)) if (path === from || path.startsWith(`${from}/`)) return `${to}${path.slice(from.length)}`
@@ -319,7 +339,10 @@ function quietHost(
   }
   on('ui.panes', () => ({ value: [] }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('ui.status', () => ({ value: undefined }))
+  on('ui.status', (_$, e) => {
+    host.statuses?.push(e.text)
+    return { value: undefined }
+  })
   on('session.cwd', () => ({ value: '/repo' }))
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('fs.read', (_$, e) => {
@@ -339,7 +362,9 @@ function quietHost(
     const kind = text === undefined ? ('dir' as const) : ('file' as const)
     return { value: { kind, size: text?.length ?? 0, mtimeMs: 0, isLink: to !== e.path, ...(e.resolve ? { realPath: to } : {}) } }
   })
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
+    const ran = e.argv[0] === 'node' ? await host.node?.(e.argv.slice(1)) : undefined
+    if (ran !== undefined) return { value: { stderr: '', isStdoutTruncated: false, isStderrTruncated: false, ...ran } }
     const stdout = e.argv[0] === 'git' ? (status.length > 1 ? status.shift()! : status[0]!) : e.argv[0] === 'sh' ? branch : ''
     return { value: { exitCode: e.argv[0] === 'gh' ? 1 : 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -765,4 +790,172 @@ test('a resumed delegate shows the verdict of its newest run', async ($, on) => 
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
   expect(await ui.find({ type: 'Text', text: 'PASS' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'ISSUES' })).toBeUndefined()
+})
+
+const DAY = 86_400_000
+
+test('the todo list is kept in the store under the session, and a restart of that session gets it back', async ($, on) => {
+  mock.clock(on, { now: 10 * DAY })
+  const store: Record<string, unknown> = {}
+  quietHost(on, {}, [''], undefined, undefined, {}, { store, sessionId: 's1' })
+  on('agent.list', () => ({ value: [] }))
+  await writeTodos($, { title: 'feature', items: STEPS })
+  expect(store['todos:s1']).toEqual({ savedAt: 10 * DAY, todos: { title: 'feature', items: expect.any(Array) } })
+  expect((store['todos:s1'] as { todos: { items: unknown[] } }).todos.items).toHaveLength(4)
+})
+
+const SAVED = { savedAt: 10 * DAY - 60_000, todos: { title: 'feature', items: [{ content: 'Build in small units', status: 'in_progress', startedAt: 10 * DAY - 60_000 }] } }
+const startSession = ($: Engine) => $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+
+test('a new process of the same session restores the stored list; entries older than 7 days are pruned', async ($, on) => {
+  mock.clock(on, { now: 10 * DAY })
+  const store: Record<string, unknown> = { 'todos:s1': SAVED, 'todos:old': { ...SAVED, savedAt: 2 * DAY }, other: 1 }
+  quietHost(on, {}, [''], undefined, undefined, {}, { store, sessionId: 's1' })
+  on('agent.list', () => ({ value: [] }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await startSession($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /FEATURE · 0 of 1 done/ })).toBeDefined()
+  expect(Object.keys(store).sort()).toEqual(['other', 'todos:s1'])
+})
+
+test('another session gets no stored list', async ($, on) => {
+  mock.clock(on, { now: 10 * DAY })
+  quietHost(on, {}, [''], undefined, undefined, {}, { store: { 'todos:s1': SAVED }, sessionId: 's2' })
+  on('agent.list', () => ({ value: [] }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await startSession($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /FEATURE/ })).toBeUndefined()
+})
+
+const CONDUCTOR = '/plugins/conductor'
+const QUEUE_TOOL = `${CONDUCTOR}/skills/conductor/tools/queue.mjs`
+const QUEUE_FIXTURE = {
+  queues: [
+    {
+      name: 'tests',
+      slots: 2,
+      slotsSource: 'env',
+      holders: [
+        { slot: 0, pid: 123, cwd: '/workspace/.worktrees/q-plain', command: 'pnpm test', ageMs: 240_000, state: 'busy', cpuPct: 340, memKb: 838_861 },
+        { slot: 1, pid: 124, cwd: '/repo', command: 'pnpm test:changed', ageMs: 60_000, state: 'idle', cpuPct: 0, memKb: 314_573 },
+      ],
+      waiters: [
+        { ticket: 'w2', pid: 457, cwd: '/repo/apps/web', command: 'pnpm build', priority: 'normal', rank: 1, waitedMs: 5_000 },
+        { ticket: 'w1', pid: 456, cwd: '/workspace/.worktrees/rd-441', command: 'pnpm typecheck', priority: 'gate', rank: 0, waitedMs: 65_000 },
+      ],
+    },
+    {
+      name: 'e2e',
+      slots: 1,
+      slotsSource: 'records',
+      holders: [{ slot: 0, pid: null, cwd: null, command: null, ageMs: 900_000, state: 'orphan', cpuPct: 0, memKb: 0 }],
+      waiters: [],
+    },
+  ],
+  machine: { cores: 8, load1: 12.3, memAvailKb: 8_388_608, memTotalKb: 21_000_000 },
+}
+
+function queueHost(on: On, answers: Record<string, unknown> = {}, opts: { isInstalled?: boolean; statuses?: (string | undefined)[] } = {}) {
+  const calls: string[][] = []
+  const files: Record<string, string> = opts.isInstalled === false ? {} : { '/home/me/.claude/plugins/installed_plugins.json': installed({ 'conductor@agent-kit': CONDUCTOR }) }
+  quietHost(on, files, [''], undefined, undefined, {}, {
+    statuses: opts.statuses,
+    node: args => {
+      if (args[0] !== QUEUE_TOOL) return undefined
+      calls.push(args.slice(1))
+      const answer = args[1] === 'status' ? QUEUE_FIXTURE : answers[args[1] ?? '']
+      return { exitCode: 0, stdout: JSON.stringify(answer ?? { ok: true }) }
+    },
+  })
+  on('agent.list', () => ({ value: [] }))
+  return calls
+}
+
+test('the QUEUE section lists holders with their state and waiters in rank order, this session\'s own marked', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const statuses: (string | undefined)[] = []
+  queueHost(on, {}, { statuses })
+  await writeTodos($, { items: [{ content: 'Ship', status: 'in_progress' }] })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
+  const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
+  const at = lines.findIndex(l => l.startsWith('QUEUE'))
+  expect(lines.slice(at, at + 6)).toEqual([
+    'QUEUE · tests 2/2 · e2e 1/1 · load 12 / 8 cores · 8.0G free',
+    '● tests  q-plain pnpm test 4m00s 3.4 cores · 0.8G [stop]',
+    '● tests  repo pnpm test:changed you idle 1m00s 0.0 cores · 0.3G [stop]',
+    '● e2e  (process gone) orphan 15m00s [stop]',
+    '○ #1 tests  rd-441 pnpm typecheck waiting 1m05s [top] [↑] [↓]',
+    '○ #2 tests  web pnpm build you waiting 5s [top] [↑] [↓]',
+  ])
+  expect(await ui.find({ type: 'Text', text: 'idle' })).toMatchObject({ props: { color: 'warning' } })
+  expect(await ui.find({ type: 'Text', text: 'orphan' })).toMatchObject({ props: { color: 'warning' } })
+  expect(statuses.at(-1)).toBe('◆ 0/1 Ship · queue 3/3 +2')
+})
+
+test('stop asks first: a yes runs queue stop and says what it did, a no or a dismissal runs nothing', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const calls = queueHost(on, { stop: { ok: true, stopped: 3, killed: 1 } })
+  let answer: string | undefined = 'Keep it'
+  const asked: string[] = []
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
+    const question = (e.questions[0] as { question: string }).question
+    asked.push(question)
+    return answer === undefined ? { deny: 'dismissed' } : { result: { questions: e.questions, answers: { [question]: answer } } }
+  })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+
+  await ui.press({ key: 'queue:tests:0:stop' })
+  answer = undefined
+  await ui.press({ key: 'queue:tests:0:stop' })
+  expect(calls.filter(c => c[0] === 'stop')).toEqual([])
+  expect(asked[0]).toBe('Stop `pnpm test` in tests slot 0 (q-plain)?')
+
+  answer = 'Stop it'
+  await ui.press({ key: 'queue:tests:0:stop' })
+  expect(calls.filter(c => c[0] === 'stop')).toEqual([['stop', 'tests', '0']])
+  expect(await ui.find({ type: 'Text', text: 'stop tests slot 0: 3 processes stopped, 1 killed' })).toBeDefined()
+})
+
+test('the move buttons run queue move and say so', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const calls = queueHost(on, { move: { ok: true } })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'queue:w2:top' })
+  await ui.press({ key: 'queue:w1:down' })
+  expect(calls.filter(c => c[0] === 'move')).toEqual([
+    ['move', 'w2', 'top'],
+    ['move', 'w1', 'down'],
+  ])
+  expect(await ui.find({ type: 'Text', text: 'move pnpm typecheck down: done' })).toBeDefined()
+})
+
+test('without the conductor plugin there is no QUEUE section and no queue call', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const calls = queueHost(on, {}, { isInstalled: false })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /QUEUE/ })).toBeUndefined()
+  expect(calls).toEqual([])
+})
+
+test('under 46 columns the QUEUE section is its header and holders, with waiters counted', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  queueHost(on)
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 40 } })
+  const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
+  const at = lines.findIndex(l => l.startsWith('QUEUE'))
+  expect(lines.slice(at, at + 5)).toEqual([
+    'QUEUE · tests 2/2 · e2e 1/1 · load 12 / 8 cores · 8.0G free',
+    '● tests  q-plain pnpm test [■]',
+    '● tests  repo pnpm test:changed you idle [■]',
+    '● e2e  (process gone) orphan [■]',
+    '+2 waiting',
+  ])
+  expect(await ui.find({ key: 'queue:w1:top' })).toBeUndefined()
 })

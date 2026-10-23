@@ -1,4 +1,4 @@
-import type { AgentRow, AgentStatusWord, BranchHealth, Orphan, ShellTask, SpawnInfo, TodoItem, TodoList, Verdict } from '../types'
+import type { AgentRow, AgentStatusWord, BranchHealth, Orphan, QueueStatus, ShellTask, SpawnInfo, TodoItem, TodoList, Verdict } from '../types'
 
 export type ProcRow = { pid: number; ppid: number; pgid: number; cpu: number; rssKb: number; args: string }
 
@@ -453,6 +453,49 @@ export const modelMatches = (want: string, ran: string) => want === 'inherit' ||
 export const porcelainLines = (stdout: string) => stdout.split('\n').filter(Boolean)
 
 export const newChanges = (before: readonly string[], stdout: string) => porcelainLines(stdout).filter(l => !before.includes(l)).length
+
+// Runs `fn` unless the last call under `guard` is still running; a skipped call resolves to undefined.
+export async function exclusive<R>(guard: { isRunning: boolean }, fn: () => Promise<R>): Promise<R | undefined> {
+  if (guard.isRunning) return undefined
+  guard.isRunning = true
+  try {
+    return await fn()
+  } finally {
+    guard.isRunning = false
+  }
+}
+
+export const gb = (kb: number) => `${(kb / 1048576).toFixed(1)}G`
+
+export const cores = (pct: number) => `${(Math.max(0, pct) / 100).toFixed(1)} cores`
+
+// Where a run is: its worktree's name, else its last folder.
+export const place = (cwd: string) => /\/\.worktrees\/([^/]+)/.exec(cwd)?.[1] ?? cwd.split('/').filter(Boolean).pop() ?? cwd
+
+// Under the session's folder but not in a worktree below it, which is another session's.
+export const isOwnCwd = (cwd: string, sessionCwd: string) =>
+  cwd === sessionCwd || (cwd.startsWith(`${sessionCwd}/`) && !cwd.slice(sessionCwd.length).includes('/.worktrees/'))
+
+export function parseQueueStatus(stdout: string): QueueStatus | undefined {
+  try {
+    const status = JSON.parse(stdout) as QueueStatus
+    const isQueue = (q: QueueStatus['queues'][number]) => typeof q?.name === 'string' && Array.isArray(q.holders) && Array.isArray(q.waiters)
+    return Array.isArray(status?.queues) && status.queues.every(isQueue) && typeof status.machine?.cores === 'number' ? status : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const queueTotals = (status: QueueStatus) => ({
+  busy: status.queues.reduce((n, q) => n + q.holders.length, 0),
+  slots: status.queues.reduce((n, q) => n + q.slots, 0),
+  waiting: status.queues.reduce((n, q) => n + q.waiters.length, 0),
+})
+
+export function queueHeader(status: QueueStatus): string {
+  const m = status.machine
+  return [...status.queues.map(q => `${q.name} ${q.holders.length}/${q.slots}`), `load ${Math.round(m.load1)} / ${m.cores} cores`, `${gb(m.memAvailKb)} free`].join(' · ')
+}
 
 // BRANCH_SCRIPT's five lines: branch, trunk, commits behind trunk, changed files, origin's URL.
 export const BRANCH_SCRIPT =

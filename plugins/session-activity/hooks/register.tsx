@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentMetrics, AgentRow, Orphan, ShellTask, SpawnInfo, TodoItem, TodoStatus, Verdict } from '../types'
+import type { AgentMetrics, AgentRow, HeavyQueue, Orphan, QueueHolder, QueueWaiter, ShellTask, SpawnInfo, TodoItem, TodoList, TodoStatus, Verdict } from '../types'
 import {
   agentName,
   applyTodos,
@@ -50,6 +50,14 @@ import {
   summarizeToolUse,
   treeOf,
   usageTokens,
+  cores,
+  gb,
+  isOwnCwd,
+  exclusive,
+  parseQueueStatus,
+  place,
+  queueHeader,
+  queueTotals,
   type ProcRow,
 } from './lib'
 
@@ -76,6 +84,16 @@ const todosA = atom({ plugin: 'session-activity', key: 'todos' } as const, { ite
 const spawnsA = atom({ plugin: 'session-activity', key: 'spawns' } as const, {})
 const branchA = atom({ plugin: 'session-activity', key: 'branch' } as const, { branch: '', changed: 0 })
 const spendA = atom({ plugin: 'session-activity', key: 'spend' } as const, {})
+const queueA = atom({ plugin: 'session-activity', key: 'queue' } as const, null)
+const queueNoteA = atom({ plugin: 'session-activity', key: 'queueNote' } as const, '')
+
+// $.state lives as long as the process; a resumed session in a new process gets its todos back from here.
+const TODOS_KEY = 'todos:'
+const KEEP_TODOS_MS = 7 * 86_400_000
+// Every 3 s only while the pane shows a busy queue.
+const QUEUE_EVERY_MS = 3000
+const QUEUE_IDLE_EVERY_MS = 30_000
+const QUEUE_TIMEOUT_MS = 15_000
 
 const TODO_TOOL = 'todos'
 const TODO_TOOL_CALL = /^mcp__session-activity__todos$/
@@ -134,6 +152,7 @@ let tasksDir: string | undefined
 const ranCommands = new Map<string, string>()
 const agentCalls = new Map<string, { effort?: string; isolation?: string }>()
 let branchAt = 0
+let queueAt = 0
 let prLookup: { branch: string; at: number; pr?: number } | undefined
 
 const metricsOf = async ($: $, id: string, fn: (m: AgentMetrics) => AgentMetrics) =>
@@ -378,8 +397,107 @@ async function tick($: $) {
   }
 }
 
+async function saveTodos($: $, todos: TodoList) {
+  try {
+    await $.store.set(`${TODOS_KEY}${await $.session.id()}`, { savedAt: await $.clock.now(), todos })
+  } catch {}
+}
+
+// Prunes week-old lists, then restores this session's when the process starts with none.
+async function restoreTodos($: $) {
+  try {
+    const [id, now, keys] = await Promise.all([$.session.id(), $.clock.now(), $.store.keys()])
+    for (const key of keys.filter(k => k.startsWith(TODOS_KEY))) {
+      const saved = (await $.store.get(key)) as { savedAt?: number } | undefined
+      if (now - (saved?.savedAt ?? 0) > KEEP_TODOS_MS) await $.store.delete(key)
+    }
+    const saved = (await $.store.get(`${TODOS_KEY}${id}`)) as { todos?: TodoList } | undefined
+    if (Array.isArray(saved?.todos?.items) && (await read($, todosA)).items.length === 0) await update($, todosA, () => saved.todos!)
+  } catch {}
+}
+
+async function queueTool($: $): Promise<string | undefined> {
+  try {
+    const installed: unknown = JSON.parse(await $.fs.read(`${await configDir($)}/plugins/installed_plugins.json`))
+    const root = pluginInstallPath(installed, 'conductor', await $.session.cwd())
+    return root ? `${root}/skills/conductor/tools/queue.mjs` : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// The status call samples CPU for about a second, so two never run at once; nor do two button commands.
+const queuePoll = { isRunning: false }
+const queueButton = { isRunning: false }
+
+async function pollQueue($: $, isForced: boolean) {
+  await exclusive(queuePoll, () => pollQueueOnce($, isForced))
+}
+
+async function pollQueueOnce($: $, isForced: boolean) {
+  const now = await $.clock.now()
+  const last = await read($, queueA)
+  const isBusy = last?.queues.some(q => q.holders.length + q.waiters.length > 0) ?? false
+  const isShown = isBusy && (await $.ui.panes()).some(p => p.id === PANE && p.isShown)
+  if (!isForced && now - queueAt < (isShown ? QUEUE_EVERY_MS : QUEUE_IDLE_EVERY_MS)) return
+  queueAt = now
+  const tool = await queueTool($)
+  if (!tool) {
+    if (last) await update($, queueA, () => null)
+    return
+  }
+  const out = await $.process.run(['node', tool, 'status', '--json'], { timeoutMs: QUEUE_TIMEOUT_MS }).catch(() => undefined)
+  const status = out?.exitCode === 0 ? parseQueueStatus(out.stdout) : undefined
+  // A failed read keeps the last status rather than blinking the section away.
+  if (status) await update($, queueA, () => status)
+  await refreshStatus($)
+}
+
+async function queueAct($: $, what: string, args: string[]) {
+  await exclusive(queueButton, () => queueActOnce($, what, args))
+}
+
+// A button's queue command; its outcome is the section's note line.
+async function queueActOnce($: $, what: string, args: string[]) {
+  let note: string
+  try {
+    const tool = await queueTool($)
+    if (!tool) throw new Error('the conductor plugin is not installed')
+    const out = await $.process.run(['node', tool, ...args], { timeoutMs: QUEUE_TIMEOUT_MS })
+    if (out.exitCode !== 0) throw new Error(out.stderr.trim() || `exit ${out.exitCode}`)
+    const r = JSON.parse(out.stdout) as { ok?: boolean; stopped?: number; killed?: number; reason?: string }
+    note = !r.ok
+      ? `${what}: not done (${r.reason ?? 'unknown'})`
+      : r.stopped === undefined
+        ? `${what}: done`
+        : `${what}: ${r.stopped} processes stopped${r.killed ? `, ${r.killed} killed` : ''}`
+  } catch (err) {
+    note = `${what}: failed: ${err instanceof Error ? err.message : String(err)}`
+  }
+  await update($, queueNoteA, () => note)
+  await pollQueue($, true)
+}
+
+async function stopHolder($: $, q: HeavyQueue, h: QueueHolder) {
+  const what = `stop ${q.name} slot ${h.slot}`
+  const question = `Stop ${h.command ? `\`${h.command}\`` : 'the orphaned run'} in ${q.name} slot ${h.slot}${h.cwd ? ` (${place(h.cwd)})` : ''}?`
+  // A dismissed question rejects; that is a no.
+  const isYes = await $.ui.ask(question, ['Stop it', 'Keep it']).then(
+    answer => answer === 'Stop it',
+    () => false,
+  )
+  if (isYes) await queueAct($, what, ['stop', q.name, String(h.slot)])
+}
+
 async function refreshStatus($: $) {
-  const [agents, shells, orphans, todos, branch] = await Promise.all([read($, agentsA), read($, shellsA), read($, orphansA), read($, todosA), read($, branchA)])
+  const [agents, shells, orphans, todos, branch, queue] = await Promise.all([
+    read($, agentsA),
+    read($, shellsA),
+    read($, orphansA),
+    read($, todosA),
+    read($, branchA),
+    read($, queueA),
+  ])
   const running = shells.filter(s => s.status === 'running')
   const servers = running.filter(s => s.ports.length > 0).length
   const parts = [
@@ -392,7 +510,9 @@ async function refreshStatus($: $) {
   const done = todos.items.filter(i => i.status === 'completed' || i.status === 'skipped').length
   const now = currentItem(todos)
   const step = todos.items.length > 0 ? `◆ ${done}/${todos.items.length}${now ? ` ${todoTitle(now, contextRepo(todos.link, branch.repo))}` : ''}` : undefined
-  const line = [step, words.length > 0 ? `⚙ ${words.join(' · ')}` : undefined].filter(Boolean).join('  ')
+  const totals = queue ? queueTotals(queue) : undefined
+  const queued = totals && totals.busy + totals.waiting > 0 ? `queue ${totals.busy}/${totals.slots}${totals.waiting > 0 ? ` +${totals.waiting}` : ''}` : undefined
+  const line = [[step, words.length > 0 ? `⚙ ${words.join(' · ')}` : undefined].filter(Boolean).join('  '), queued].filter(Boolean).join(' · ')
   $.ui.status(line || undefined)
 }
 
@@ -458,7 +578,9 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    await restoreTodos($)
     $.clock.every(TICK_MS, () => void tick($))
+    $.clock.every(QUEUE_EVERY_MS, () => void pollQueue($, false))
     await $.command.register({
       name: 'activity',
       description: 'Show or hide the session activity pane; `/activity stop-all` stops every background server and orphan',
@@ -486,6 +608,7 @@ export const register: Register = (on, options) => {
     }
     isDismissed = false
     await $.ui.open({ id: PANE, title: 'Session activity' })
+    await pollQueue($, true)
     await tick($)
     return { text: 'Session activity pane opened.' }
   })
@@ -553,7 +676,7 @@ export const register: Register = (on, options) => {
     const error = todoInputError(e)
     if (error) return { result: `Not saved: ${error}`, isError: true }
     const now = await $.clock.now()
-    await update($, todosA, prev => applyTodos(prev, e as unknown as TodoInput, now))
+    await saveTodos($, await update($, todosA, prev => applyTodos(prev, e as unknown as TodoInput, now)))
     void maybeOpen($)
     await refreshBranch($, now)
     await refreshStatus($)
@@ -567,7 +690,7 @@ export const register: Register = (on, options) => {
     if (ran.deny !== undefined || ran.isError || e.agentId) return ran
     const now = await $.clock.now()
     const items = e.todos.map(t => ({ content: t.content, status: t.status }))
-    await update($, todosA, prev => applyTodos(prev, { items }, now))
+    await saveTodos($, await update($, todosA, prev => applyTodos(prev, { items }, now)))
     return ran
   }).catch(($, e, next) => next(e))
 
@@ -726,6 +849,8 @@ export const register: Register = (on, options) => {
       read($, spendA),
       $.clock.now(),
     ])
+    const [queue, queueNote] = await Promise.all([read($, queueA), read($, queueNoteA)])
+    const sessionCwd = queue ? await $.session.cwd() : ''
 
     const toggle = (key: string) => () =>
       void update($, expandedA, list => (list.includes(key) ? list.filter(k => k !== key) : [...list, key]))
@@ -922,7 +1047,59 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    const isEmpty = agents.length === 0 && shells.length === 0 && orphans.length === 0 && todos.items.length === 0
+    const isEmpty = agents.length === 0 && shells.length === 0 && orphans.length === 0 && todos.items.length === 0 && !queue
+
+    const isOwn = (pid: number | null, cwd: string | null) =>
+      (pid !== null && shells.some(s => s.pids.includes(pid))) || (cwd !== null && isOwnCwd(cwd, sessionCwd))
+    const queueRow = (key: string, glyph: string, color: string, left: string, right: (JSX.Element | false)[]) => (
+      <Box key={key} flexDirection="row" justifyContent="space-between" gap={1}>
+        <Box flexShrink={1} minWidth={0}>
+          <Text wrap="truncate-end">
+            <Text color={color}>{glyph}</Text> {left}
+          </Text>
+        </Box>
+        <Box flexDirection="row" gap={1} flexShrink={0}>
+          {right.filter((r): r is JSX.Element => r !== false)}
+        </Box>
+      </Box>
+    )
+    const where = (cwd: string | null, command: string | null) => (cwd === null && command === null ? '(process gone)' : `${cwd ? place(cwd) : '?'} ${command ?? ''}`.trim())
+    const holderRow = (q: HeavyQueue, holder: QueueHolder) => {
+      const key = `queue:${q.name}:${holder.slot}`
+      const mark = holder.state === 'idle' || holder.state === 'orphan' ? holder.state : undefined
+      return queueRow(key, holder.state === 'unknown' ? '◌' : '●', mark ? 'warning' : 'suggestion', `${q.name}  ${where(holder.cwd, holder.command)}`, [
+        isOwn(holder.pid, holder.cwd) && <Text color="suggestion">you</Text>,
+        mark !== undefined && <Text color="warning">{mark}</Text>,
+        !isNarrow && <Text dimColor>{formatDuration(holder.ageMs)}</Text>,
+        !isNarrow && holder.state !== 'orphan' && <Text dimColor>{`${cores(holder.cpuPct)} · ${gb(holder.memKb)}`}</Text>,
+        <Button key={`${key}:stop`} label={isNarrow ? '■' : 'stop'} dimColor onPress={() => void stopHolder($, q, holder)} />,
+      ])
+    }
+    const waiterRow = (q: HeavyQueue, w: QueueWaiter, i: number) => {
+      const key = `queue:${w.ticket}`
+      const move = (to: 'top' | 'up' | 'down') => () => void queueAct($, `move ${w.command ?? w.ticket} ${to === 'top' ? 'to the top' : to}`, ['move', w.ticket, to])
+      return queueRow(key, '○', 'inactive', `#${i + 1} ${q.name}  ${where(w.cwd, w.command)}`, [
+        isOwn(w.pid, w.cwd) && <Text color="suggestion">you</Text>,
+        <Text dimColor>{`waiting ${formatDuration(w.waitedMs)}`}</Text>,
+        <Button key={`${key}:top`} label="top" dimColor onPress={move('top')} />,
+        <Button key={`${key}:up`} label="↑" dimColor onPress={move('up')} />,
+        <Button key={`${key}:down`} label="↓" dimColor onPress={move('down')} />,
+      ])
+    }
+    const waiting = queue ? queueTotals(queue).waiting : 0
+    const queueSection = queue && (
+      <Box flexDirection="column" marginBottom={1}>
+        <Text wrap="truncate-end">
+          <Text bold>QUEUE</Text>
+          <Text dimColor> · {queueHeader(queue)}</Text>
+        </Text>
+        {queue.queues.flatMap(q => q.holders.map(holder => holderRow(q, holder)))}
+        {isNarrow
+          ? waiting > 0 && <Text dimColor>{`+${waiting} waiting`}</Text>
+          : queue.queues.flatMap(q => [...q.waiters].sort((a, b) => a.rank - b.rank).map((w, i) => waiterRow(q, w, i)))}
+        {queueNote && <Text dimColor wrap="truncate-end">{queueNote}</Text>}
+      </Box>
+    )
     const doneCount = todos.items.filter(i => i.status === 'completed' || i.status === 'skipped').length
     const isBad = (a: AgentRow) =>
       a.status === 'failed' || (spawns[a.id]?.changedFiles ?? 0) > 0 || ['ISSUES', 'BLOCKED', 'FAIL'].includes(spawns[a.id]?.verdict ?? '')
@@ -1075,6 +1252,8 @@ export const register: Register = (on, options) => {
             {listedFinished.map(shellRow)}
           </Box>
         )}
+
+        {queueSection}
 
         {orphans.length > 0 && (
           <Box flexDirection="column" marginBottom={1}>

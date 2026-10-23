@@ -31,6 +31,13 @@ import {
   todoInputError,
   parseVerdict,
   settleFinished,
+  gb,
+  isOwnCwd,
+  exclusive,
+  parseQueueStatus,
+  place,
+  queueHeader,
+  queueTotals,
   parseAgentDef,
   modelMatches,
   newChanges,
@@ -160,6 +167,64 @@ describe('finished runs', () => {
     ] as const
     const settled = settleFinished(list, { a: { isFinished: true }, b: { isFinished: true }, c: { isFinished: true }, d: { isFinished: false } })
     expect(settled.map(a => a.status)).toEqual(['completed', 'completed', 'failed', 'running'])
+  })
+})
+
+describe('queue', () => {
+  const STATUS = {
+    queues: [
+      { name: 'tests', slots: 2, slotsSource: 'env', holders: [{ slot: 0 }, { slot: 1 }], waiters: [{ ticket: 'a' }] },
+      { name: 'e2e', slots: 1, slotsSource: 'files', holders: [], waiters: [{ ticket: 'b' }] },
+    ],
+    machine: { cores: 8, load1: 12.3, memAvailKb: 8_388_608, memTotalKb: 21_000_000 },
+  }
+
+  test('status --json is read when it has the contract shape', () => {
+    expect(parseQueueStatus(JSON.stringify(STATUS))?.queues).toHaveLength(2)
+    expect(parseQueueStatus('{"queues": "x"}')).toBeUndefined()
+    expect(parseQueueStatus('{"queues": [], "machine": null}')).toBeUndefined()
+    expect(parseQueueStatus('not json')).toBeUndefined()
+  })
+
+  test('the header names each queue, the load against cores and free memory', () => {
+    const status = parseQueueStatus(JSON.stringify(STATUS))!
+    expect(queueHeader(status)).toBe('tests 2/2 · e2e 0/1 · load 12 / 8 cores · 8.0G free')
+    expect(queueTotals(status)).toEqual({ busy: 2, slots: 3, waiting: 2 })
+  })
+
+  test('a place is the worktree name, else the last folder', () => {
+    expect(place('/workspace/.worktrees/q-plain/apps/web')).toBe('q-plain')
+    expect(place('/repo/apps/web')).toBe('web')
+    expect(gb(838_861)).toBe('0.8G')
+  })
+
+  test("a cwd is this session's when under its cwd and not inside a worktree below it", () => {
+    expect(isOwnCwd('/workspace', '/workspace')).toBe(true)
+    expect(isOwnCwd('/workspace/apps/web', '/workspace')).toBe(true)
+    expect(isOwnCwd('/workspace/.worktrees/q-plain', '/workspace')).toBe(false)
+    expect(isOwnCwd('/workspace/.worktrees/q-plain/apps', '/workspace/.worktrees/q-plain')).toBe(true)
+    expect(isOwnCwd('/workspace2', '/workspace')).toBe(false)
+  })
+
+  test('a call made while one is running is skipped, and the next one after it runs', async () => {
+    let calls = 0
+    let release = () => {}
+    const guard = { isRunning: false }
+    const run = (n: number) =>
+      exclusive(guard, async () => {
+        calls += 1
+        await new Promise<void>(r => (release = r))
+        return n
+      })
+    const first = run(1)
+    expect(await run(2)).toBeUndefined()
+    expect(calls).toBe(1)
+    release()
+    expect(await first).toBe(1)
+    const third = run(3)
+    release()
+    expect(await third).toBe(3)
+    expect(calls).toBe(2)
   })
 })
 
