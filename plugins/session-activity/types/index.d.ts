@@ -58,7 +58,7 @@ export type Orphan = {
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'skipped'
 
-export type TodoItem = { content: string; status: TodoStatus; note?: string; startedAt?: number }
+export type TodoItem = { content: string; status: TodoStatus; note?: string; ticket?: string; startedAt?: number }
 
 export type TodoList = { title?: string; link?: string; items: TodoItem[] }
 
@@ -76,7 +76,7 @@ export type SpawnInfo = {
   changedFiles?: number
 }
 
-export type BranchHealth = { branch: string; trunk?: string; behind?: number; changed: number; pr?: number }
+export type BranchHealth = { branch: string; trunk?: string; behind?: number; changed: number; pr?: number; repo?: string }
 
 declare module 'claude-code' {
   interface PluginState {

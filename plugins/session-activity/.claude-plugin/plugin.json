@@ -1,7 +1,7 @@
 {
   "name": "session-activity",
-  "version": "0.2.0",
-  "description": "A pane of this session's todo list, subagents and background servers and scripts: verdicts and routing checks per agent, ports, CPU and memory, stop and orphan cleanup",
+  "version": "0.3.0",
+  "description": "A pane of this session's todo list (now, next and done, with each item's ticket), subagents and background servers and scripts: verdicts and routing checks per agent, ports, CPU and memory, stop and orphan cleanup",
   "types": "./types/index.d.ts",
   "userConfig": {
     "onExit": {

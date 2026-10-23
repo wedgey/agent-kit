@@ -3,10 +3,18 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentMetrics, AgentRow, Orphan, ShellTask, SpawnInfo, TodoItem, TodoStatus, Verdict } from '../types'
 import {
+  agentName,
   applyTodos,
   BRANCH_SCRIPT,
   cpuSince,
+  currentItem,
   currentTodo,
+  groupTodos,
+  pluginAgentPaths,
+  pluginInstallPath,
+  repoOf,
+  ticketOf,
+  todoTitle,
   modelMatches,
   newChanges,
   parseAgentDef,
@@ -75,7 +83,7 @@ const BRANCH_EVERY_MS = 30_000
 const PR_EVERY_MS = 300_000
 const TODO_ICON: Record<TodoStatus, { glyph: string; color: string }> = {
   completed: { glyph: '✓', color: 'success' },
-  in_progress: { glyph: '●', color: 'suggestion' },
+  in_progress: { glyph: '◐', color: 'suggestion' },
   pending: { glyph: '○', color: 'inactive' },
   skipped: { glyph: '–', color: 'inactive' },
 }
@@ -83,7 +91,8 @@ const VERDICT_COLOR: Record<Verdict, string> = { PASS: 'success', 'PASS+NOTES': 
 const TODO_DESCRIPTION = [
   'Your todo list for the current task, drawn for the user in the session-activity pane beside the chat.',
   'Use it wherever your instructions say to track steps in a todo list. Each call replaces the whole list.',
-  'Mark an item in_progress when you start it and completed as soon as it is done. Never delete a step you will not do: mark it skipped with the reason in `note`.',
+  'Mark an item in_progress when you start it and completed as soon as it is done; an item that ships a PR is done only once nothing but its merge queue is left. Never delete a step you will not do: mark it skipped with the reason in `note`.',
+  'Start an item with its ticket, as `#123 Fix the login redirect` (or `repo#9` for another repo), or pass it as `ticket`.',
   'Agents you spawn are listed under the item in progress when you spawn them.',
   '`title` heads the list (the kind of task, or the playbook it follows). `link` is the URL of the issue that holds the work state.',
 ].join(' ')
@@ -100,6 +109,7 @@ const TODO_SCHEMA = {
           content: { type: 'string' },
           status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'skipped'] },
           note: { type: 'string', description: 'Why an item is skipped, or any short note' },
+          ticket: { type: 'string', description: 'Issue or PR for this item, as #123, owner/repo#123 or a URL' },
         },
         required: ['content', 'status'],
       },
@@ -174,14 +184,47 @@ async function tailOf($: $, path: string) {
   }
 }
 
-async function agentDef($: $, type: string) {
-  if (type === 'fork' || type.includes(':') || type.includes('/')) return { isReadOnly: false }
-  const dirs = [`${await $.session.cwd()}/.claude/agents`, `${(await $.env.get('HOME')) ?? '~'}/.claude/agents`]
+type AgentDef = ReturnType<typeof parseAgentDef>
+const pluginAgentDefs = new Map<string, Promise<AgentDef>>()
+
+const configDir = async ($: $) => (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '~'}/.claude`
+
+async function agentDef($: $, type: string): Promise<AgentDef> {
+  if (type === 'fork' || type.includes('/')) return { isReadOnly: false }
+  if (type.includes(':')) {
+    if (!pluginAgentDefs.has(type)) pluginAgentDefs.set(type, pluginAgentDef($, type))
+    return pluginAgentDefs.get(type)!
+  }
+  const dirs = [`${await $.session.cwd()}/.claude/agents`, `${await configDir($)}/agents`]
   for (const dir of dirs) {
     try {
       return parseAgentDef(await $.fs.read(`${dir}/${type}.md`))
     } catch {}
   }
+  return { isReadOnly: false }
+}
+
+// `<plugin>:<name>`: the installed plugin's agent files, matched by their frontmatter `name`.
+// shortcut: a plugin loaded with --plugin-dir is not found, as no hook can list loaded plugins' folders.
+async function pluginAgentDef($: $, type: string): Promise<AgentDef> {
+  const plugin = type.slice(0, type.indexOf(':'))
+  const name = type.slice(type.lastIndexOf(':') + 1)
+  try {
+    const installed: unknown = JSON.parse(await $.fs.read(`${await configDir($)}/plugins/installed_plugins.json`))
+    const root = pluginInstallPath(installed, plugin, await $.session.cwd())
+    if (!root) return { isReadOnly: false }
+    const manifest: unknown = await $.fs.read(`${root}/.claude-plugin/plugin.json`).then(JSON.parse, () => ({}))
+    for (const entry of pluginAgentPaths(manifest)) {
+      const path = `${root}/${entry}`
+      const files = path.endsWith('.md')
+        ? [path]
+        : await $.fs.list(path).then(list => list.filter(f => f.name.endsWith('.md')).map(f => `${path}/${f.name}`), () => [])
+      for (const file of files) {
+        const text = await $.fs.read(file).catch(() => '')
+        if (agentName(text) === name) return parseAgentDef(text)
+      }
+    }
+  } catch {}
   return { isReadOnly: false }
 }
 
@@ -333,7 +376,7 @@ async function tick($: $) {
 }
 
 async function refreshStatus($: $) {
-  const [agents, shells, orphans, todos] = await Promise.all([read($, agentsA), read($, shellsA), read($, orphansA), read($, todosA)])
+  const [agents, shells, orphans, todos, branch] = await Promise.all([read($, agentsA), read($, shellsA), read($, orphansA), read($, todosA), read($, branchA)])
   const running = shells.filter(s => s.status === 'running')
   const servers = running.filter(s => s.ports.length > 0).length
   const parts = [
@@ -344,7 +387,8 @@ async function refreshStatus($: $) {
   const words = parts.filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`)
   if (orphans.length > 0) words.push(`⚠ ${orphans.length} orphan${orphans.length === 1 ? '' : 's'}`)
   const done = todos.items.filter(i => i.status === 'completed' || i.status === 'skipped').length
-  const step = todos.items.length > 0 ? `◆ ${done}/${todos.items.length}${currentTodo(todos) ? ` ${currentTodo(todos)}` : ''}` : undefined
+  const now = currentItem(todos)
+  const step = todos.items.length > 0 ? `◆ ${done}/${todos.items.length}${now ? ` ${todoTitle(now, repoOf(todos.link) ?? branch.repo)}` : ''}` : undefined
   const line = [step, words.length > 0 ? `⚙ ${words.join(' · ')}` : undefined].filter(Boolean).join('  ')
   $.ui.status(line || undefined)
 }
@@ -745,7 +789,7 @@ export const register: Register = (on, options) => {
       const isRouted = (sp.wantModel !== undefined || sp.wantEffort !== undefined) && m.model !== undefined && !isWrongModel && !isWrongEffort
       const prior = sp.escalatedFrom ? metrics[sp.escalatedFrom] : undefined
       const priorVerdict = sp.escalatedFrom ? spawns[sp.escalatedFrom]?.verdict : undefined
-      const role = a.type.startsWith('conductor-') ? `${a.type.slice('conductor-'.length)}  ` : ''
+      const role = /^conductor[:-]/.test(a.type) ? `${a.type.slice('conductor-'.length)}  ` : ''
       const isActive = isAgentActive(a.status)
       const elapsed = formatDuration((a.endedAt ?? now) - (m.startedAt ?? a.firstSeenAt))
       const key = `agent:${a.id}`
@@ -862,10 +906,13 @@ export const register: Register = (on, options) => {
 
     const isEmpty = agents.length === 0 && shells.length === 0 && orphans.length === 0 && todos.items.length === 0
     const doneCount = todos.items.filter(i => i.status === 'completed' || i.status === 'skipped').length
-    const current = currentTodo(todos)
     const isBad = (a: AgentRow) =>
       a.status === 'failed' || (spawns[a.id]?.changedFiles ?? 0) > 0 || ['ISSUES', 'BLOCKED', 'FAIL'].includes(spawns[a.id]?.verdict ?? '')
 
+    const repo = repoOf(todos.link) ?? branch.repo
+    // One column wide enough for the longest ticket keeps every item's text aligned.
+    const ticketWidth = Math.max(0, ...todos.items.map(i => ticketOf(i, repo).ticket?.label.length ?? 0))
+    const { now: nowItems, next: nextItems, done: doneItems } = groupTodos(todos.items)
     const todoRow = (item: TodoItem) => {
       const key = `todo:${item.content}`
       const under = agentsUnder(item.content)
@@ -880,9 +927,29 @@ export const register: Register = (on, options) => {
             : under.length > 0
               ? `${count} ${under.some(isBad) ? '✗' : '✓'}`
               : (item.note ?? '')
+      const { ticket, text } = ticketOf(item, repo)
       return (
         <Box key={key} flexDirection="column">
-          {titleLine(key, icon.glyph, icon.color, item.content, right ? [<Text dimColor>{right}</Text>] : [])}
+          <Box flexDirection="row" justifyContent="space-between" gap={1}>
+            <Box flexDirection="row" flexShrink={1} minWidth={0}>
+              <Text color={icon.color}>{icon.glyph} </Text>
+              {ticketWidth > 0 && (
+                <Box width={ticketWidth + 1} flexShrink={0}>
+                  {ticket && (ticket.href ? <Link href={ticket.href} label={ticket.label} /> : <Text dimColor>{ticket.label}</Text>)}
+                </Box>
+              )}
+              <Box flexShrink={1} minWidth={0}>
+                <Button key={`${key}:toggle`} plain onPress={toggle(key)}>
+                  <Text wrap="truncate-end">{text}</Text>
+                </Button>
+              </Box>
+            </Box>
+            {right && (
+              <Box flexShrink={0}>
+                <Text dimColor>{right}</Text>
+              </Box>
+            )}
+          </Box>
           {isOpen && under.length > 0 && (
             <Box flexDirection="column" paddingLeft={2}>
               {under.map(agentRow)}
@@ -903,9 +970,8 @@ export const register: Register = (on, options) => {
           branch.pr ? `PR #${branch.pr}` : 'no PR',
         ].filter(Boolean)
       : []
-    const isListOpen = !isNarrow || expanded.includes('todos')
-    const currentItem = todos.items.find(i => i.content === current)
-    const nextItem = todos.items.find(i => i.status === 'pending')
+    const isNextOpen = !isNarrow || expanded.includes('todos')
+    const isDoneOpen = expanded.includes('todos:done')
     const todoSection = todos.items.length > 0 && (
       <Box flexDirection="column" marginBottom={1}>
         <Box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -929,17 +995,20 @@ export const register: Register = (on, options) => {
           <Text color="suggestion">{'━'.repeat(filled)}</Text>
           <Text dimColor>{'━'.repeat(barWidth - filled)}</Text>
         </Text>
-        {isListOpen ? (
-          todos.items.map(todoRow)
-        ) : (
-          <Box flexDirection="column">
-            {currentItem ? todoRow(currentItem) : nextItem && <Text wrap="truncate-end"><Text dimColor>next: </Text>{nextItem.content}</Text>}
-            {currentItem && nextItem && <Text dimColor wrap="truncate-end">next: {nextItem.content}</Text>}
+        {nowItems.length > 0 && <Text bold>NOW</Text>}
+        {nowItems.map(todoRow)}
+        {nextItems.length > 0 && <Text bold>NEXT</Text>}
+        {(isNextOpen ? nextItems : nextItems.slice(0, 1)).map(todoRow)}
+        {isNarrow && nextItems.length > 1 && (
+          <Button key="todos:toggle" label={isNextOpen ? 'fewer' : `+${nextItems.length - 1} more`} dimColor onPress={toggle('todos')} />
+        )}
+        {doneItems.length > 0 && (
+          <Box flexDirection="row" gap={1}>
+            <Text bold dimColor>{`DONE · ${doneItems.length}`}</Text>
+            <Button key="todos:done" label={isDoneOpen ? 'hide' : 'show'} dimColor onPress={toggle('todos:done')} />
           </Box>
         )}
-        {isNarrow && (
-          <Button key="todos:toggle" label={isListOpen ? 'hide list' : `all ${todos.items.length} todos`} dimColor onPress={toggle('todos')} />
-        )}
+        {isDoneOpen && doneItems.map(todoRow)}
       </Box>
     )
     const spend = Object.entries(spendTotals).sort((a, b) => b[1] - a[1])

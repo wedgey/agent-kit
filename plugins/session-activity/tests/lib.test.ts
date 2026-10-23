@@ -34,6 +34,13 @@ import {
   modelMatches,
   newChanges,
   parseBranch,
+  agentName,
+  groupTodos,
+  pluginAgentPaths,
+  pluginInstallPath,
+  repoOf,
+  ticketOf,
+  todoTitle,
 } from '../hooks/lib'
 
 const PS = [
@@ -281,6 +288,88 @@ describe('todos', () => {
     expect(todoInputError({ items: [{ content: 'a', status: 'done' }] })).toMatch(/status/)
     expect(todoInputError({ items: [{ content: '', status: 'pending' }] })).toMatch(/content/)
     expect(todoInputError({ items: [{ content: 'a', status: 'skipped', note: 'n/a' }], title: 'feature' })).toBeUndefined()
+    expect(todoInputError({ items: [{ content: 'a', status: 'pending', ticket: 12 }] })).toMatch(/ticket/)
+  })
+
+  test('an item keeps its ticket across replacements', () => {
+    expect(applyTodos(undefined, { items: [{ content: 'Fix', status: 'pending', ticket: '#4' }] }, 1).items[0]).toEqual({ content: 'Fix', status: 'pending', ticket: '#4' })
+  })
+
+  test('items group into now, next and done, each in list order', () => {
+    const items = [
+      { content: 'a', status: 'completed' },
+      { content: 'b', status: 'pending' },
+      { content: 'c', status: 'in_progress' },
+      { content: 'd', status: 'skipped' },
+      { content: 'e', status: 'pending' },
+      { content: 'f', status: 'in_progress' },
+    ] as const
+    const { now, next, done } = groupTodos(items)
+    expect(now.map(i => i.content)).toEqual(['c', 'f'])
+    expect(next.map(i => i.content)).toEqual(['b', 'e'])
+    expect(done.map(i => i.content)).toEqual(['a', 'd'])
+  })
+})
+
+describe('tickets', () => {
+  const REPO = 'wedgey/contexory'
+
+  test('a repo is read from an issue link or a remote, https or ssh', () => {
+    expect(repoOf('https://github.com/wedgey/contexory/issues/550')).toBe(REPO)
+    expect(repoOf('git@github.com:wedgey/agent-kit.git')).toBe('wedgey/agent-kit')
+    expect(repoOf('https://github.com/wedgey/agent-kit.git')).toBe('wedgey/agent-kit')
+    expect(repoOf('https://gitlab.com/a/b')).toBeUndefined()
+    expect(repoOf(undefined)).toBeUndefined()
+  })
+
+  test('a bare #N leads the text and links into the repo in context', () => {
+    expect(ticketOf({ content: '#554 Rerun failed e2e once' }, REPO)).toEqual({
+      ticket: { label: '#554', href: 'https://github.com/wedgey/contexory/issues/554' },
+      text: 'Rerun failed e2e once',
+    })
+    expect(ticketOf({ content: '#554: Rerun' })).toEqual({ ticket: { label: '#554' }, text: 'Rerun' })
+  })
+
+  test('repo#N takes the owner in context; owner/repo#N names its own', () => {
+    expect(ticketOf({ content: 'agent-kit#9 Conductor as a root plugin' }, REPO)).toEqual({
+      ticket: { label: 'agent-kit#9', href: 'https://github.com/wedgey/agent-kit/issues/9' },
+      text: 'Conductor as a root plugin',
+    })
+    expect(ticketOf({ content: 'acme/tool#3 Bump' }, REPO).ticket).toEqual({ label: 'tool#3', href: 'https://github.com/acme/tool/issues/3' })
+    expect(ticketOf({ content: 'wedgey/contexory#3 Bump' }, REPO).ticket?.label).toBe('#3')
+    expect(ticketOf({ content: 'agent-kit#9 x' }).ticket).toEqual({ label: 'agent-kit#9' })
+  })
+
+  test('a GitHub issue or PR URL keeps its own address', () => {
+    expect(ticketOf({ content: 'https://github.com/wedgey/contexory/pull/12 Ship it' }, REPO)).toEqual({
+      ticket: { label: '#12', href: 'https://github.com/wedgey/contexory/pull/12' },
+      text: 'Ship it',
+    })
+    expect(ticketOf({ content: 'https://github.com/wedgey/agent-kit/issues/9#issuecomment-1 Read' }, REPO).ticket).toEqual({
+      label: 'agent-kit#9',
+      href: 'https://github.com/wedgey/agent-kit/issues/9',
+    })
+  })
+
+  test('the ticket field wins, and a matching lead in the text is not shown twice', () => {
+    expect(ticketOf({ content: 'Fix the login redirect', ticket: '#123' }, REPO)).toEqual({
+      ticket: { label: '#123', href: 'https://github.com/wedgey/contexory/issues/123' },
+      text: 'Fix the login redirect',
+    })
+    expect(ticketOf({ content: '#123 Fix', ticket: '#123' }, REPO).text).toBe('Fix')
+    expect(ticketOf({ content: '#7 Fix', ticket: '#123' }, REPO).text).toBe('#7 Fix')
+    expect(ticketOf({ content: 'Fix', ticket: 'JIRA-4' })).toEqual({ ticket: { label: 'JIRA-4' }, text: 'Fix' })
+  })
+
+  test('no ticket: the text as written, and a # inside it is no ticket', () => {
+    expect(ticketOf({ content: 'Session-activity pane: now/next split' }, REPO)).toEqual({ text: 'Session-activity pane: now/next split' })
+    expect(ticketOf({ content: 'Fix bug #12 in auth' }, REPO)).toEqual({ text: 'Fix bug #12 in auth' })
+    expect(ticketOf({ content: '#12abc tag' }, REPO)).toEqual({ text: '#12abc tag' })
+  })
+
+  test('a title is the ticket then the text', () => {
+    expect(todoTitle({ content: 'Fix', ticket: '#9' }, REPO)).toBe('#9 Fix')
+    expect(todoTitle({ content: 'Fix' }, REPO)).toBe('Fix')
   })
 })
 
@@ -315,6 +404,37 @@ describe('delegates', () => {
     expect(parseAgentDef('---\ntools:\nmodel: opus\n---\n')).toEqual({ model: 'opus', isReadOnly: false })
   })
 
+  test('an agent file is known by its frontmatter name', () => {
+    expect(agentName('---\nname: implementer\nmodel: sonnet\n---\nname: other')).toBe('implementer')
+    expect(agentName('---\r\nname: "reviewer"\r\n---\r\n')).toBe('reviewer')
+    expect(agentName('no frontmatter')).toBeUndefined()
+  })
+
+  test('a plugin is found where it is installed, the project install first', () => {
+    const installed = {
+      version: 2,
+      plugins: {
+        'conductor@agent-kit': [
+          { scope: 'user', installPath: '/c/cache/agent-kit/conductor/0.1.0' },
+          { scope: 'project', projectPath: '/repo', installPath: '/c/cache/agent-kit/conductor/0.2.0' },
+        ],
+        'conductor-x@other': [{ scope: 'user', installPath: '/c/x' }],
+      },
+    }
+    expect(pluginInstallPath(installed, 'conductor', '/repo/.worktrees/a')).toBe('/c/cache/agent-kit/conductor/0.2.0')
+    expect(pluginInstallPath(installed, 'conductor', '/elsewhere')).toBe('/c/cache/agent-kit/conductor/0.1.0')
+    expect(pluginInstallPath(installed, 'missing', '/repo')).toBeUndefined()
+    expect(pluginInstallPath({ plugins: { 'old@m': { installPath: '/c/old' } } }, 'old', '/repo')).toBe('/c/old')
+    expect(pluginInstallPath('garbage', 'conductor', '/repo')).toBeUndefined()
+  })
+
+  test("a plugin's agents are its agents/ folder plus what its manifest lists", () => {
+    expect(pluginAgentPaths({})).toEqual(['agents'])
+    expect(pluginAgentPaths({ agents: ['./skills/a/implementer.md', './more/'] })).toEqual(['agents', 'skills/a/implementer.md', 'more'])
+    expect(pluginAgentPaths({ agents: './custom' })).toEqual(['agents', 'custom'])
+    expect(pluginAgentPaths(null)).toEqual(['agents'])
+  })
+
   test('changed files are the porcelain lines a snapshot did not have', () => {
     expect(newChanges([' M a.ts'], ' M a.ts\n?? b.ts\n M c.ts\n')).toBe(2)
     expect(newChanges([], '')).toBe(0)
@@ -326,5 +446,12 @@ describe('branch health', () => {
     expect(parseBranch('feat/x\norigin/main\n3\n      2\n')).toEqual({ branch: 'feat/x', trunk: 'origin/main', behind: 3, changed: 2 })
     expect(parseBranch('feat/x\norigin/main\n\n0\n')).toEqual({ branch: 'feat/x', trunk: 'origin/main', changed: 0 })
     expect(parseBranch('')).toBeUndefined()
+    expect(parseBranch('feat/x\norigin/main\n0\n0\ngit@github.com:wedgey/agent-kit.git\n')).toEqual({
+      branch: 'feat/x',
+      trunk: 'origin/main',
+      behind: 0,
+      changed: 0,
+      repo: 'wedgey/agent-kit',
+    })
   })
 })

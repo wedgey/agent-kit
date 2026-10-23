@@ -304,19 +304,29 @@ const spawn = ($: Engine, description: string, subagentType: string, extra: { mo
 const openPane = ($: Engine) =>
   $.command.run({ command: 'activity', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
 
-function quietHost(on: On, files: Record<string, string> = {}, status: string[] = ['']) {
+function quietHost(
+  on: On,
+  files: Record<string, string> = {},
+  status: string[] = [''],
+  env: Record<string, string> = { HOME: '/home/me' },
+  branch = 'feat/x\norigin/main\n2\n1\n',
+) {
   on('ui.panes', () => ({ value: [] }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.status', () => ({ value: undefined }))
   on('session.cwd', () => ({ value: '/repo' }))
-  on('env.get', () => ({ value: '/home/me' }))
+  on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('fs.read', (_$, e) => {
     const text = files[e.path]
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
+  on('fs.list', (_$, e) => {
+    const names = Object.keys(files).filter(f => f.startsWith(`${e.path}/`) && !f.slice(e.path.length + 1).includes('/'))
+    return { value: names.map(f => ({ name: f.slice(e.path.length + 1), kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }
+  })
   on('process.run', (_$, e) => {
-    const stdout = e.argv[0] === 'git' ? (status.length > 1 ? status.shift()! : status[0]!) : e.argv[0] === 'sh' ? 'feat/x\norigin/main\n2\n1\n' : ''
+    const stdout = e.argv[0] === 'git' ? (status.length > 1 ? status.shift()! : status[0]!) : e.argv[0] === 'sh' ? branch : ''
     return { value: { exitCode: e.argv[0] === 'gh' ? 1 : 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('turn.step', async function* (_$, e) {
@@ -348,9 +358,12 @@ test('the todos tool draws the list with its title, progress, branch and skipped
     expect(await ui.find({ type: 'Link', text: '#512' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'feat/x · 2 behind main · 1 changed · no PR' })).toBeDefined()
     expect(await ui.find({ key: 'todo:Build in small units:toggle' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'skip: not asked' })).toBeDefined()
     await ui.unmount()
   }
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: 'skip: not asked' })).toBeUndefined()
+  await ui.press({ key: 'todos:done' })
+  expect(await ui.find({ type: 'Text', text: 'skip: not asked' })).toBeDefined()
 })
 
 test('the todos tool refuses a bad status, and a subagent, and keeps the list it had', async ($, on) => {
@@ -387,6 +400,7 @@ test('an agent sits under the step in progress when it was spawned, with its ver
   status = 'completed'
   await writeTodos($, { items: STEPS.map(s => (s.content === 'Build in small units' ? { ...s, status: 'completed' } : s)) })
   ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'todos:done' })
   expect(await ui.find({ type: 'Text', text: '1 agent ✓' })).toBeDefined()
   expect(await ui.find({ key: 'agent:a1:toggle' })).toBeUndefined()
   await ui.press({ key: 'todo:Build in small units:toggle' })
@@ -408,6 +422,7 @@ test('a resumed agent keeps its step and verdict and is no escalation', async ($
   await openPane($)
 
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'todos:done' })
   expect(await ui.find({ type: 'Text', text: '1 agent ✓' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /escalated/ })).toBeUndefined()
   await ui.press({ key: 'todo:Build in small units:toggle' })
@@ -463,16 +478,175 @@ test('the same brief spawned again on another model is an escalation; on the sam
   expect(await ui.find({ type: 'Text', text: /↑ escalated from Haiku 5\.5 \(BLOCKED\)/ })).toBeDefined()
 })
 
-test('under 46 columns the list folds to the current step and the next one', async ($, on) => {
+
+const QUEUE = [
+  { content: 'agent-kit#7 Ship the role agents', status: 'completed' },
+  { content: 'Conductor as a root plugin: skill, agents, queue, hooks', ticket: 'agent-kit#9', status: 'in_progress' },
+  { content: '#554 Rerun failed e2e once + flaky ledger', status: 'pending' },
+  { content: 'Session-activity pane: now/next split, per-item ticket', status: 'pending' },
+  { content: 'https://github.com/wedgey/contexory/pull/560 Queue status line', status: 'pending' },
+  { content: '#561 Watch the merge queue', status: 'pending' },
+  { content: 'Measure routing', status: 'skipped', note: 'not asked' },
+] as const
+const LINK = 'https://github.com/wedgey/contexory/issues/550'
+
+const ROOT = '/home/me/.claude/plugins/cache/agent-kit/conductor/0.1.0'
+const BINDINGS = 'skills/conductor/bindings/claude-code-agents'
+const installed = (plugins: Record<string, string>) =>
+  JSON.stringify({ version: 2, plugins: Object.fromEntries(Object.entries(plugins).map(([k, root]) => [k, [{ scope: 'user', installPath: root }]])) })
+const conductorTree = (configDir = '/home/me/.claude', root = ROOT) => ({
+  [`${configDir}/plugins/installed_plugins.json`]: installed({ 'conductor@agent-kit': root }),
+  [`${root}/.claude-plugin/plugin.json`]: JSON.stringify({ name: 'conductor', agents: [`./${BINDINGS}/implementer.md`, `./${BINDINGS}/reviewer.md`] }),
+  [`${root}/${BINDINGS}/implementer.md`]: '---\nname: implementer\nmodel: sonnet\neffort: medium\ndisallowedTools: Agent\n---\n',
+  [`${root}/${BINDINGS}/reviewer.md`]: '---\nname: reviewer\nmodel: opus\neffort: high\ndisallowedTools: Agent, Edit, Write\n---\n',
+})
+
+// The test runtime has a console; the engine's types leave it out with the DOM.
+declare const console: { log: (...data: unknown[]) => void }
+
+// The drawing as plain text: a row Box joins its children, a column Box stacks them, a Box width pads.
+function textOf(node: unknown): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  const el = node as { type?: string; props?: Record<string, unknown>; children?: unknown[] } | null
+  if (!el?.type) return ''
+  const props = el.props ?? {}
+  if (el.type === 'Link') return String(props.label ?? '')
+  if (el.type === 'Button' && props.label !== undefined) return props.plain ? String(props.label) : `[${String(props.label)}]`
+  const parts = (el.children ?? []).map(textOf).filter(p => p !== '')
+  if (el.type !== 'Box') return parts.join('')
+  const out = props.flexDirection === 'row' ? parts.join(props.gap ? ' ' : '') : parts.join('\n')
+  return typeof props.width === 'number' ? out.padEnd(props.width) : out
+}
+
+test('todos draw as NOW, NEXT and a folded DONE, each item behind an aligned ticket column', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on, conductorTree(), [''], { HOME: '/home/me' }, 'feat/conductor-queue\norigin/main\n0\n3\ngit@github.com:wedgey/contexory.git\n')
+  on('agent.list', () => ({ value: [{ id: 'r1', type: 'conductor:reviewer', description: 'Review the queue', status: 'running' }] }))
+  on('agent.spawn', () => ({ model: 'opus', agentId: 'r1' }))
+
+  await writeTodos($, { title: 'conductor queue plugin', link: LINK, items: QUEUE })
+  await spawn($, 'Review the queue', 'conductor:reviewer')
+  await runTurn($, 'r1', 'claude-opus-5-5', 'high')
+  await openPane($)
+
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
+  const drawn = textOf(await ui.find({ type: 'Box' }))
+  console.log(`\n${drawn}\n`)
+  const lines = drawn.split('\n')
+  const at = (pattern: RegExp) => lines.findIndex(l => pattern.test(l))
+  expect(at(/^NOW$/)).toBeLessThan(at(/Conductor as a root plugin/))
+  expect(at(/Conductor as a root plugin/)).toBeLessThan(at(/reviewer {2}Review the queue/))
+  expect(at(/reviewer {2}Review the queue/)).toBeLessThan(at(/^NEXT$/))
+  expect(lines.slice(at(/^NEXT$/) + 1, at(/^DONE/))).toEqual([
+    '○ #554        Rerun failed e2e once + flaky ledger',
+    '○             Session-activity pane: now/next split, per-item ticket',
+    '○ #560        Queue status line',
+    '○ #561        Watch the merge queue',
+  ])
+  expect(lines[at(/^DONE/)]).toBe('DONE · 2 [show]')
+  expect(await ui.find({ key: 'todo:Measure routing:toggle' })).toBeUndefined()
+
+  expect(await ui.find({ type: 'Link', text: 'agent-kit#9' })).toMatchObject({ props: { href: 'https://github.com/wedgey/agent-kit/issues/9' } })
+  expect(await ui.find({ type: 'Link', text: '#554' })).toMatchObject({ props: { href: 'https://github.com/wedgey/contexory/issues/554' } })
+  expect(await ui.find({ type: 'Link', text: '#560' })).toMatchObject({ props: { href: 'https://github.com/wedgey/contexory/pull/560' } })
+  expect((await ui.find({ key: 'todo:#554 Rerun failed e2e once + flaky ledger:toggle' }))?.text).toBe('Rerun failed e2e once + flaky ledger')
+  expect(await ui.find({ type: 'Text', text: /Opus 5\.5 · high ✓/ })).toBeDefined()
+
+  await ui.press({ key: 'todos:done' })
+  expect(await ui.find({ key: 'todos:done', text: 'hide' })).toBeDefined()
+  expect((await ui.find({ key: 'todo:agent-kit#7 Ship the role agents:toggle' }))?.text).toBe('Ship the role agents')
+  expect(await ui.find({ type: 'Text', text: 'skip: not asked' })).toBeDefined()
+  await ui.press({ key: 'todos:done' })
+  expect(await ui.find({ key: 'todo:Measure routing:toggle' })).toBeUndefined()
+})
+
+test('the status line leads with the NOW item and its ticket', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const statuses: (string | undefined)[] = []
+  on('ui.status', (_$, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.panes', () => ({ value: [] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  await writeTodos($, { link: LINK, items: QUEUE })
+  expect(statuses.at(-1)).toBe('◆ 2/7 agent-kit#9 Conductor as a root plugin: skill, agents, queue, hooks')
+})
+
+test('under 46 columns the NOW items and the first NEXT item stay; the rest fold behind buttons', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   quietHost(on)
   on('agent.list', () => ({ value: [] }))
-  await writeTodos($, { items: STEPS })
+  await writeTodos($, { link: LINK, items: QUEUE })
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 40 } })
-  expect(await ui.find({ key: 'todo:Build in small units:toggle' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /next: Open the PR/ })).toBeDefined()
+  expect(await ui.find({ key: 'todo:Conductor as a root plugin: skill, agents, queue, hooks:toggle' })).toBeDefined()
+  expect(await ui.find({ key: 'todo:#554 Rerun failed e2e once + flaky ledger:toggle' })).toBeDefined()
+  expect(await ui.find({ key: 'todo:#561 Watch the merge queue:toggle' })).toBeUndefined()
   expect(await ui.find({ key: 'todo:Map the subsystem:toggle' })).toBeUndefined()
+  expect(await ui.find({ key: 'todos:toggle', text: '+3 more' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'DONE · 2' })).toBeDefined()
+
   await ui.press({ key: 'todos:toggle' })
-  expect(await ui.find({ key: 'todo:Map the subsystem:toggle' })).toBeDefined()
+  expect(await ui.find({ key: 'todo:#561 Watch the merge queue:toggle' })).toBeDefined()
+  expect(await ui.find({ key: 'todo:Measure routing:toggle' })).toBeUndefined()
+  await ui.press({ key: 'todos:done' })
+  expect(await ui.find({ key: 'todo:Measure routing:toggle' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'skip' })).toBeDefined()
+})
+
+test('a plugin agent listed in its manifest gets the routing check and the read-only guard', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on, conductorTree(), [' M a.ts\n', ' M a.ts\n?? b.ts\n'])
+  on('agent.list', () => ({ value: [{ id: 'r1', type: 'conductor:reviewer', description: 'Review unit 1', status: 'completed' }] }))
+  on('agent.spawn', () => ({ model: 'sonnet', agentId: 'r1' }))
+
+  await spawn($, 'Review unit 1', 'conductor:reviewer')
+  await runTurn($, 'r1', 'claude-sonnet-5-5', 'medium', 'STATUS PASS')
+  await openPane($)
+
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect((await ui.find({ key: 'agent:r1:toggle' }))?.text).toMatch(/^⚠ reviewer {2}Review unit 1/)
+  expect(await ui.find({ type: 'Text', text: /⚠ ran Sonnet 5\.5 medium; its definition asks for opus high/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /⚠ 1 file changed in the tree while this read-only agent ran/ })).toBeDefined()
+})
+
+async function routedRow(on: On, $: Engine, type: string, files: Record<string, string>, env?: Record<string, string>) {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on, files, [''], env)
+  on('agent.list', () => ({ value: [{ id: 'p1', type, description: 'Run it', status: 'completed' }] }))
+  on('agent.spawn', () => ({ model: 'haiku', agentId: 'p1' }))
+  await spawn($, 'Run it', type)
+  await runTurn($, 'p1', 'claude-haiku-5-5', 'low', 'STATUS PASS')
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  return (await ui.find({ type: 'Text', text: /^\s*Haiku 5\.5 · low/ }))?.text ?? ''
+}
+
+const RUNNER = '---\nname: runner\nmodel: haiku\neffort: low\n---\n'
+
+test("a plugin agent in the default agents/ folder is found by its frontmatter name, not its file name", async ($, on) => {
+  const files = {
+    '/home/me/.claude/plugins/installed_plugins.json': installed({ 'lab@kit': '/plugins/lab' }),
+    '/plugins/lab/.claude-plugin/plugin.json': '{ "name": "lab" }',
+    '/plugins/lab/agents/other.md': '---\nname: other\nmodel: opus\n---\n',
+    '/plugins/lab/agents/run-things.md': RUNNER,
+  }
+  expect(await routedRow(on, $, 'lab:runner', files)).toMatch(/low ✓/)
+})
+
+test('an agent of a plugin that is not installed gets no routing check and no warning', async ($, on) => {
+  const row = await routedRow(on, $, 'ghost:runner', { '/home/me/.claude/plugins/installed_plugins.json': installed({ 'lab@kit': '/plugins/lab' }) })
+  expect(row).toMatch(/Haiku 5\.5 · low ·/)
+  expect(row).not.toMatch(/✓/)
+})
+
+test('CLAUDE_CONFIG_DIR moves where installed plugins are read from', async ($, on) => {
+  const files = {
+    '/home/me/.claude/plugins/installed_plugins.json': installed({ 'lab@kit': '/decoy' }),
+    '/decoy/agents/runner.md': '---\nname: runner\nmodel: opus\neffort: high\n---\n',
+    '/cfg/plugins/installed_plugins.json': installed({ 'lab@kit': '/plugins/lab' }),
+    '/plugins/lab/agents/runner.md': RUNNER,
+  }
+  expect(await routedRow(on, $, 'lab:runner', files, { HOME: '/home/me', CLAUDE_CONFIG_DIR: '/cfg' })).toMatch(/low ✓/)
 })
