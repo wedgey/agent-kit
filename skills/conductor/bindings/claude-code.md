@@ -29,8 +29,7 @@ Claude Code has one model family. Spawn reviewers and verifiers fresh at their o
 
 ## The queue on Bash
 
-The plugin's mod rewrites a heavy `Bash` command in place into `node <plugin>/skills/conductor/tools/queue.mjs run --queue=<q> -- bash -c '<command>'` before it runs, so type heavy commands plainly and pass `run_in_background: true`. The rewrite still goes through the permission rules, as the queued command. A foreground heavy command on a full queue is denied with the holders named: rerun it with `run_in_background: true`. A duplicate of a run already queued or running from the same folder is denied with that run's age and place: wait for its notice.
-| isolate | `Agent` with `isolation: "worktree"` | Tell the delegate to `git worktree add` its own path and stay inside it |
+The plugin's mod queues a heavy `Bash` command as `node <plugin>/skills/conductor/tools/queue.mjs run --queue=<q> -- bash -c '<command>'`. When the session's permission check allows that queued form outright (`bypassPermissions`, or a rule that allows it), it rewrites the command in place, so type heavy commands plainly and pass `run_in_background: true`. In any other mode it denies the call and names the queued form: run exactly that, with `run_in_background: true`. Permission rules match the text that runs, so the person approves the real queued command, never one rewritten behind their back. In every mode, a foreground heavy command on a full queue is denied with the holders named, so rerun it with `run_in_background: true`. A duplicate of a run already queued or running from the same folder is denied with that run's age and place, so wait for its notice.
 
 ## Repo instruction files
 

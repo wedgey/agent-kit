@@ -4,7 +4,7 @@
 
 **Why:** Every repo and lane on the box shares its cores and memory. A heavy check that skips the queue slows everyone, and a lane parked on a full queue does nothing.
 
-- Run heavy checks as you would by hand and **background** them. The harness's package queues a heavy command in place: it runs as `node <queue> run --queue=<tests|e2e> -- bash -c '<command>'`, where `<queue>` is `tools/queue.mjs` in this skill's folder. Use the repo's own wrapper if it has one.
+- Run heavy checks through the box queue, as `node <queue> run --queue=<tests|e2e> -- bash -c '<command>'`, where `<queue>` is `tools/queue.mjs` in this skill's folder, and **background** them. Use the repo's own wrapper if it has one. Where the session approves commands without asking, the harness's package queues a heavy command in place. Elsewhere it refuses an unqueued one and names the queued form to run.
 - Wait for the completion notice. Never sleep-poll.
 - A foreground heavy command on a full queue is refused, with the holders named. Rerun it in the background.
 - A second run of the same command from the same folder is refused while the first runs or waits. Wait for the first one's notice instead.
