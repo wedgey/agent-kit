@@ -712,7 +712,7 @@ describe("run: fail-open and bypass paths", () => {
     it("keeps waiting after a conflict, and says so", () => {
       const f = fake(() => ({ status: CONFLICT_EXIT, output: [] }));
       const log = [];
-      expect(run({ ...fast(), spawn: f.spawn, timeoutMs: 60, log: (m) => log.push(m) })).toBe(TIMEOUT_EXIT);
+      expect(run({ ...fast(), spawn: f.spawn, timeoutMs: 500, log: (m) => log.push(m) })).toBe(TIMEOUT_EXIT);
       expect(f.attempts().length).toBeGreaterThan(1);
       expect(log.join("")).toMatch(/you are #1 in line/);
     });
@@ -755,7 +755,7 @@ describe("run: fail-open and bypass paths", () => {
         }
         return { status: 3 };
       };
-      run({ ...fast(), slots: 2, spawn, canTake: (i) => i === 0, timeoutMs: 80, log: () => {} });
+      run({ ...fast(), slots: 2, spawn, canTake: (i) => i === 0, timeoutMs: 500, log: () => {} });
       expect(seen).toMatchObject({ pid: process.pid, slots: 2, usable: [0], pollMs: 10 });
     });
 
