@@ -49,6 +49,7 @@ The todo list is how the operator follows the work without reading the transcrip
 - **Never silently drop a step.** A step that stops applying is marked skipped with its reason. New work found on the way becomes a new todo in the order it will run.
 - **Link the work state.** When the repo declares a tracker, give the list a link to the issue that holds the work state.
 - **Name the ticket.** When an item's work has its own issue or PR, start the item's text with its number, as in `#123 Fix the login redirect`. The operator can then tell from the list alone what is being worked on now and what comes next.
+- **Done means only the merge is left.** A top-level item whose work ends in a PR is done only when all that remains is waiting or watching for the merge queue, such as Mergify, to merge it. Open review threads, failing checks or unfinished verification keep it in progress.
 
 ## Playbooks
 
