@@ -96,6 +96,24 @@ _Avoid_: Tier agent, custom agent, subagent type
 The check that spawns each role agent in a harness and confirms the model and effort that actually ran, so a silent fallback is caught.
 _Avoid_: Health check, smoke test
 
+## Queue
+
+**Queue**:
+A named, box-wide line that lets only a few heavy commands run at once, shared by every repo on the machine.
+_Avoid_: Lock, semaphore, scheduler
+
+**Slot**:
+One place a queue can run a command. A queue has as many slots as its size.
+_Avoid_: Lane, worker, permit
+
+**Holder**:
+The command that currently occupies a slot.
+_Avoid_: Owner, runner
+
+**Waiter**:
+A command in a queue that has asked for a slot and has not got one yet.
+_Avoid_: Pending job, blocked task
+
 ## Quality
 
 **Gate**:

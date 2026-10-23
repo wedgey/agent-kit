@@ -36,6 +36,8 @@ Playbooks use these. The binding says how each one works in your harness.
 - **track** the work in the todo list the operator watches.
 - **show** a visual: a diagram, a mockup, a screenshot.
 - **isolate** a delegate's writes in their own worktree or sandbox.
+- **background** a command so the turn is free, then wait for its completion notice.
+- **watch** for a condition without polling.
 
 ## The todo list
 
@@ -120,6 +122,7 @@ Read the file before you apply a principle. Files are `principles/<name>.md`.
 - **test-behaviour-not-implementation**: writing or keeping a test.
 - **sequence-verifiable-units**: multi-step work. Small units, each ending in a check.
 - **explain-the-number**: before trusting or reporting a measurement.
+- **queue-heavy-checks**: running tests, builds, typechecks or e2e, or spawning delegates that do.
 - **guard-the-context-window**: large reads, long outputs, fan-out.
 - **never-block-on-the-operator**: tempted to ask about reversible work.
 - **separate-before-sharing**: parallel delegates might write the same thing.

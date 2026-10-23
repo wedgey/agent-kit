@@ -8,6 +8,16 @@ Read only during `/conductor setup`.
 - In headless `-p` mode, setup needs permission to read the skill folder and write the files above. Without it, setup stops and writes nothing.
 - The skill is discoverable from any repo when `SKILL.md` exists at `~/.claude/skills/conductor/` or `~/.agents/skills/conductor/`.
 - Install every file in `claude-code-agents/` to `~/.claude/agents/`. A file that already matches stays. A file that differs is replaced. Leave every other file in that folder alone. New agents usually load into the running session within seconds, even when the folder was just created. Observed on v2.1.308, 2026-10-22.
+- Install the PreToolUse hook into `~/.claude/settings.json`, created as `{}` if missing. It points at the installed skill, so use `~/.agents/skills/conductor/` in the path when that is where the skill lives. Edit only `hooks.PreToolUse`.
+  - An entry whose command ends in `conductor/tools/hooks/pretooluse.mjs` is conductor's. An identical one stays, a different one is replaced, and several are collapsed to one.
+  - Leave every other entry and key alone. Append the entry if none is conductor's.
+  - Show the diff in the reply.
+
+```json
+{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "node \"$HOME/.claude/skills/conductor/tools/hooks/pretooluse.mjs\"", "timeout": 5 }] }
+```
+
+A repo that runs its own queue sets `CONDUCTOR_QUEUE_MANAGED=1` in its project settings `env`. The hook then only denies wait loops. `CONDUCTOR_HOOKS=off` bypasses it.
 
 ## Doctor
 
@@ -33,3 +43,5 @@ Output this table.
 
 | Role agent | Tier | Requested | Ran | Effort | Match | Advisor calls |
 |---|---|---|---|---|---|---|
+
+Then check the hook. Pipe `{"tool_name":"Bash","tool_input":{"command":"until grep -q x f; do sleep 20; done"}}` to `node <installed skill>/tools/hooks/pretooluse.mjs`. It must print JSON with `"permissionDecision":"deny"`. Add a `Hook` row to the table with that result.

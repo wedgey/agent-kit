@@ -1,0 +1,11 @@
+{
+  "name": "agent-kit",
+  "private": true,
+  "scripts": {
+    "test": "vitest run skills/conductor/tools",
+    "check": "tools/check-conductor.sh"
+  },
+  "devDependencies": {
+    "vitest": "4.1.4"
+  }
+}
