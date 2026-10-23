@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { codeOnly, commandSegments, segments, shellBodies } from "../../skills/conductor/tools/hooks/shell.mjs";
+import { codeOnly, commandSegments, segments, shellBodies, shellWords } from "../../skills/conductor/tools/hooks/shell.mjs";
 
 describe("segments", () => {
   it("ignores operators inside quotes and after escapes", () => {
@@ -43,5 +43,21 @@ describe("shellBodies", () => {
   it("returns the quoted body of sh -c, bash -lc and zsh -c", () => {
     expect(shellBodies(`timeout 5 bash -c 'a b' && sh -lc "c \\" d" && zsh -c 'e'`)).toEqual(["a b", 'c " d', "e"]);
     expect(shellBodies("echo bash -c")).toEqual([]);
+  });
+});
+
+describe("shellWords", () => {
+  it("reads quotes, escapes and adjacent pieces as the shell does", () => {
+    expect(shellWords(String.raw`a 'b c' "d \"e\" \$f" g\ h 'i'\''j' 'k'"l" --'' "--"`)).toEqual(["a", "b c", 'd "e" $f', "g h", "i'j", "kl", "--", "--"]);
+  });
+
+  it("splits on tabs and joins a backslash-newline", () => {
+    expect(shellWords("a\tb \\\nc 'd\ne'")).toEqual(["a", "b", "c", "d\ne"]);
+  });
+
+  it("refuses anything that is more than plain words", () => {
+    for (const text of ["a; b", "a && b", "a | b", "a > f", "a <<EOF", "a\nb", "$(x)", "`x`", 'a "$x"', "a $x", "a *", "a # c", "(a)", "a {b,c}", "'open"]) {
+      expect(shellWords(text)).toBe(null);
+    }
   });
 });

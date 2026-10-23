@@ -5,7 +5,7 @@
  */
 
 import { bypassed } from "./hook-io.mjs";
-import { commandSegments, shellBodies } from "./shell.mjs";
+import { commandSegments, shellBodies, shellWords } from "./shell.mjs";
 import { waitLoopReason } from "./wait-loop.mjs";
 
 export const BYPASS_ENV = "CONDUCTOR_HOOKS";
@@ -243,15 +243,49 @@ export function dupeKey(command) {
   return [...segments.slice(0, heavy.index).map(normalized), head].join(" && ");
 }
 
-/** What each `queue.mjs run` segment runs: its `sh -c` body, or the words after `--`. */
+// Quotes and backslashes are dropped first, so `r''un` or `"queue.mjs"` cannot hide a typed form.
+const TYPED = /\bnode\b[\s\S]*queue\.mjs\s+run\b/;
+const HEREDOC = /^([^\n]*?)<<-?[ \t]*(['"]?)(\w+)\2[ \t]*\n([\s\S]*?)\n[ \t]*\3[ \t]*$/;
+const PLAIN_WORD = /^[\w@%+=:,./-]+$/;
+
+/** The argv after a `queue.mjs run ... --`, or null when the text is not exactly that one call. */
+function queuedArgv(text) {
+  const words = shellWords(text);
+  const sep = words?.indexOf("--") ?? -1;
+  return words && words[0] === "node" && QUEUE_TOKEN.test(words[1] ?? "") && words[2] === "run" && sep > 2 ? words.slice(sep + 1) : null;
+}
+
+/**
+ * What a typed `node .../queue.mjs run` form runs, read as the shell reads it: null when the
+ * command has none, `{ body }` when it is one plain call, else `{ error, plain? }`, `plain` being
+ * the command to type instead when it can be recovered.
+ */
+export function typedQueued(command) {
+  if (!TYPED.test(command.replace(/\\\n/g, "").replace(/['"\\]/g, ""))) return null;
+  const heredoc = HEREDOC.exec(command);
+  if (heredoc) {
+    const argv = queuedArgv(heredoc[1]);
+    return { error: "it feeds a script on stdin", ...(argv?.length === 1 && SHELL.test(argv[0]) ? { plain: heredoc[4] } : {}) };
+  }
+  const argv = queuedArgv(command);
+  if (!argv?.length) return { error: "it is not one plain queue.mjs run call with -- before the command" };
+  let body = argv.map((w) => (PLAIN_WORD.test(w) ? w : shellQuote(w))).join(" ");
+  if (SHELL.test(argv[0].slice(argv[0].lastIndexOf("/") + 1))) {
+    const script = argv.at(-1);
+    if (argv.length !== 3 || argv[1] !== "-c") {
+      const flagged = argv.length > 2 && argv.slice(1, -1).every((f) => /^-[a-z]*$/.test(f)) && argv.slice(1, -1).some((f) => f.includes("c"));
+      return { error: `${argv[0]} does not run exactly one -c script`, ...(flagged ? { plain: script } : {}) };
+    }
+    body = script;
+  }
+  if (TYPED.test(body.replace(/['"\\]/g, ""))) return { error: "it runs another queue.mjs run inside" };
+  return { body };
+}
+
+/** The body a typed queued form runs: [] for none, null when it cannot be read and must be denied. */
 export function queuedBodies(command) {
-  return commandSegments(command)
-    .filter((s) => classifyQueued(s) && s.includes(" -- "))
-    .flatMap((s) => {
-      const rest = s.slice(s.indexOf(" -- ") + 4).trim();
-      const bodies = bodiesOf(rest);
-      return bodies.length ? bodies : [rest];
-    });
+  const typed = typedQueued(command);
+  return typed === null ? [] : typed.body === undefined ? null : [typed.body];
 }
 
 export const shellQuote = (text) => `'${text.replaceAll("'", `'\\''`)}'`;

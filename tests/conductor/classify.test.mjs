@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import { each, expect } from "./expect.mjs";
 
-import { commandHead, dupeKey, findUnqueuedHeavy, heavyQueue, queuedBodies, triage } from "../../skills/conductor/tools/hooks/classify.mjs";
+import { commandHead, dupeKey, findUnqueuedHeavy, heavyQueue, queuedBodies, queuedForm, triage, typedQueued } from "../../skills/conductor/tools/hooks/classify.mjs";
 
 const queueOf = (command) => heavyQueue(commandHead(command));
 
@@ -237,8 +237,39 @@ describe("the body a typed queued form runs", () => {
     ["node /s/queue.mjs run --queue=tests -- bash -c 'touch /tmp/x && vitest'", ["touch /tmp/x && vitest"]],
     ['node /s/queue.mjs run -- sh -c "pnpm test"', ["pnpm test"]],
     ["node /s/queue.mjs run --queue=e2e -- playwright test", ["playwright test"]],
-    ["cd a && node /s/queue.mjs run -- x y", ["x y"]],
+    ["node /s/queue.mjs run -- x 'y z'", ["x 'y z'"]],
+    ["node /s/queue.mjs run --queue=tests -- bash -c 'echo it'\\''s; touch /tmp/x'", ["echo it's; touch /tmp/x"]],
+    ["node /s/queue.mjs run --queue=tests -- bash -c 'vitest'\"; touch /tmp/x\"", ["vitest; touch /tmp/x"]],
+    ["node /s/queue.mjs run --queue=tests --\tbash -c 'touch /tmp/x'", ["touch /tmp/x"]],
+    ["node /s/queue.mjs run --queue=tests \"--\" bash -c 'touch /tmp/x'", ["touch /tmp/x"]],
+    ["node /s/queue.mjs run --queue=tests --'' bash -c 'touch /tmp/x'", ["touch /tmp/x"]],
     ["pytest", []],
-    ["node /s/queue.mjs run --queue=tests", []],
+    ["grep -n queue.mjs file", []],
   ])("%s runs %j", (command, bodies) => expect(queuedBodies(command)).toEqual(bodies));
+
+  each([
+    "cd a && node /s/queue.mjs run -- x y",
+    "node /s/queue.mjs run -- a && node /s/queue.mjs run -- b",
+    "node /s/queue.mjs run -- vitest; touch /tmp/x",
+    "node /s/queue.mjs run -- bash <<'EOF'\ntouch /tmp/x\nEOF",
+    "node /s/queue.mjs run -- bash -s < script.sh",
+    "node /s/queue.mjs run -- bash script.sh",
+    "node /s/queue.mjs run -- /bin/sh -c 'a' b",
+    "node /s/queue.mjs run -- bash -c 'echo $0' 'touch /tmp/x'",
+    "node /s/queue.mjs run -- bash -c \"$(touch /tmp/x)\"",
+    "node /s/queue.mjs run -- bash -c 'node /s/queue.mjs run -- touch /tmp/x'",
+    "node /s/queue.mjs run --queue=tests",
+    "X=1 node /s/queue.mjs run -- vitest",
+    "node /s/queue.mjs r''un -- vitest; touch /tmp/x",
+  ])("denies %j, whose body cannot be checked", (command) => expect(queuedBodies(command)).toBeNull());
+
+  it("names the plain command a heredoc or a flagged shell runs, when it can", () => {
+    expect(typedQueued("node /s/queue.mjs run -- bash <<'EOF'\npnpm test\nEOF")).toMatchObject({ plain: "pnpm test" });
+    expect(typedQueued("node /s/queue.mjs run -- bash -lc 'pnpm test'")).toMatchObject({ plain: "pnpm test" });
+    expect(typedQueued("node /s/queue.mjs run -- a; b").plain).toBeUndefined();
+  });
+
+  each(["it's", 'say "hi"', "a; b", "echo $(date) `id`", "a\nb", "a\\'b"])("round-trips %j through its queued form", (command) =>
+    expect(queuedBodies(queuedForm(command, "tests", "/p/queue.mjs"))).toEqual([command]),
+  );
 });

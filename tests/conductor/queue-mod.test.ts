@@ -110,6 +110,67 @@ describe('the Bash gate', () => {
     expect(w.helper).toHaveLength(1)
   })
 
+  for (const [name, verdict] of [
+    ['has no permission check', 'missing'],
+    ['throws on the body', (c: string): Verdict => (c === 'vitest' ? 'missing' : 'allow')],
+  ] as const) {
+    test(`denies a typed queued form when the engine ${name}`, async ($, on) => {
+      const w = harness(on, () => '', {}, verdict)
+      const r = await bash($, "node /p/skills/conductor/tools/queue.mjs run --queue=tests -- bash -c 'vitest'", true)
+      expect(r.deny).toMatch(/vitest; the queue wraps/)
+      expect(w.ran).toEqual([])
+    })
+  }
+
+  const CURL = "node /p/skills/conductor/tools/queue.mjs run --queue=tests -- bash -c 'curl x'"
+
+  test('denies a typed queued form whose body would ask while the form itself is allowed', async ($, on) => {
+    const w = harness(on, () => '', {}, (c) => (c === 'curl x' ? 'ask' : 'allow'))
+    const r = await bash($, CURL, true)
+    expect(r.deny).toMatch(/curl x/)
+    expect(w.ran).toEqual([])
+  })
+
+  test('leaves a typed queued form whose body would ask to the prompt on the form itself', async ($, on) => {
+    const w = harness(on, () => '', {}, 'ask')
+    await bash($, CURL, true)
+    expect(w.ran).toEqual([CURL])
+  })
+
+  const touchDenied = (c: string): Verdict => (/(^|; )(\w+=\S+ )*touch/.test(c) ? 'deny' : 'allow')
+
+  for (const env of [{}, { CONDUCTOR_HOOKS: 'off' }, { CI: '1' }]) {
+    test(`checks a body holding CONDUCTOR_HOOKS=off with ${JSON.stringify(env)} in the environment`, async ($, on) => {
+      const w = harness(on, () => '', env, touchDenied)
+      const r = await bash($, "node /p/skills/conductor/tools/queue.mjs run --queue=tests -- bash -c 'CONDUCTOR_HOOKS=off touch /tmp/x'", true)
+      expect(r.deny).toMatch(/Bash\(touch:\*\)/)
+      expect(w.ran).toEqual([])
+    })
+  }
+
+  for (const typed of [
+    "node /p/skills/conductor/tools/queue.mjs run --queue=tests -- bash -c 'echo it'\\''s; touch /tmp/x'",
+    "node /p/skills/conductor/tools/queue.mjs run --queue=tests -- bash -c 'vitest'\"; touch /tmp/x\"",
+    "node /p/skills/conductor/tools/queue.mjs run --queue=tests --\tbash -c 'touch /tmp/x'",
+    "node /p/skills/conductor/tools/queue.mjs run --queue=tests \"--\" bash -c 'touch /tmp/x'",
+  ]) {
+    test(`reads the whole body of ${JSON.stringify(typed)} and denies it by its rule`, async ($, on) => {
+      const w = harness(on, () => '', {}, touchDenied)
+      const r = await bash($, typed, true)
+      expect(r.deny).toMatch(/Bash\(touch:\*\)/)
+      expect(w.ran).toEqual([])
+    })
+  }
+
+  test('denies a heredoc under the queue, naming the plain command to type', async ($, on) => {
+    const w = harness(on, () => '')
+    const r = await bash($, "node /p/skills/conductor/tools/queue.mjs run --queue=tests -- bash <<'EOF'\ntouch /tmp/x\nEOF", true)
+    expect(r.deny).toMatch(/touch \/tmp\/x/)
+    expect(r.deny).toMatch(/queue wraps/)
+    expect(w.ran).toEqual([])
+    expect(w.helper).toEqual([])
+  })
+
   test('passes everything when bypassed, wait loops included', async ($, on) => {
     const w = harness(on, () => '', { CONDUCTOR_HOOKS: 'off' })
     await bash($, 'pytest')

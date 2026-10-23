@@ -111,3 +111,48 @@ export function shellBodies(command) {
 
 /** `segments` over the command with heredoc bodies removed, so a body is never a command. */
 export const commandSegments = (command) => segments(withoutHeredocs(command));
+
+const OPERATOR = new Set([";", "&", "|", "<", ">", "(", ")", "\n", "`", "$", "*", "?", "[", "{"]);
+const DQ_ESCAPES = new Set(["$", "`", '"', "\\"]);
+
+/**
+ * The words the shell would pass as argv, with quotes, escapes and adjacent pieces joined, or null
+ * when the text holds anything more than plain words: an operator, redirect, heredoc, expansion,
+ * glob, comment or open quote.
+ */
+export function shellWords(text) {
+  const words = [];
+  let word = null;
+  const add = (s) => {
+    word = (word ?? "") + s;
+  };
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === " " || ch === "\t") {
+      if (word !== null) words.push(word);
+      word = null;
+    } else if (ch === "\\") {
+      if (i + 1 >= text.length) return null;
+      if (text[i + 1] !== "\n") add(text[i + 1]);
+      i += 1;
+    } else if (ch === "'") {
+      const end = text.indexOf("'", i + 1);
+      if (end < 0) return null;
+      add(text.slice(i + 1, end));
+      i = end;
+    } else if (ch === '"') {
+      add("");
+      for (i += 1; text[i] !== '"'; i += 1) {
+        if (i >= text.length || text[i] === "$" || text[i] === "`") return null;
+        if (text[i] === "\\" && (DQ_ESCAPES.has(text[i + 1]) || text[i + 1] === "\n")) {
+          i += 1;
+          if (text[i] !== "\n") add(text[i]);
+        } else add(text[i]);
+      }
+    } else if (OPERATOR.has(ch) || (ch === "#" && word === null)) {
+      return null;
+    } else add(ch);
+  }
+  if (word !== null) words.push(word);
+  return words;
+}
