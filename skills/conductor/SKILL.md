@@ -48,6 +48,7 @@ The todo list is how the operator follows the work without reading the transcrip
 - **Nested playbooks expand in place.** When a step runs another playbook, such as opening-a-pr, insert that playbook's leads after the step. The parent step stays in progress until they are done, and they are the only other steps that may be.
 - **Never silently drop a step.** A step that stops applying is marked skipped with its reason. New work found on the way becomes a new todo in the order it will run.
 - **Link the work state.** When the repo declares a tracker, give the list a link to the issue that holds the work state.
+- **Name the ticket.** When an item's work has its own issue or PR, start the item's text with its number, as in `#123 Fix the login redirect`. The operator can then tell from the list alone what is being worked on now and what comes next.
 
 ## Playbooks
 
