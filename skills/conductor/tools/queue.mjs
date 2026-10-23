@@ -6,11 +6,13 @@
  *
  *   queue.mjs run [--queue=<name>] [--slots=<n>] [--priority=gate|normal] [--timeout=<minutes>] -- <command...>
  *   queue.mjs status [--json]
+ *   queue.mjs stop <queue> <slot>
+ *   queue.mjs move <ticket> top|up|down
  *
  * State lives under `<stateDir>/v1/<queue>/`:
  *   slot-<i>                  flock lock file; the kernel frees it when the holder dies
  *   holders/slot-<i>.json     who holds it
- *   tickets/<prio>-<ms>-<pid>.json   who is waiting
+ *   tickets/<prio>-<ms>-<pid>.json   who is waiting; its JSON `createdAt` is the order key `move` rewrites
  */
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
@@ -38,13 +40,21 @@ export const STATE_DIR_ENV = "CONDUCTOR_QUEUE_DIR";
 export const HELD_ENV = "CONDUCTOR_QUEUE_HELD";
 export const POLL_ENV = "CONDUCTOR_QUEUE_POLL_MS";
 export const SLOTS_ENV_PREFIX = "CONDUCTOR_QUEUE_SLOTS_";
+export const MIN_FREE_ENV = "CONDUCTOR_QUEUE_MIN_FREE_MB";
+export const PROC_ENV = "CONDUCTOR_QUEUE_PROC";
+export const DEFAULT_MIN_FREE_MB = 4096;
 export const DEFAULT_QUEUE = "default";
 export const PRIORITIES = ["gate", "normal"];
 export const EXEC_FLAG = "--exec";
 export const START_FD = 3;
 export const CONFLICT_EXIT = 200;
-/** `--timeout` expired. Not 75 (EX_TEMPFAIL), which wrappers may use. */
+/** `--timeout` expired. */
 export const TIMEOUT_EXIT = 76;
+/** The same command already runs or waits from the same directory. */
+export const DUPLICATE_EXIT = 75;
+export const STOP_GRACE_MS = 5000;
+// USER_HZ: /proc/<pid>/stat counts CPU time in these ticks on every Linux build that matters.
+const CLOCK_TICKS = 100;
 export const MIN_BACKOFF_MS = 250;
 export const MAX_BACKOFF_MS = 2000;
 export const NOTICE_INTERVAL_MS = 30_000;
@@ -65,14 +75,43 @@ export function queueDir(env, name) {
 
 export const validQueueName = (name) => /^[A-Za-z0-9_-]+$/.test(name);
 
+const positive = (v) => {
+  const n = Number.parseInt(String(v ?? ""), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/** The box's slot count for a queue from `CONDUCTOR_QUEUE_SLOTS_<QUEUE>`, or null when unset. */
+export const envSlots = (env, queue) => positive(env[SLOTS_ENV_PREFIX + queue.toUpperCase().replace(/[^A-Z0-9]/g, "_")]);
+
 export function resolveSlots({ flag, env = process.env, queue }) {
-  const positive = (v) => {
-    const n = Number.parseInt(String(v ?? ""), 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  };
-  const envName = SLOTS_ENV_PREFIX + queue.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-  return positive(flag) ?? positive(env[envName]) ?? 1;
+  return positive(flag) ?? envSlots(env, queue) ?? 1;
 }
+
+/** MemTotal and MemAvailable in kB from `<CONDUCTOR_QUEUE_PROC or /proc>/meminfo`, each null when unreadable. */
+export function meminfo(env = process.env, readFile = readText) {
+  let text = "";
+  try {
+    text = readFile(path.join(env[PROC_ENV] || "/proc", "meminfo"));
+  } catch {
+    /* no /proc: unknown */
+  }
+  const kb = (key) => {
+    const m = new RegExp(`^${key}:\\s+(\\d+)`, "m").exec(text);
+    return m ? Number(m[1]) : null;
+  };
+  return { memTotalKb: kb("MemTotal"), memAvailKb: kb("MemAvailable") };
+}
+
+/** Whether a slot past slot 0 may start: MemAvailable is at least the floor. Unknown memory admits. */
+export function memoryAdmits(env = process.env, readFile = readText) {
+  const mb = Number.parseInt(env[MIN_FREE_ENV] ?? "", 10);
+  const floorKb = (Number.isFinite(mb) && mb >= 0 ? mb : DEFAULT_MIN_FREE_MB) * 1024;
+  const { memAvailKb } = meminfo(env, readFile);
+  return memAvailKb === null || memAvailKb >= floorKb;
+}
+
+/** Slot 0 always admits, so a full machine still runs one heavy command at a time. */
+export const defaultCanTake = (env) => (i) => i === 0 || memoryAdmits(env);
 
 const priorityRank = (p) => (p === "gate" ? 0 : 1);
 
@@ -195,7 +234,8 @@ export function listTickets(dir, startTimeOf = processStartTime, alive = pidAliv
       continue;
     }
     try {
-      live.push({ ...fromName, ...parsed, mtimeMs: statSync(file).mtimeMs });
+      // The file name keeps when it was enqueued; the JSON `createdAt` is the order key and may move.
+      live.push({ ...fromName, ...parsed, ticket: name.slice(0, -".json".length), enqueuedAt: fromName.createdAt, mtimeMs: statSync(file).mtimeMs });
     } catch {
       /* removed between listing and stat */
     }
@@ -243,19 +283,47 @@ export function snapshotProc(proc = {}) {
   return map;
 }
 
-export function treeTicks(snapshot, root) {
+/** The root and its descendants in a snapshot, or null when the root is not in it. */
+export function treePids(snapshot, root) {
   if (!snapshot?.has(root)) return null;
-  let total = 0;
   const seen = new Set([root]);
   const queue = [root];
   while (queue.length) {
     const pid = queue.pop();
-    total += snapshot.get(pid).ticks;
     for (const [child, info] of snapshot) {
       if (info.ppid === pid && !seen.has(child)) {
         seen.add(child);
         queue.push(child);
       }
+    }
+  }
+  return [...seen];
+}
+
+export function treeTicks(snapshot, root) {
+  return treePids(snapshot, root)?.reduce((sum, pid) => sum + snapshot.get(pid).ticks, 0) ?? null;
+}
+
+/**
+ * Percent of one core the tree used between two snapshots (340 is 3.4 cores), counting only
+ * processes in both, so one that started or ended between them adds nothing.
+ */
+export function treeCpuPct(a, b, root, ms) {
+  const pids = treePids(b, root);
+  if (!pids || !a || ms <= 0) return null;
+  const ticks = pids.reduce((sum, pid) => sum + (a.has(pid) ? Math.max(0, b.get(pid).ticks - a.get(pid).ticks) : 0), 0);
+  return Math.round((ticks / CLOCK_TICKS / (ms / 1000)) * 100);
+}
+
+/** Resident memory of the tree in kB, from each process's VmRSS; null when none could be read. */
+export function treeMemKb(snapshot, root, readStatus = (pid) => readText(`/proc/${pid}/status`)) {
+  let total = null;
+  for (const pid of treePids(snapshot, root) ?? []) {
+    try {
+      const m = /^VmRSS:\s+(\d+)/m.exec(readStatus(pid));
+      if (m) total = (total ?? 0) + Number(m[1]);
+    } catch {
+      /* exited mid-scan */
     }
   }
   return total;
@@ -271,12 +339,18 @@ export function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/** Each holder with `state`, `cpuPct` and `memKb` from two process snapshots `gapMs` apart. */
 export function withActivity(holders, { proc, sleep = sleepSync, gapMs = IDLE_SAMPLE_GAP_MS } = {}) {
   if (holders.length === 0) return [];
   const a = snapshotProc(proc);
   sleep(gapMs);
   const b = snapshotProc(proc);
-  return holders.map((h) => ({ ...h, state: activity(treeTicks(a, h.pid), treeTicks(b, h.pid)) }));
+  return holders.map((h) => ({
+    ...h,
+    state: activity(treeTicks(a, h.pid), treeTicks(b, h.pid)),
+    cpuPct: treeCpuPct(a, b, h.pid, gapMs),
+    memKb: treeMemKb(b, h.pid, proc?.status),
+  }));
 }
 
 export function formatAge(ms) {
@@ -295,7 +369,7 @@ export function holderLine(h, now = Date.now()) {
 }
 
 export function waiterLine(t, rank, now = Date.now()) {
-  return `#${rank + 1} ${t.priority}: ${formatAge(now - t.createdAt)}, ${t.cwd}, ${truncate(t.command)}`;
+  return `#${rank + 1} ${t.priority}: ${formatAge(now - (t.enqueuedAt ?? t.createdAt))}, ${t.cwd}, ${truncate(t.command)}`;
 }
 
 const lockBusy = (spawn, file) => spawn("flock", ["-n", file, "true"], { stdio: "ignore" }).status === 1;
@@ -311,7 +385,7 @@ export function queueSnapshot(dir, deps = {}) {
   const waiters = freshTickets(listTickets(dir, deps.startTimeOf), now).map((t, i) => ({
     ...t,
     rank: i,
-    waitedMs: now - t.createdAt,
+    waitedMs: now - (t.enqueuedAt ?? t.createdAt),
   }));
   const recorded = listHolders(dir, deps.startTimeOf);
   let files = [];
@@ -349,7 +423,87 @@ export function allQueues(env, deps = {}) {
   } catch {
     names = [];
   }
-  return names.sort().map((n) => queueStatus(path.join(root, n), n, deps));
+  return names.sort().map((n) => {
+    const q = queueStatus(path.join(root, n), n, deps);
+    const slots = envSlots(env, n);
+    return slots ? { ...q, slots, slotsSource: "env" } : q;
+  });
+}
+
+const orNull = (v) => v ?? null;
+
+/** The `status --json` shape the session pane reads: every field always present, null where unknown. */
+export function statusJson(queues, env = process.env, deps = {}) {
+  const { memTotalKb, memAvailKb } = meminfo(env, deps.readFile);
+  return {
+    protocol: PROTOCOL_VERSION,
+    queues: queues.map((q) => ({
+      name: q.name,
+      slots: q.slots,
+      slotsSource: q.slotsSource,
+      holders: q.holders.map((h) =>
+        h.orphan
+          ? { slot: h.slot, pid: null, cwd: null, command: null, ageMs: null, state: "orphan", cpuPct: null, memKb: null }
+          : {
+              slot: h.slot,
+              pid: h.pid,
+              cwd: orNull(h.cwd),
+              command: orNull(h.command),
+              ageMs: orNull(h.ageMs),
+              state: h.state ?? "unknown",
+              cpuPct: orNull(h.cpuPct),
+              memKb: orNull(h.memKb),
+            },
+      ),
+      waiters: q.waiters.map((w) => ({
+        ticket: w.ticket,
+        pid: w.pid,
+        cwd: orNull(w.cwd),
+        command: orNull(w.command),
+        priority: w.priority,
+        rank: w.rank,
+        waitedMs: w.waitedMs,
+      })),
+    })),
+    machine: {
+      cores: deps.cores ?? os.availableParallelism(),
+      load1: deps.load1 ?? os.loadavg()[0],
+      memAvailKb,
+      memTotalKb,
+    },
+  };
+}
+
+const sameCommand = (a, b) => {
+  // `bash -c 'x'` and a bare `x` are one run: the mod queues the first, a person types the second.
+  const norm = (c) => String(c ?? "").replace(/\s+/g, " ").trim().replace(/^(?:ba)?sh -c /, "");
+  return norm(a) === norm(b);
+};
+
+/**
+ * A live holder or a fresh waiter running `command` from `cwd`, as `{ where, slot | rank, ageMs }`,
+ * or null. With `self` (a waiter's own pid and enqueuedAt), only waiters ahead of it count.
+ */
+export function findDuplicate(dir, { command, cwd }, { self, now = Date.now() } = {}) {
+  const holder = listHolders(dir).find((h) => h.cwd === cwd && sameCommand(h.command, command));
+  if (holder) return { where: "running", slot: holder.slot, ageMs: now - holder.acquiredAt };
+  const waiters = freshTickets(listTickets(dir), now);
+  const before = (t) => !self || t.enqueuedAt < self.enqueuedAt || (t.enqueuedAt === self.enqueuedAt && t.pid < self.pid);
+  const rank = waiters.findIndex((t) => t.pid !== self?.pid && t.cwd === cwd && sameCommand(t.command, command) && before(t));
+  return rank < 0 ? null : { where: "waiting", rank, ageMs: now - waiters[rank].enqueuedAt };
+}
+
+export function duplicateNotice(dupe, { queue, command, cwd, tag = "[queue]" }) {
+  const place =
+    dupe.where === "running"
+      ? `already running in slot ${dupe.slot} of the ${queue} queue (${formatAge(dupe.ageMs)})`
+      : `already waiting at #${dupe.rank + 1} in the ${queue} queue (${formatAge(dupe.ageMs)})`;
+  return (
+    `${tag} not starting it twice: "${truncate(command)}" is ${place}, from ${cwd}. ` +
+    `Wait for that run's completion notice instead.` +
+    (dupe.where === "running" ? ` If it is stale, ask the operator to stop it (queue.mjs stop ${queue} ${dupe.slot}).` : "") +
+    "\n"
+  );
 }
 
 export function statusText(queues, now = Date.now()) {
@@ -476,7 +630,9 @@ export function parseRunArgs(args) {
 
 const USAGE =
   "usage: queue.mjs run [--queue=<name>] [--slots=<n>] [--priority=gate|normal] [--timeout=<minutes>] -- <command...>\n" +
-  "       queue.mjs status [--json]\n";
+  "       queue.mjs status [--json]\n" +
+  "       queue.mjs stop <queue> <slot>\n" +
+  "       queue.mjs move <ticket> top|up|down\n";
 
 export function runDirect(command, env, spawn = spawnSync) {
   return exitCodeFor(spawn(command[0], command.slice(1), { stdio: "inherit", env }));
@@ -498,7 +654,7 @@ export function run(opts) {
     command,
     env = process.env,
     log = (m) => process.stderr.write(m),
-    canTake = () => true,
+    canTake = defaultCanTake(env),
     tag = "[queue]",
     label = `a slot in the ${queue} queue`,
     hint = "",
@@ -534,6 +690,13 @@ export function run(opts) {
   };
   const ticketFile = path.join(dir, "tickets", `${priority}-${self.createdAt}-${pid}.json`);
   writeJson(ticketFile, self);
+  // After the ticket is written, so of two identical runs started together exactly one refuses.
+  const dupe = findDuplicate(dir, self, { self: { pid, enqueuedAt: self.createdAt } });
+  if (dupe) {
+    rmSync(ticketFile, { force: true });
+    log(duplicateNotice(dupe, { queue, command: self.command, cwd: self.cwd, tag }));
+    return DUPLICATE_EXIT;
+  }
 
   const modulePath = fileURLToPath(import.meta.url);
   const startedAt = Date.now();
@@ -542,8 +705,13 @@ export function run(opts) {
     for (let attempt = 0; ; attempt += 1) {
       // The veto can flip between polls (memory recovers), so usable slots are recomputed each pass.
       const mine = files.map((_, i) => i).filter((i) => canTake(i));
-      // Rewriting, not touching, so a deleted ticket comes back and others see our usable slots.
-      writeJson(ticketFile, { ...self, usable: mine });
+      // `move` rewrites our order key on disk, so adopt it; rewrite only when `usable` changed or the
+      // ticket vanished, else touch it, so a move landing between our read and our write is not lost.
+      const onDisk = readJson(ticketFile);
+      if (onDisk?.pid === pid && Number.isFinite(onDisk.createdAt)) self.createdAt = onDisk.createdAt;
+      if (!(onDisk?.pid === pid && String(onDisk.usable) === String(mine) && touch(ticketFile))) {
+        writeJson(ticketFile, { ...self, usable: mine });
+      }
       const others = listTickets(dir).filter((t) => t.pid !== pid);
       const ordered = orderTickets([...freshTickets(others, Date.now()), self]);
       const rank = ordered.findIndex((t) => t.pid === pid);
@@ -601,6 +769,16 @@ export function run(opts) {
   }
 }
 
+function touch(file) {
+  try {
+    const now = new Date();
+    utimesSync(file, now, now);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The fd number flock opened the lock file on, found by what /proc says it points at. */
 export function findLockFd(lockPath, deps = {}) {
   const list = deps.list ?? (() => readdirSync("/proc/self/fd"));
@@ -642,7 +820,7 @@ export async function execUnderLock(args, deps = {}) {
   } catch {
     /* hand-run, no fd 3: the command still runs */
   }
-  if (flags.ticket) rmSync(flags.ticket, { force: true });
+  // Holder first, then ticket: a duplicate check between the two must see one of them.
   if (flags.holder) {
     writeJson(flags.holder, {
       pid: process.pid,
@@ -654,6 +832,7 @@ export async function execUnderLock(args, deps = {}) {
       acquiredAt: Date.now(),
     });
   }
+  if (flags.ticket) rmSync(flags.ticket, { force: true });
   // If this wrapper is SIGKILLed the slot must stay held while the command runs, so the command
   // gets its own copy of the lock fd. Where the fd cannot be found the lock dies with the wrapper.
   const lockFd = flags.lock ? (deps.lockFd ?? findLockFd)(flags.lock) : null;
@@ -674,13 +853,104 @@ export async function execUnderLock(args, deps = {}) {
   }
 }
 
+/** Running and not a zombie, with the start time it had when first seen. */
+function stillRunning(pid, startTime, readFile = readText) {
+  try {
+    const stat = readFile(`/proc/${pid}/stat`);
+    return stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z" && processStartTime(pid, readFile) === startTime;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * SIGTERM to a slot holder's whole process tree, then SIGKILL to what is left after `graceMs`.
+ * The tree is read once, before any signal: a child whose parent died is reparented and lost.
+ */
+export function stopSlot(env, queue, slot, { graceMs = STOP_GRACE_MS, kill = process.kill } = {}) {
+  if (!validQueueName(queue)) return { ok: false, reason: `invalid queue name ${queue}` };
+  const holder = listHolders(queueDir(env, queue)).find((h) => h.slot === Number(slot));
+  if (!holder) return { ok: false, reason: `no live holder in slot ${slot} of ${queue}` };
+  const tree = (treePids(snapshotProc(), holder.pid) ?? [holder.pid]).map((pid) => [pid, processStartTime(pid)]);
+  const signal = (sig, list) => {
+    for (const [pid] of list) {
+      try {
+        kill(pid, sig);
+      } catch {
+        /* already gone */
+      }
+    }
+  };
+  const left = () => tree.filter(([pid, start]) => start !== null && stillRunning(pid, start));
+  signal("SIGTERM", tree);
+  for (const end = Date.now() + graceMs; left().length > 0 && Date.now() < end; ) sleepSync(100);
+  const stubborn = left();
+  signal("SIGKILL", stubborn);
+  return { ok: true, stopped: tree.length, killed: stubborn.length };
+}
+
+const MOVES = ["top", "up", "down"];
+
+/**
+ * Moves a waiter within its priority by rewriting the order keys (`createdAt`) of the tickets
+ * whose place changed. Each write is an atomic rename, and only over a ticket that still exists,
+ * so a waiter that just took its slot is not brought back.
+ */
+export function moveTicket(env, ticket, where) {
+  if (!MOVES.includes(where)) return { ok: false, reason: `where must be ${MOVES.join(", ")}` };
+  const root = path.join(stateDir(env), `v${PROTOCOL_VERSION}`);
+  let names = [];
+  try {
+    names = readdirSync(root);
+  } catch {
+    /* no queues */
+  }
+  const name = TICKET_NAME.test(`${ticket}.json`)
+    ? names.find((n) => validQueueName(n) && statSafe(path.join(root, n, "tickets", `${ticket}.json`)))
+    : undefined;
+  if (!name) return { ok: false, reason: `no waiting ticket ${ticket}` };
+  const dir = path.join(root, name);
+  const all = freshTickets(listTickets(dir), Date.now());
+  const mine = all.find((t) => t.ticket === ticket);
+  if (!mine) return { ok: false, reason: `no waiting ticket ${ticket}` };
+  const line = all.filter((t) => t.priority === mine.priority);
+  const keys = line.map((t) => t.createdAt);
+  const order = line.filter((t) => t !== mine);
+  const at = line.indexOf(mine);
+  order.splice(where === "top" ? 0 : where === "up" ? Math.max(0, at - 1) : Math.min(order.length, at + 1), 0, mine);
+  let last = -Infinity;
+  order.forEach((t, i) => {
+    // Strictly increasing, so equal keys never fall back to the pid tiebreak.
+    const key = keys[i] > last ? keys[i] : last + 0.001;
+    last = key;
+    if (key === t.createdAt) return;
+    const file = path.join(dir, "tickets", `${t.ticket}.json`);
+    const onDisk = readJson(file);
+    if (onDisk && statSafe(file)) writeJson(file, { ...onDisk, createdAt: key });
+  });
+  return { ok: true };
+}
+
+function statSafe(file) {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function main(argv, env, log, out = (m) => process.stdout.write(m)) {
   const [sub, ...rest] = argv;
   if (sub === EXEC_FLAG) return execUnderLock(rest);
   if (sub === "status") {
     const queues = allQueues(env);
-    out(rest.includes("--json") ? `${JSON.stringify({ protocol: PROTOCOL_VERSION, queues }, null, 2)}\n` : statusText(queues));
+    out(rest.includes("--json") ? `${JSON.stringify(statusJson(queues, env), null, 2)}\n` : statusText(queues));
     return 0;
+  }
+  if ((sub === "stop" || sub === "move") && rest.length === 2) {
+    const result = sub === "stop" ? stopSlot(env, rest[0], rest[1]) : moveTicket(env, rest[0], rest[1]);
+    out(`${JSON.stringify(result)}\n`);
+    return result.ok ? 0 : 1;
   }
   if (sub === "run") {
     const parsed = parseRunArgs(rest);

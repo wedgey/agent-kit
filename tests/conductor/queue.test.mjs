@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   CONFLICT_EXIT,
+  DUPLICATE_EXIT,
   HELD_ENV,
   PROTOCOL_VERSION,
   START_FD,
@@ -53,6 +54,12 @@ import {
   snapshotProc,
   stateDir,
   statusText,
+  stopSlot,
+  statusJson,
+  memoryAdmits,
+  meminfo as meminfoOf,
+  treeCpuPct,
+  treeMemKb,
   timeoutNotice,
   treeTicks,
   truncate,
@@ -294,6 +301,43 @@ describe("process-tree activity", () => {
     const dead = { pids: () => { throw new Error("no proc"); } };
     expect(withActivity([{ pid: 3 }], { proc: dead, sleep: () => {} })[0].state).toBe("unknown");
     expect(withActivity([])).toEqual([]);
+  });
+});
+
+describe("memory admission and the status shape", () => {
+  const meminfo = (text) => () => text;
+  it("reads MemTotal and MemAvailable, null where absent or unreadable", () => {
+    expect(meminfoOf({}, meminfo("MemTotal: 100 kB\nMemAvailable:   40 kB\n"))).toEqual({ memTotalKb: 100, memAvailKb: 40 });
+    expect(meminfoOf({}, () => { throw new Error("no proc"); })).toEqual({ memTotalKb: null, memAvailKb: null });
+    expect(meminfoOf({ CONDUCTOR_QUEUE_PROC: "/fake" }, (f) => (f === "/fake/meminfo" ? "MemAvailable: 1 kB" : ""))).toEqual({ memTotalKb: null, memAvailKb: 1 });
+  });
+
+  it("admits past slot 0 only above the floor, 4096 MB by default, and when memory is unknown", () => {
+    const avail = (kb) => meminfo(`MemAvailable: ${kb} kB`);
+    expect(memoryAdmits({}, avail(4096 * 1024))).toBe(true);
+    expect(memoryAdmits({}, avail(4096 * 1024 - 1))).toBe(false);
+    expect(memoryAdmits({ CONDUCTOR_QUEUE_MIN_FREE_MB: "1" }, avail(1024))).toBe(true);
+    expect(memoryAdmits({ CONDUCTOR_QUEUE_MIN_FREE_MB: "junk" }, avail(1024))).toBe(false);
+    expect(memoryAdmits({}, () => { throw new Error("x"); })).toBe(true);
+  });
+
+  it("projects an orphan with nulls and fills what a record lacks", () => {
+    const queues = [{ name: "q", slots: 2, slotsSource: "files", holders: [{ slot: 0, orphan: true }, { slot: 1, pid: 5 }], waiters: [] }];
+    const json = statusJson(queues, {}, { readFile: () => "", cores: 4, load1: 1.5 });
+    expect(json.queues[0].holders).toEqual([
+      { slot: 0, pid: null, cwd: null, command: null, ageMs: null, state: "orphan", cpuPct: null, memKb: null },
+      { slot: 1, pid: 5, cwd: null, command: null, ageMs: null, state: "unknown", cpuPct: null, memKb: null },
+    ]);
+    expect(json.machine).toEqual({ cores: 4, load1: 1.5, memAvailKb: null, memTotalKb: null });
+  });
+
+  it("counts CPU only for processes in both samples, and sums resident memory over the tree", () => {
+    const a = new Map([[1, { ppid: 0, ticks: 100 }], [2, { ppid: 1, ticks: 50 }]]);
+    const b = new Map([[1, { ppid: 0, ticks: 150 }], [2, { ppid: 1, ticks: 100 }], [3, { ppid: 2, ticks: 900 }]]);
+    expect(treeCpuPct(a, b, 1, 1000)).toBe(100);
+    expect(treeCpuPct(a, b, 9, 1000)).toBeNull();
+    expect(treeMemKb(b, 1, (pid) => (pid === 3 ? "" : `Name: x\nVmRSS:\t  ${pid * 10} kB\n`))).toBe(30);
+    expect(treeMemKb(b, 1, () => { throw new Error("gone"); })).toBeNull();
   });
 });
 
@@ -629,7 +673,7 @@ describe("exec mode", () => {
 
 describe("run: fail-open and bypass paths", () => {
   const ok = ["node", "-e", "process.exit(3)"];
-  const base = () => ({ queue: "q", command: ok, env: { ...process.env, CI: "", CONDUCTOR_QUEUE_DIR: tmp, CONDUCTOR_QUEUE_HELD: "" } });
+  const base = () => ({ queue: "q", command: ok, env: { ...process.env, CI: "", CONDUCTOR_QUEUE_DIR: tmp, CONDUCTOR_QUEUE_HELD: "", CONDUCTOR_QUEUE_MIN_FREE_MB: "0" } });
 
   it("passes CI through silently", () => {
     const log = [];
@@ -813,7 +857,18 @@ describe("main", () => {
     expect(main(["status"], env(), () => {}, (m) => out.push(m))).toBe(0);
     expect(out[0]).toBe("no queues yet\n");
     expect(main(["status", "--json"], env(), () => {}, (m) => out.push(m))).toBe(0);
-    expect(JSON.parse(out[1])).toEqual({ protocol: 1, queues: [] });
+    expect(JSON.parse(out[1])).toMatchObject({ protocol: 1, queues: [] });
+    expect(Object.keys(JSON.parse(out[1]).machine).sort()).toEqual(["cores", "load1", "memAvailKb", "memTotalKb"]);
+  });
+
+  it("prints stop and move results as JSON, exit 1 when there is nothing to act on", () => {
+    const out = [];
+    expect(main(["stop", "q", "0"], env(), () => {}, (m) => out.push(m))).toBe(1);
+    expect(JSON.parse(out[0])).toMatchObject({ ok: false });
+    expect(main(["move", "normal-1-1", "top"], env(), () => {}, (m) => out.push(m))).toBe(1);
+    expect(main(["move", "../x", "top"], env(), () => {}, (m) => out.push(m))).toBe(1);
+    expect(main(["move", "normal-1-1", "sideways"], env(), () => {}, (m) => out.push(m))).toBe(1);
+    expect(main(["stop", "q"], env(), (m) => out.push(m))).toBe(2);
   });
 
   it("prints usage on bad input", () => {
@@ -839,10 +894,10 @@ describe("real multi-process queue", () => {
     }
     throw new Error(`timed out waiting for ${what}`);
   };
-  const env = () => ({ ...process.env, CI: "", CONDUCTOR_QUEUE_HELD: "", CONDUCTOR_QUEUE_DIR: tmp, CONDUCTOR_QUEUE_POLL_MS: "100" });
+  const env = (over = {}) => ({ ...process.env, CI: "", CONDUCTOR_QUEUE_HELD: "", CONDUCTOR_QUEUE_DIR: tmp, CONDUCTOR_QUEUE_POLL_MS: "100", CONDUCTOR_QUEUE_MIN_FREE_MB: "0", ...over });
   const qdir = () => path.join(tmp, "v1", "q");
-  const start = (args) => {
-    const child = spawn(process.execPath, [QUEUE_MJS, "run", "--queue=q", "--slots=1", ...args], { env: env(), stdio: ["ignore", "ignore", "pipe"] });
+  const start = (args, over = {}) => {
+    const child = spawn(process.execPath, [QUEUE_MJS, "run", "--queue=q", "--slots=1", ...args], { env: env(over), stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += d));
     const done = new Promise((r) => child.on("exit", (code) => r({ code, stderr })));
@@ -873,6 +928,137 @@ describe("real multi-process queue", () => {
     const results = await Promise.all([holder.done, ...waiters.map((w) => w.done)]);
     expect(results.map((r) => r.code)).toEqual([0, 0, 0, 0]);
     expect(readFileSync(out, "utf8")).toBe("C\nA\nB\n");
+    expect(tickets()).toBe(0);
+  });
+
+  const mark = (out, name) => ["--", process.execPath, "-e", `require("fs").appendFileSync(${JSON.stringify(out)}, "${name}\\n")`];
+  const statusOf = (over = {}) => JSON.parse(spawnSync(process.execPath, [QUEUE_MJS, "status", "--json"], { env: env(over), encoding: "utf8" }).stdout);
+  const cli = (...args) => {
+    const r = spawnSync(process.execPath, [QUEUE_MJS, ...args], { env: env(), encoding: "utf8" });
+    return { code: r.status, json: JSON.parse(r.stdout || "null") };
+  };
+
+  it("refuses a second run of the same command from the same directory, running or waiting, with exit 75", { timeout: 30_000 }, async () => {
+    const hold = ["--", process.execPath, "-e", "setTimeout(() => {}, 3000)"];
+    const holder = start(["--slots=2", ...hold]);
+    await until(() => listHolders(qdir()).length === 1, "holder");
+    const twin = await start(["--slots=2", ...hold]).done;
+    expect(twin.code).toBe(DUPLICATE_EXIT);
+    expect(twin.stderr).toMatch(/not starting it twice: ".*setTimeout.*" is already running in slot 0 of the q queue \(\d+s\), from /);
+    expect(holder.child.exitCode).toBeNull();
+
+    const out = path.join(tmp, "order");
+    const waiter = start(mark(out, "W"));
+    await until(() => tickets() === 1, "waiter");
+    const second = await start(mark(out, "W")).done;
+    expect(second.code).toBe(DUPLICATE_EXIT);
+    expect(second.stderr).toMatch(/already waiting at #1 in the q queue/);
+    expect((await waiter.done).code).toBe(0);
+    await holder.done;
+    expect(readFileSync(out, "utf8")).toBe("W\n");
+  });
+
+  it("starts a second run beside the first only with enough free memory, and slot 0 always", { timeout: 30_000 }, async () => {
+    const proc = path.join(tmp, "proc");
+    mkdirSync(proc);
+    const meminfo = (kb) => writeFileSync(path.join(proc, "meminfo"), `MemTotal: 16000000 kB\nMemAvailable: ${kb} kB\n`);
+    meminfo(1000);
+    const low = { CONDUCTOR_QUEUE_PROC: proc, CONDUCTOR_QUEUE_MIN_FREE_MB: "4096" };
+    const holder = start(["--slots=2", "--", process.execPath, "-e", "setTimeout(() => {}, 4000)"], low);
+    await until(() => listHolders(qdir()).length === 1, "holder on slot 0 despite low memory");
+    const vetoed = await start(["--slots=2", "--timeout=0.02", "--", process.execPath, "-e", "0"], low).done;
+    expect(vetoed.code).toBe(TIMEOUT_EXIT);
+    meminfo(8_000_000);
+    const admitted = await start(["--slots=2", "--timeout=0.05", "--", process.execPath, "-e", "1"], low).done;
+    expect(admitted.code).toBe(0);
+    expect(holder.child.exitCode).toBeNull();
+    holder.child.kill("SIGKILL");
+    await holder.done;
+  });
+
+  it("reports status JSON in the pane's shape, with each holder's CPU and memory", { timeout: 30_000 }, async () => {
+    const holder = start(["--", process.execPath, "-e", "const t = Date.now() + 3000; while (Date.now() < t);"]);
+    await until(() => listHolders(qdir()).length === 1, "holder");
+    const waiter = start(["--priority=gate", "--", process.execPath, "-e", "0"]);
+    await until(() => tickets() === 1, "waiter");
+    const s = statusOf({ CONDUCTOR_QUEUE_SLOTS_Q: "1" });
+    expect(Object.keys(s).sort()).toEqual(["machine", "protocol", "queues"]);
+    const [q] = s.queues;
+    expect(Object.keys(q)).toEqual(["name", "slots", "slotsSource", "holders", "waiters"]);
+    expect([q.name, q.slots, q.slotsSource]).toEqual(["q", 1, "env"]);
+    expect(statusOf().queues[0].slotsSource).toBe("records");
+    const [h] = q.holders;
+    expect(Object.keys(h)).toEqual(["slot", "pid", "cwd", "command", "ageMs", "state", "cpuPct", "memKb"]);
+    expect(h).toMatchObject({ slot: 0, cwd: process.cwd(), state: "busy" });
+    expect(h.cpuPct).toBeGreaterThan(30);
+    expect(h.memKb).toBeGreaterThan(1000);
+    expect(h.command).toMatch(/Date\.now/);
+    const [w] = q.waiters;
+    expect(Object.keys(w)).toEqual(["ticket", "pid", "cwd", "command", "priority", "rank", "waitedMs"]);
+    expect(w).toMatchObject({ pid: waiter.child.pid, priority: "gate", rank: 0 });
+    expect(w.ticket).toMatch(new RegExp(`^gate-\\d+-${waiter.child.pid}$`));
+    const m = s.machine;
+    expect(m.cores).toBeGreaterThan(0);
+    expect(typeof m.load1).toBe("number");
+    expect(m.memTotalKb).toBeGreaterThan(m.memAvailKb);
+    await Promise.all([holder.done, waiter.done]);
+  });
+
+  it("stop terminates the holder's whole process tree and frees the slot", { timeout: 30_000 }, async () => {
+    const pids = path.join(tmp, "pids");
+    const tree = `sleep 30 & echo $! >> ${pids}; sleep 30 & echo $! >> ${pids}; echo $$ >> ${pids}; wait`;
+    const holder = start(["--", "bash", "-c", tree]);
+    await until(() => existsSync(pids) && readFileSync(pids, "utf8").trim().split("\n").length === 3 && listHolders(qdir()).length === 1, "tree");
+    const { code, json } = cli("stop", "q", "0");
+    expect(code).toBe(0);
+    expect(json).toMatchObject({ ok: true, killed: 0 });
+    expect(json.stopped).toBeGreaterThanOrEqual(4);
+    expect((await holder.done).code).toBeGreaterThan(0);
+    // A killed child reparented to a pid 1 that never reaps stays a zombie: gone all the same.
+    const gone = (pid) => { try { return readFileSync(`/proc/${pid}/stat`, "utf8").includes(") Z "); } catch { return true; } };
+    for (const pid of readFileSync(pids, "utf8").trim().split("\n").map(Number)) expect(gone(pid)).toBe(true);
+    expect(listHolders(qdir())).toEqual([]);
+  });
+
+  it("stop sends SIGKILL to what ignores SIGTERM past the grace period", { timeout: 30_000 }, async () => {
+    const ready = path.join(tmp, "ready");
+    const holder = start(["--", process.execPath, "-e", `process.on("SIGTERM", () => {}); require("fs").writeFileSync(${JSON.stringify(ready)}, "x"); setInterval(() => {}, 1000)`]);
+    await until(() => existsSync(ready) && listHolders(qdir()).length === 1, "stubborn holder");
+    const result = stopSlot(env(), "q", 0, { graceMs: 300 });
+    expect(result.ok).toBe(true);
+    expect(result.killed).toBeGreaterThanOrEqual(1);
+    await holder.done;
+    expect(stopSlot(env(), "q", 0)).toMatchObject({ ok: false });
+    expect(stopSlot(env(), "../q", 0)).toMatchObject({ ok: false });
+  });
+
+  it("move reorders real waiters within their priority, and the waiters keep the new order", { timeout: 30_000 }, async () => {
+    const out = path.join(tmp, "order");
+    const release = path.join(tmp, "release");
+    const holder = start(["--", process.execPath, "-e", `const t = setInterval(() => require("fs").existsSync(${JSON.stringify(release)}) && clearInterval(t), 20)`]);
+    await until(() => listHolders(qdir()).length === 1, "holder");
+    const waiters = {};
+    for (const name of ["A", "B", "C"]) {
+      waiters[name] = start(mark(out, name));
+      await until(() => tickets() === Object.keys(waiters).length, `ticket ${name}`);
+      await sleep(5);
+    }
+    const line = () => freshTickets(listTickets(qdir()), Date.now());
+    const id = (name) => line().find((w) => w.pid === waiters[name].child.pid).ticket;
+    const order = () => line().map((w) => Object.keys(waiters).find((n) => waiters[n].child.pid === w.pid));
+    expect(order()).toEqual(["A", "B", "C"]);
+    expect(cli("move", id("C"), "top")).toEqual({ code: 0, json: { ok: true } });
+    expect(order()).toEqual(["C", "A", "B"]);
+    expect(cli("move", id("A"), "down").json).toEqual({ ok: true });
+    expect(cli("move", id("B"), "up").json).toEqual({ ok: true });
+    await sleep(400);
+    expect(order()).toEqual(["B", "C", "A"]);
+    const [w] = statusOf().queues[0].waiters;
+    expect(w.ticket).toBe(id("B"));
+    expect(w.waitedMs).toBeGreaterThan(300);
+    writeFileSync(release, "x");
+    await Promise.all([holder.done, ...Object.values(waiters).map((x) => x.done)]);
+    expect(readFileSync(out, "utf8")).toBe("B\nC\nA\n");
     expect(tickets()).toBe(0);
     expect(listHolders(qdir())).toEqual([]);
   });
