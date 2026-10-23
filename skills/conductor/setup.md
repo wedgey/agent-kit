@@ -16,7 +16,7 @@ Writing the operator's instruction file is reversible and is the whole purpose o
 4. **Install agent files.** Only if the binding lists them. Install any that are missing or differ. Skip ones that are already correct. If the binding lists none, say so.
 5. **Install hooks.** Only if the binding lists them. Install any that are missing or differ, change no other entry, and show the diff. If the binding lists none, say so.
 6. **Run the doctor.** Run the binding's doctor recipe. Keep its table.
-7. **Reply.** Lead with whether routing works. Then list what was written, what was already correct, and the doctor table. Include the diff of the instruction file. Name every mismatch the doctor found and its likely cause.
+7. **Reply.** Lead with whether routing works. Then list what was written, what was already correct, the doctor table and its hook line. Include the diff of the instruction file. Name every mismatch the doctor found and its likely cause.
 
 ## The pointer
 

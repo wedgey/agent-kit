@@ -8,16 +8,22 @@ Read only during `/conductor setup`.
 - In headless `-p` mode, setup needs permission to read the skill folder and write the files above. Without it, setup stops and writes nothing.
 - The skill is discoverable from any repo when `SKILL.md` exists at `~/.claude/skills/conductor/` or `~/.agents/skills/conductor/`.
 - Install every file in `claude-code-agents/` to `~/.claude/agents/`. A file that already matches stays. A file that differs is replaced. Leave every other file in that folder alone. New agents usually load into the running session within seconds, even when the folder was just created. Observed on v2.1.308, 2026-10-22.
-- Install the PreToolUse hook into `~/.claude/settings.json`, created as `{}` if missing. It points at the installed skill, so use `~/.agents/skills/conductor/` in the path when that is where the skill lives. Edit only `hooks.PreToolUse`.
-  - An entry whose command ends in `conductor/tools/hooks/pretooluse.mjs` is conductor's. An identical one stays, a different one is replaced, and several are collapsed to one.
-  - Leave every other entry and key alone. Append the entry if none is conductor's.
+- Install the PreToolUse hook into `~/.claude/settings.json`, created as `{}` if missing. Edit only `hooks.PreToolUse`.
+  - The hook's path is the installed skill that step 2 found. When the skill is in both `~/.claude/skills/conductor/` and `~/.agents/skills/conductor/`, use `~/.claude`.
+  - A conductor hook is an inner hook object `{type, command, timeout}` whose `command` contains `conductor/tools/hooks/pretooluse.mjs`. Match on "contains", because the command ends with a quote.
+  - Exactly one conductor hook that equals the inner hook object below stays as it is. Otherwise replace the first conductor hook with it and remove the other conductor hooks.
+  - Remove a matcher group only once removing conductor hooks has left its `hooks` list empty.
+  - Append a new `{ "matcher": "Bash", "hooks": [ ... ] }` group only when no conductor hook object exists anywhere.
+  - Never touch any other hook object, group or key.
   - Show the diff in the reply.
 
 ```json
 { "matcher": "Bash", "hooks": [{ "type": "command", "command": "node \"$HOME/.claude/skills/conductor/tools/hooks/pretooluse.mjs\"", "timeout": 5 }] }
 ```
 
-A repo that runs its own queue sets `CONDUCTOR_QUEUE_MANAGED=1` in its project settings `env`. The hook then only denies wait loops. `CONDUCTOR_HOOKS=off` bypasses it.
+- Suggest a slot count, and never write it. When `~/.claude/settings.json` has no `env.CONDUCTOR_QUEUE_SLOTS_TESTS`, run `node <installed skill>/tools/hooks/defaults.mjs` and suggest adding the value it prints to that `env`. The hook and the queue both read it. Without it a queue runs one command at a time.
+
+A repo that runs its own queue sets `"env": {"CONDUCTOR_QUEUE_MANAGED": "1"}` in its own `.claude/settings.json`. The hook reads that file in the repo a command runs in, and then only denies wait loops there. `CONDUCTOR_HOOKS=off` bypasses it.
 
 ## Doctor
 
@@ -44,4 +50,9 @@ Output this table.
 | Role agent | Tier | Requested | Ran | Effort | Match | Advisor calls |
 |---|---|---|---|---|---|---|
 
-Then check the hook. Pipe `{"tool_name":"Bash","tool_input":{"command":"until grep -q x f; do sleep 20; done"}}` to `node <installed skill>/tools/hooks/pretooluse.mjs`. It must print JSON with `"permissionDecision":"deny"`. Add a `Hook` row to the table with that result.
+Then check the hook.
+
+- `~/.claude/settings.json` has exactly one conductor hook object, and the file its command names exists.
+- Pipe `{"tool_name":"Bash","tool_input":{"command":"until grep -q x f; do sleep 20; done"}}` to `env -u CI node <installed skill>/tools/hooks/pretooluse.mjs`. It must print JSON with `"permissionDecision":"deny"`.
+
+Report both on one `Hook:` line below the table, not as a row in it.

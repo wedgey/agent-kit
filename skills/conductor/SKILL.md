@@ -13,6 +13,7 @@ This folder holds everything conductor needs. Never route to a skill outside it.
 - `playbooks/`: the steps for each kind of task.
 - `principles/`: rules of judgment, read only when one applies.
 - `bindings/<harness>.md`: the only place a model or tool is named.
+- `tools/`: the box queue for heavy checks (`queue.mjs`) and the hooks setup installs.
 - `setup.md`: what `/conductor setup` does. On `/conductor setup`, follow it and nothing else.
 
 ## Start of every task
@@ -37,7 +38,6 @@ Playbooks use these. The binding says how each one works in your harness.
 - **show** a visual: a diagram, a mockup, a screenshot.
 - **isolate** a delegate's writes in their own worktree or sandbox.
 - **background** a command so the turn is free, then wait for its completion notice.
-- **watch** for a condition without polling.
 
 ## The todo list
 

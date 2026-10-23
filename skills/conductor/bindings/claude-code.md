@@ -26,7 +26,6 @@ Claude Code has one model family. Spawn reviewers and verifiers fresh at their o
 | track | The session's todo tool. Prefer a tool whose description says it holds the todo list the operator watches. Otherwise use a built-in todo or task tool. Pass the playbook's name as its title and the tracker issue's URL as its link where it takes them. Mark a skipped step with the tool's skipped status when it has one, else as completed with `skip: <reason>` in its text | If none exists, keep the list in the reply and restate it when it changes |
 | show | Mermaid in the reply for flows. For a mockup, write a throwaway HTML file and publish it with the `Artifact` tool. Screenshots by path | Without `Artifact`, give the file path |
 | background | The `Bash` tool with `run_in_background: true`. It notifies on completion. Do not poll | None. Run it in the foreground only when the queue has a free slot |
-| watch | The `Monitor` tool, for a condition or a stream of events | Background a script that exits when the condition holds, and wait for its notice |
 | isolate | `Agent` with `isolation: "worktree"` | Tell the delegate to `git worktree add` its own path and stay inside it |
 
 ## Repo instruction files
