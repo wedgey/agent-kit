@@ -4,10 +4,23 @@ import type { On } from 'claude-code'
 
 const CWD = '/w/lane'
 
-/** The engine beneath the mod. `decide` stands for decide.mjs's stdout, or throws as a failed spawn. */
-function harness(on: On, decide: () => string = () => '', env: Record<string, string> = {}) {
-  const w = { ran: [] as string[], helper: [] as { argv: string[]; stdin?: string; cwd?: string }[] }
+type Verdict = 'allow' | 'ask' | 'deny' | 'missing'
+
+/**
+ * The engine beneath the mod. `decide` stands for decide.mjs's stdout, or throws as a failed spawn.
+ * `verdict` is the engine's permission decision for the queued form under the session's mode:
+ * `allow` under bypassPermissions (or a rule allowing it), `ask` under default, acceptEdits and
+ * auto, `deny` under dontAsk; `missing` stands for an engine with no `$.tool.check`.
+ */
+function harness(on: On, decide: () => string = () => '', env: Record<string, string> = {}, verdict: Verdict = 'allow') {
+  const w = { ran: [] as string[], checked: [] as unknown[], helper: [] as { argv: string[]; stdin?: string; cwd?: string }[] }
   mock.env(on, env)
+  on('tool.check', (_$, e) => {
+    if (e.tool_use_id !== undefined) return { decision: 'allow' as const }
+    w.checked.push(e.input)
+    if (verdict === 'missing') throw new Error('no implementation for tool.check')
+    return { decision: verdict }
+  })
   on('session.cwd', () => ({ value: CWD }))
   on('ui.log', () => ({ value: undefined }))
   on('process.run', (_$, e) => {
@@ -26,6 +39,8 @@ const bash = async ($: Engine, command: string, background = false) =>
   (await $.tool.call({ tool: 'Bash', command, ...(background ? { run_in_background: true } : {}) })) as Outcome
 
 const QUEUED = "node '/p/skills/conductor/tools/queue.mjs' run --queue=tests -- bash -c 'pytest'"
+const SUGGEST = `"pytest" is a heavy command and every repo on this box shares one queue. Run the whole command as: ${QUEUED}\nRun it in the background and wait for the completion notice.`
+const QUEUED_OUT = JSON.stringify({ command: QUEUED, suggest: SUGGEST })
 
 describe('the Bash gate', () => {
   test('passes a light command without starting Node', async ($, on) => {
@@ -57,8 +72,8 @@ describe('the Bash gate', () => {
     expect(w.ran).toEqual(['pytest'])
   })
 
-  test('rewrites a background heavy command in place, asking decide.mjs with the call and the cwd', async ($, on) => {
-    const w = harness(on, () => JSON.stringify({ command: QUEUED }))
+  test('under bypassPermissions (the engine answers allow) rewrites a background heavy command in place, asking decide.mjs with the call and the cwd', async ($, on) => {
+    const w = harness(on, () => QUEUED_OUT)
     await bash($, 'pytest', true)
     expect(w.ran).toEqual([QUEUED])
     expect(w.helper).toHaveLength(1)
@@ -72,8 +87,8 @@ describe('the Bash gate', () => {
     })
   })
 
-  test('rewrites a foreground heavy command in place when decide.mjs found a free slot', async ($, on) => {
-    const w = harness(on, () => JSON.stringify({ command: QUEUED }))
+  test('under bypassPermissions rewrites a foreground heavy command in place when decide.mjs found a free slot', async ($, on) => {
+    const w = harness(on, () => QUEUED_OUT)
     await bash($, 'pytest')
     expect(w.ran).toEqual([QUEUED])
     expect(JSON.parse(w.helper[0]?.stdin ?? '{}').tool_input.run_in_background).toBe(false)
@@ -100,6 +115,42 @@ describe('the Bash gate', () => {
     await bash($, 'pytest')
     expect(w.ran).toEqual(['pytest'])
     expect(w.helper).toHaveLength(1)
+  })
+
+  test('asks the engine about the queued form, not the command as typed', async ($, on) => {
+    const w = harness(on, () => QUEUED_OUT)
+    await bash($, 'pytest', true)
+    expect(w.checked).toEqual([{ command: QUEUED }])
+  })
+
+  for (const [mode, verdict] of [
+    ['default', 'ask'],
+    ['acceptEdits', 'ask'],
+    ['auto', 'ask'],
+    ['dontAsk', 'deny'],
+  ] as const) {
+    test(`under ${mode} (the engine answers ${verdict}) denies with the queued form to run in the background`, async ($, on) => {
+      const w = harness(on, () => QUEUED_OUT, {}, verdict)
+      for (const background of [true, false]) {
+        const r = await bash($, 'pytest', background)
+        expect(r.deny).toBe(SUGGEST)
+      }
+      expect(w.ran).toEqual([])
+    })
+  }
+
+  test('denies with the queued form when the engine has no permission check to ask', async ($, on) => {
+    const w = harness(on, () => QUEUED_OUT, {}, 'missing')
+    const r = await bash($, 'pytest', true)
+    expect(r.deny).toBe(SUGGEST)
+    expect(w.ran).toEqual([])
+  })
+
+  test('denies a duplicate and a full queue the same whatever the mode', async ($, on) => {
+    const reason = '[queue] not starting it twice: "pytest" is already running in slot 0 of the tests queue (5s), from /w/lane.'
+    const w = harness(on, () => JSON.stringify({ deny: reason }), {}, 'ask')
+    expect((await bash($, 'pytest', true)).deny).toBe(reason)
+    expect(w.checked).toEqual([])
   })
 
   test('runs the command as it was when decide.mjs cannot run', async ($, on) => {

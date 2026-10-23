@@ -4,11 +4,12 @@
  * The one decision on a Bash command: pass it, deny it, or run it queued in place.
  *
  *   stdin  { tool_name: "Bash", tool_input: { command, run_in_background }, cwd }
- *   stdout { "deny": "<reason>" } | { "command": "<queued form>" } | nothing (pass)
+ *   stdout { "deny": "<reason>" } | { "command": "<queued form>", "suggest": "<reason>" } | nothing (pass)
  *
  * It denies a wait loop, a duplicate of a run already queued, and a foreground heavy command
- * whose queue has no free slot it may use. Any other heavy command comes back queued. Fails
- * open on anything it cannot parse or read.
+ * whose queue has no free slot it may use. Any other heavy command comes back queued, with
+ * `suggest`, the deny that names the queued form, for a caller that may not rewrite in place.
+ * Fails open on anything it cannot parse or read.
  *
  * `CONDUCTOR_HOOKS=off` in the environment or the command lets a command through. A repo
  * that runs its own queue sets `CONDUCTOR_QUEUE_MANAGED=1` in its `.claude/settings.json`
@@ -20,7 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { duplicateNotice, findDuplicate, isDirectInvocation, memoryAdmits, parseRunArgs, queueDir, resolveSlots } from "../queue.mjs";
-import { classifyQueued, commandHead, findUnqueuedHeavy, MANAGED_ENV, QUEUE_TOKEN, queuedForm, triage } from "./classify.mjs";
+import { BYPASS_HINT, classifyQueued, commandHead, findUnqueuedHeavy, MANAGED_ENV, QUEUE_TOKEN, queuedForm, triage } from "./classify.mjs";
 import { fullQueueReason, readQueueStatus } from "./full-queue.mjs";
 import { commandSegments } from "./shell.mjs";
 
@@ -88,7 +89,11 @@ export function decide(input, env, deps = {}) {
     const dupe = findDuplicate(queueDir(env, heavy.queue), { command, cwd });
     if (dupe) return { deny: duplicateNotice(dupe, { queue: heavy.queue, command, cwd }).trim() };
     const full = fullReason(queued, background, env, deps);
-    return full ? { deny: full } : { command: queued };
+    if (full) return { deny: full };
+    const suggest =
+      `"${heavy.segment}" is a heavy command and every repo on this box shares one queue. ` +
+      `Run the whole command as: ${queued}\nRun it in the background and wait for the completion notice. ${BYPASS_HINT}`;
+    return { command: queued, suggest };
   } catch {
     return null;
   }

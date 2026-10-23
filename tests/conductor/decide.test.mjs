@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { classifyQueued, queuedForm } from "../../skills/conductor/tools/hooks/classify.mjs";
+import { BYPASS_HINT, classifyQueued, queuedForm } from "../../skills/conductor/tools/hooks/classify.mjs";
 import { decide, queuedSlots, repoManaged } from "../../skills/conductor/tools/hooks/decide.mjs";
 import { parseRunArgs, processStartTime, resolveSlots } from "../../skills/conductor/tools/queue.mjs";
 
@@ -29,7 +29,13 @@ const fakeMeminfo = (availKb) => {
 };
 
 describe("the decision table", () => {
-  const queued = (command, queue = "tests") => ({ command: queuedForm(command, queue, QUEUE_MJS) });
+  const queued = (command, queue = "tests", segment = "pytest") => {
+    const form = queuedForm(command, queue, QUEUE_MJS);
+    const suggest =
+      `"${segment}" is a heavy command and every repo on this box shares one queue. Run the whole command as: ${form}\n` +
+      `Run it in the background and wait for the completion notice. ${BYPASS_HINT}`;
+    return { command: form, suggest };
+  };
 
   it("queues a heavy command in place when it runs in the background, even on a full queue", () => {
     const env = box();
