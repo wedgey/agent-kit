@@ -51,6 +51,9 @@ import {
   repoOf,
   ticketOf,
   todoTitle,
+  laneProgress,
+  matchLane,
+  parseAgentsList,
 } from '../hooks/lib'
 
 const PS = [
@@ -383,10 +386,17 @@ describe('todos', () => {
     expect(todoInputError({ items: [{ content: '', status: 'pending' }] })).toMatch(/content/)
     expect(todoInputError({ items: [{ content: 'a', status: 'skipped', note: 'n/a' }], title: 'feature' })).toBeUndefined()
     expect(todoInputError({ items: [{ content: 'a', status: 'pending', ticket: 12 }] })).toMatch(/ticket/)
+    expect(todoInputError({ items: [{ content: 'a', status: 'pending', lane: 3 }] })).toMatch(/lane/)
+    expect(todoInputError({ items: [{ content: 'a', status: 'pending', lane: 'rd-12' }] })).toBeUndefined()
   })
 
-  test('an item keeps its ticket across replacements', () => {
-    expect(applyTodos(undefined, { items: [{ content: 'Fix', status: 'pending', ticket: '#4' }] }, 1).items[0]).toEqual({ content: 'Fix', status: 'pending', ticket: '#4' })
+  test('an item keeps its ticket and lane across replacements', () => {
+    expect(applyTodos(undefined, { items: [{ content: 'Fix', status: 'pending', ticket: '#4', lane: 'rd-4' }] }, 1).items[0]).toEqual({
+      content: 'Fix',
+      status: 'pending',
+      ticket: '#4',
+      lane: 'rd-4',
+    })
   })
 
   test('items group into now, next and done, each in list order', () => {
@@ -584,5 +594,39 @@ describe('branch health', () => {
       changed: 0,
       repo: 'wedgey/agent-kit',
     })
+  })
+})
+
+describe('lanes', () => {
+  const entry = (name: string, sessionId: string, startedAt: number) => ({ pid: 1, id: sessionId.slice(0, 8), kind: 'background', name, sessionId, startedAt, status: 'busy', state: 'working' })
+
+  test('the agents list reads only as a JSON array, keeping entries with a name and session', () => {
+    expect(parseAgentsList(JSON.stringify([entry('a', 's-1', 1), { kind: 'interactive', sessionId: 's-2' }]))).toEqual([entry('a', 's-1', 1)])
+    expect(parseAgentsList('[]')).toEqual([])
+    expect(parseAgentsList('{"error":"x"}')).toBeUndefined()
+    expect(parseAgentsList('not json')).toBeUndefined()
+  })
+
+  test('a lane matches by name, the newest run when a name was reused', () => {
+    const entries = [entry('rd-12', 'old', 100), entry('rd-12', 'new', 200), entry('rd-13', 'other', 300)]
+    expect(matchLane(entries, 'rd-12')?.sessionId).toBe('new')
+    expect(matchLane(entries, 'rd-14')).toBeUndefined()
+  })
+
+  test("a lane's progress counts skipped as done and names its first two in-progress items and first pending one, with tickets", () => {
+    const list = {
+      link: 'https://github.com/o/r/issues/9',
+      items: [
+        { content: 'Map', status: 'completed' as const },
+        { content: 'Skip it', status: 'skipped' as const },
+        { content: '#12 Build', status: 'in_progress' as const },
+        { content: 'Test', status: 'in_progress' as const, ticket: 'o/x#3' },
+        { content: 'Third', status: 'in_progress' as const },
+        { content: 'Open the PR', status: 'pending' as const },
+        { content: 'Ship', status: 'pending' as const },
+      ],
+    }
+    expect(laneProgress(list, 'o/r')).toEqual({ done: 2, total: 7, now: ['#12 Build', 'x#3 Test'], next: 'Open the PR' })
+    expect(laneProgress({ items: [{ content: 'a', status: 'completed' }] })).toEqual({ done: 1, total: 1, now: [] })
   })
 })

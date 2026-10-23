@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentMetrics, AgentRow, HeavyQueue, Orphan, QueueHolder, QueueStatus, QueueWaiter, ShellTask, SpawnInfo, TodoItem, TodoList, TodoStatus, Verdict } from '../types'
+import type { AgentMetrics, AgentRow, HeavyQueue, LaneReading, Orphan, QueueHolder, QueueStatus, QueueWaiter, ShellTask, SpawnInfo, TodoItem, TodoList, TodoStatus, Verdict } from '../types'
 import {
   agentName,
   applyTodos,
@@ -57,6 +57,9 @@ import {
   place,
   queueHeader,
   queueTotals,
+  laneProgress,
+  matchLane,
+  parseAgentsList,
   type ProcRow,
 } from './lib'
 
@@ -87,6 +90,7 @@ const queueA = atom({ plugin: 'session-activity', key: 'queue' } as const, null)
 const queueNoteA = atom({ plugin: 'session-activity', key: 'queueNote' } as const, '')
 // Pids in this session's process tree when the queue was last read: what marks a run "you".
 const queueOwnA = atom({ plugin: 'session-activity', key: 'queueOwn' } as const, [])
+const lanesA = atom({ plugin: 'session-activity', key: 'lanes' } as const, {})
 
 // $.state lives as long as the process; a resumed session in a new process gets its todos back from here.
 const TODOS_KEY = 'todos:'
@@ -95,6 +99,17 @@ const KEEP_TODOS_MS = 7 * 86_400_000
 const QUEUE_EVERY_MS = 3000
 const QUEUE_IDLE_EVERY_MS = 30_000
 const QUEUE_TIMEOUT_MS = 15_000
+// Every 5 s only while the pane shows a lane still at work.
+const LANES_EVERY_MS = 5000
+const LANES_IDLE_EVERY_MS = 30_000
+const LANES_TIMEOUT_MS = 10_000
+const LANE_ICON: Record<string, { glyph: string; color: string }> = {
+  working: { glyph: '●', color: 'suggestion' },
+  blocked: { glyph: '◐', color: 'warning' },
+  failed: { glyph: '✗', color: 'error' },
+  done: { glyph: '✓', color: 'success' },
+  stopped: { glyph: '■', color: 'inactive' },
+}
 
 const TODO_TOOL = 'todos'
 const TODO_TOOL_CALL = /^mcp__session-activity__todos$/
@@ -115,6 +130,7 @@ const TODO_DESCRIPTION = [
   'Mark an item in_progress when you start it and completed as soon as it is done; an item whose work ends in a PR is done only when its PR is merge-ready and only the merge itself is left. Never delete a step you will not do: mark it skipped with the reason in `note`.',
   'Start an item with its ticket, as `#123 Fix the login redirect` (or `owner/repo#9` for another repo), or pass it as `ticket`.',
   'Agents you spawn are listed under the item in progress when you spawn them.',
+  'An item whose ticket a background session (a lane) owns passes that session\'s name as `lane`.',
   '`title` heads the list (the kind of task, or the playbook it follows). `link` is the URL of the issue that holds the work state.',
 ].join(' ')
 const TODO_SCHEMA = {
@@ -131,6 +147,7 @@ const TODO_SCHEMA = {
           status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'skipped'] },
           note: { type: 'string', description: 'Why an item is skipped, or any short note' },
           ticket: { type: 'string', description: 'Issue or PR for this item, as #123, owner/repo#123 or a URL' },
+          lane: { type: 'string', description: 'Name of the background session (claude --bg --name) that owns this item' },
         },
         required: ['content', 'status'],
       },
@@ -156,6 +173,7 @@ let branchAt = 0
 let queueAt = 0
 // The conductor install whose queue.mjs was missing; a new install path is looked at again.
 let queueToolMissing: string | undefined
+let lanesAt = 0
 let prLookup: { branch: string; at: number; pr?: number } | undefined
 
 const metricsOf = async ($: $, id: string, fn: (m: AgentMetrics) => AgentMetrics) =>
@@ -479,6 +497,52 @@ async function sessionPids($: $): Promise<number[]> {
   return treeOf(rows, await liveRoot($, rows)).map(r => r.pid)
 }
 
+const lanePoll = { isRunning: false }
+
+async function pollLanes($: $, isForced: boolean) {
+  await exclusive(lanePoll, () => pollLanesOnce($, isForced))
+}
+
+async function pollLanesOnce($: $, isForced: boolean) {
+  const todos = await read($, todosA)
+  const names = [...new Set(todos.items.flatMap(i => (i.lane ? [i.lane] : [])))]
+  if (names.length === 0) return
+  const now = await $.clock.now()
+  const isLive = todos.items.some(i => i.lane && i.status !== 'completed' && i.status !== 'skipped')
+  const isShown = isLive && (await $.ui.panes()).some(p => p.id === PANE && p.isShown)
+  if (!isForced && now - lanesAt < (isShown ? LANES_EVERY_MS : LANES_IDLE_EVERY_MS)) return
+  lanesAt = now
+  const out = await $.process.run(['claude', 'agents', '--json', '--all'], { timeoutMs: LANES_TIMEOUT_MS }).catch(() => undefined)
+  const entries = out?.exitCode === 0 ? parseAgentsList(out.stdout) : undefined
+  // A failed read keeps the last readings rather than calling every lane missing.
+  if (!entries) return
+  const [prev, branch] = await Promise.all([read($, lanesA), read($, branchA)])
+  const next: Record<string, LaneReading> = {}
+  for (const name of names) {
+    const entry = matchLane(entries, name)
+    if (!entry) {
+      next[name] = { isMissing: true }
+      continue
+    }
+    const saved = (await $.store.get(`${TODOS_KEY}${entry.sessionId}`).catch(() => undefined)) as { todos?: TodoList } | undefined
+    const before = prev[name]
+    // No list read keeps the last one of the same session; never a made-up 0/0.
+    const progress = Array.isArray(saved?.todos?.items)
+      ? laneProgress(saved.todos, contextRepo(saved.todos.link, branch.repo))
+      : before && !before.isMissing && before.sessionId === entry.sessionId
+        ? before.progress
+        : undefined
+    next[name] = {
+      state: entry.state ?? entry.status ?? 'unknown',
+      sessionId: entry.sessionId,
+      ...(entry.waitingFor ? { waitingFor: entry.waitingFor } : {}),
+      ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
+      ...(progress ? { progress } : {}),
+    }
+  }
+  await update($, lanesA, () => next)
+}
+
 // `refuse` sees the tool and may answer a note instead of running the command.
 type Refuse = (tool: string) => Promise<string | undefined>
 
@@ -610,6 +674,7 @@ export const register: Register = (on, options) => {
     await restoreTodos($)
     $.clock.every(TICK_MS, () => void tick($))
     $.clock.every(QUEUE_EVERY_MS, () => void pollQueue($, false))
+    $.clock.every(LANES_EVERY_MS, () => void pollLanes($, false))
     await $.command.register({
       name: 'activity',
       description: 'Show or hide the session activity pane; `/activity stop-all` stops every background server and orphan',
@@ -638,6 +703,7 @@ export const register: Register = (on, options) => {
     isDismissed = false
     await $.ui.open({ id: PANE, title: 'Session activity' })
     await pollQueue($, true)
+    await pollLanes($, true)
     await tick($)
     return { text: 'Session activity pane opened.' }
   })
@@ -878,7 +944,7 @@ export const register: Register = (on, options) => {
       read($, spendA),
       $.clock.now(),
     ])
-    const [queue, queueNote, queueOwn] = await Promise.all([read($, queueA), read($, queueNoteA), read($, queueOwnA)])
+    const [queue, queueNote, queueOwn, lanes] = await Promise.all([read($, queueA), read($, queueNoteA), read($, queueOwnA), read($, lanesA)])
     const queueCount = queue ? queueTotals(queue) : { busy: 0, waiting: 0 }
     const isQueueBusy = queueCount.busy + queueCount.waiting > 0
 
@@ -1168,6 +1234,31 @@ export const register: Register = (on, options) => {
               : (item.note ?? '')
       const { ticket, text } = ticketOf(item, repo)
       const label = ticket ? clip(ticket.label) : ''
+      const lane = item.lane === undefined ? undefined : lanes[item.lane]
+      const laneMark =
+        item.lane === undefined
+          ? undefined
+          : !lane
+            ? { glyph: '◌', color: 'inactive', word: 'lane' }
+            : lane.isMissing
+              ? { glyph: '◌', color: 'inactive', word: 'lane missing' }
+              : { ...(LANE_ICON[lane.state] ?? { glyph: '◌', color: 'inactive' }), word: lane.state }
+      const laneTree =
+        !isNarrow && isOpen && item.lane !== undefined && lane && !lane.isMissing
+          ? [
+              [
+                `lane ${item.lane}`,
+                lane.state,
+                lane.waitingFor ? `waiting for ${lane.waitingFor}` : undefined,
+                lane.startedAt === undefined ? undefined : formatDuration(now - lane.startedAt),
+                lane.progress ? `${lane.progress.done}/${lane.progress.total}` : undefined,
+              ]
+                .filter(Boolean)
+                .join(' · '),
+              ...(lane.progress?.now.map(t => `  ◐ ${t}`) ?? []),
+              ...(lane.progress?.next ? [`  ○ ${lane.progress.next}`] : []),
+            ]
+          : []
       const column = isNarrow ? (label ? label.length + 1 : 0) : ticketWidth > 0 ? ticketWidth + 1 : 0
       return (
         <Box key={key} flexDirection="column">
@@ -1185,12 +1276,26 @@ export const register: Register = (on, options) => {
                 </Button>
               </Box>
             </Box>
+            {laneMark && (
+              <Box flexShrink={0}>
+                <Text color={laneMark.color}>{`${laneMark.glyph} ${laneMark.word}`}</Text>
+              </Box>
+            )}
             {right && (
               <Box flexShrink={0}>
                 <Text dimColor>{right}</Text>
               </Box>
             )}
           </Box>
+          {laneTree.length > 0 && (
+            <Box flexDirection="column" paddingLeft={2}>
+              {laneTree.map(line => (
+                <Text dimColor wrap="truncate-end">
+                  {line}
+                </Text>
+              ))}
+            </Box>
+          )}
           {isOpen && under.length > 0 && (
             <Box flexDirection="column" paddingLeft={2}>
               {under.map(agentRow)}

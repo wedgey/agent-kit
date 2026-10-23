@@ -1,4 +1,4 @@
-import type { AgentRow, AgentStatusWord, BranchHealth, Orphan, QueueStatus, ShellTask, SpawnInfo, TodoItem, TodoList, Verdict } from '../types'
+import type { AgentRow, AgentStatusWord, BranchHealth, LaneEntry, LaneProgress, Orphan, QueueStatus, ShellTask, SpawnInfo, TodoItem, TodoList, Verdict } from '../types'
 
 export type ProcRow = { pid: number; ppid: number; pgid: number; cpu: number; rssKb: number; args: string }
 
@@ -310,7 +310,7 @@ export const usageTokens = (u: {
 
 const TODO_STATUSES: readonly string[] = ['pending', 'in_progress', 'completed', 'skipped']
 
-export type TodoInput = { title?: string; link?: string; items: Pick<TodoItem, 'content' | 'status' | 'note' | 'ticket'>[] }
+export type TodoInput = { title?: string; link?: string; items: Pick<TodoItem, 'content' | 'status' | 'note' | 'ticket' | 'lane'>[] }
 
 export function todoInputError(input: Record<string, unknown>): string | undefined {
   if (!Array.isArray(input.items)) return '`items` must be an array of { content, status, note? }'
@@ -318,14 +318,15 @@ export function todoInputError(input: Record<string, unknown>): string | undefin
     if (typeof item?.content !== 'string' || item.content.trim() === '') return `items[${i}].content must be non-empty text`
     if (!TODO_STATUSES.includes(item.status)) return `items[${i}].status must be one of ${TODO_STATUSES.join(', ')}`
     if (item.ticket !== undefined && typeof item.ticket !== 'string') return `items[${i}].ticket must be text, as #123, owner/repo#123 or a URL`
+    if (item.lane !== undefined && typeof item.lane !== 'string') return `items[${i}].lane must be text, the background session's name`
   }
   return undefined
 }
 
 export function applyTodos(prev: TodoList | undefined, input: TodoInput, now: number): TodoList {
-  const items = input.items.map(({ content, status, note, ticket }) => {
+  const items = input.items.map(({ content, status, note, ticket, lane }) => {
     const startedAt = status === 'pending' ? undefined : (prev?.items.find(p => p.content === content)?.startedAt ?? (status === 'in_progress' ? now : undefined))
-    return { content, status, ...(note ? { note } : {}), ...(ticket ? { ticket } : {}), ...(startedAt === undefined ? {} : { startedAt }) }
+    return { content, status, ...(note ? { note } : {}), ...(ticket ? { ticket } : {}), ...(lane ? { lane } : {}), ...(startedAt === undefined ? {} : { startedAt }) }
   })
   const title = input.title ?? prev?.title
   const link = input.link ?? prev?.link
@@ -525,4 +526,22 @@ export function parseBranch(stdout: string): BranchHealth | undefined {
   if (!branch) return undefined
   const repo = repoOf(remote)
   return { branch, ...(trunk ? { trunk } : {}), ...(behind ? { behind: Number(behind) } : {}), changed: Number(changed) || 0, ...(repo ? { repo } : {}) }
+}
+
+export function parseAgentsList(stdout: string): LaneEntry[] | undefined {
+  try {
+    const list: unknown = JSON.parse(stdout)
+    return Array.isArray(list) ? list.filter((e): e is LaneEntry => typeof e?.name === 'string' && typeof e.sessionId === 'string') : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const matchLane = (entries: readonly LaneEntry[], name: string) =>
+  entries.filter(e => e.name === name).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]
+
+export function laneProgress(list: TodoList, repo?: string): LaneProgress {
+  const { now, next, done } = groupTodos(list.items)
+  const first = next[0]
+  return { done: done.length, total: list.items.length, now: now.slice(0, 2).map(i => todoTitle(i, repo)), ...(first ? { next: todoTitle(first, repo) } : {}) }
 }
