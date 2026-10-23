@@ -59,6 +59,7 @@ import {
   queueTotals,
   laneProgress,
   matchLane,
+  oneLine,
   parseAgentsList,
   type ProcRow,
 } from './lib'
@@ -105,7 +106,7 @@ const LANES_IDLE_EVERY_MS = 30_000
 const LANES_TIMEOUT_MS = 10_000
 const LANE_ICON: Record<string, { glyph: string; color: string }> = {
   working: { glyph: '●', color: 'suggestion' },
-  blocked: { glyph: '◐', color: 'warning' },
+  blocked: { glyph: '⚠', color: 'warning' },
   failed: { glyph: '✗', color: 'error' },
   done: { glyph: '✓', color: 'success' },
   stopped: { glyph: '■', color: 'inactive' },
@@ -517,27 +518,33 @@ async function pollLanesOnce($: $, isForced: boolean) {
   // A failed read keeps the last readings rather than calling every lane missing.
   if (!entries) return
   const [prev, branch] = await Promise.all([read($, lanesA), read($, branchA)])
-  const next: Record<string, LaneReading> = {}
+  // Lane names are any text: a plain object would hand `constructor` or `__proto__` its prototype's.
+  const next: Record<string, LaneReading> = Object.create(null)
   for (const name of names) {
-    const entry = matchLane(entries, name)
-    if (!entry) {
-      next[name] = { isMissing: true }
-      continue
-    }
-    const saved = (await $.store.get(`${TODOS_KEY}${entry.sessionId}`).catch(() => undefined)) as { todos?: TodoList } | undefined
-    const before = prev[name]
-    // No list read keeps the last one of the same session; never a made-up 0/0.
-    const progress = Array.isArray(saved?.todos?.items)
-      ? laneProgress(saved.todos, contextRepo(saved.todos.link, branch.repo))
-      : before && !before.isMissing && before.sessionId === entry.sessionId
-        ? before.progress
-        : undefined
-    next[name] = {
-      state: entry.state ?? entry.status ?? 'unknown',
-      sessionId: entry.sessionId,
-      ...(entry.waitingFor ? { waitingFor: entry.waitingFor } : {}),
-      ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
-      ...(progress ? { progress } : {}),
+    const before = Object.hasOwn(prev, name) ? prev[name] : undefined
+    try {
+      const entry = matchLane(entries, name)
+      if (!entry) {
+        next[name] = { isMissing: true }
+        continue
+      }
+      const saved = (await $.store.get(`${TODOS_KEY}${entry.sessionId}`).catch(() => undefined)) as { todos?: TodoList } | undefined
+      const list = saved?.todos !== null && typeof saved?.todos === 'object' && todoInputError(saved.todos) === undefined ? saved.todos : undefined
+      // No valid list keeps the last one of the same session; never a made-up 0/0.
+      const progress = list
+        ? laneProgress(list, contextRepo(list.link, branch.repo))
+        : before && !before.isMissing && before.sessionId === entry.sessionId
+          ? before.progress
+          : undefined
+      next[name] = {
+        state: oneLine(entry.state ?? entry.status ?? 'unknown'),
+        sessionId: entry.sessionId,
+        ...(entry.waitingFor ? { waitingFor: oneLine(entry.waitingFor) } : {}),
+        ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
+        ...(progress ? { progress } : {}),
+      }
+    } catch {
+      if (before) next[name] = before
     }
   }
   await update($, lanesA, () => next)
@@ -1234,7 +1241,7 @@ export const register: Register = (on, options) => {
               : (item.note ?? '')
       const { ticket, text } = ticketOf(item, repo)
       const label = ticket ? clip(ticket.label) : ''
-      const lane = item.lane === undefined ? undefined : lanes[item.lane]
+      const lane = item.lane !== undefined && Object.hasOwn(lanes, item.lane) ? lanes[item.lane] : undefined
       const laneMark =
         item.lane === undefined
           ? undefined
@@ -1242,12 +1249,12 @@ export const register: Register = (on, options) => {
             ? { glyph: '◌', color: 'inactive', word: 'lane' }
             : lane.isMissing
               ? { glyph: '◌', color: 'inactive', word: 'lane missing' }
-              : { ...(LANE_ICON[lane.state] ?? { glyph: '◌', color: 'inactive' }), word: lane.state }
+              : { ...(Object.hasOwn(LANE_ICON, lane.state) ? LANE_ICON[lane.state]! : { glyph: '◌', color: 'inactive' }), word: lane.state }
       const laneTree =
         !isNarrow && isOpen && item.lane !== undefined && lane && !lane.isMissing
           ? [
               [
-                `lane ${item.lane}`,
+                `lane ${oneLine(item.lane)}`,
                 lane.state,
                 lane.waitingFor ? `waiting for ${lane.waitingFor}` : undefined,
                 lane.startedAt === undefined ? undefined : formatDuration(now - lane.startedAt),
@@ -1278,7 +1285,7 @@ export const register: Register = (on, options) => {
             </Box>
             {laneMark && (
               <Box flexShrink={0}>
-                <Text color={laneMark.color}>{`${laneMark.glyph} ${laneMark.word}`}</Text>
+                <Text color={laneMark.color}>{isNarrow ? laneMark.glyph : `${laneMark.glyph} ${laneMark.word}`}</Text>
               </Box>
             )}
             {right && (
@@ -1289,8 +1296,8 @@ export const register: Register = (on, options) => {
           </Box>
           {laneTree.length > 0 && (
             <Box flexDirection="column" paddingLeft={2}>
-              {laneTree.map(line => (
-                <Text dimColor wrap="truncate-end">
+              {laneTree.map((line, i) => (
+                <Text key={`${key}:lane:${i}`} dimColor wrap="truncate-end">
                   {line}
                 </Text>
               ))}

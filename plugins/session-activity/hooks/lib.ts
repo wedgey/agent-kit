@@ -537,11 +537,14 @@ export function parseAgentsList(stdout: string): LaneEntry[] | undefined {
   }
 }
 
+// Text from another session: a newline or escape sequence would break or restyle the pane's rows.
+export const oneLine = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ')
+
 export const matchLane = (entries: readonly LaneEntry[], name: string) =>
-  entries.filter(e => e.name === name).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]
+  entries.filter(e => e.kind === 'background' && e.name === name).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]
 
 export function laneProgress(list: TodoList, repo?: string): LaneProgress {
   const { now, next, done } = groupTodos(list.items)
   const first = next[0]
-  return { done: done.length, total: list.items.length, now: now.slice(0, 2).map(i => todoTitle(i, repo)), ...(first ? { next: todoTitle(first, repo) } : {}) }
+  return { done: done.length, total: list.items.length, now: now.slice(0, 2).map(i => oneLine(todoTitle(i, repo))), ...(first ? { next: oneLine(todoTitle(first, repo)) } : {}) }
 }

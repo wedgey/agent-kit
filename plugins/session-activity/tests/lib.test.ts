@@ -54,6 +54,7 @@ import {
   laneProgress,
   matchLane,
   parseAgentsList,
+  oneLine,
 } from '../hooks/lib'
 
 const PS = [
@@ -611,6 +612,18 @@ describe('lanes', () => {
     const entries = [entry('rd-12', 'old', 100), entry('rd-12', 'new', 200), entry('rd-13', 'other', 300)]
     expect(matchLane(entries, 'rd-12')?.sessionId).toBe('new')
     expect(matchLane(entries, 'rd-14')).toBeUndefined()
+  })
+
+  test('an interactive session of the same name is never the lane', () => {
+    const entries = [{ ...entry('rd-12', 'me', 900), kind: 'interactive', state: undefined }, entry('rd-12', 'bg', 100)]
+    expect(matchLane(entries, 'rd-12')?.sessionId).toBe('bg')
+    expect(matchLane(entries.slice(0, 1), 'rd-12')).toBeUndefined()
+  })
+
+  test("another session's text loses its control characters", () => {
+    expect(oneLine('a\nb\u001b[31mc\u0085d\r\n')).toBe('a b [31mc d ')
+    const list = { items: [{ content: 'Fix\nthe\u001b[2Jloader', status: 'in_progress' as const }, { content: 'Next\tone', status: 'pending' as const }] }
+    expect(laneProgress(list)).toEqual({ done: 0, total: 2, now: ['Fix the [2Jloader'], next: 'Next one' })
   })
 
   test("a lane's progress counts skipped as done and names its first two in-progress items and first pending one, with tickets", () => {
