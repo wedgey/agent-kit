@@ -1,12 +1,10 @@
 {
   "name": "conductor",
-  "version": "0.1.0",
   "description": "How a coding agent plans, delegates to role agents on the right model tier, and verifies. Ships the role agents, a box-wide queue for heavy checks, and hooks that keep agents from waiting in loops",
   "author": {
     "name": "Desmond Poon"
   },
   "repository": "https://github.com/wedgey/agent-kit",
-  "skills": "./skills/",
   "agents": [
     "./skills/conductor/bindings/claude-code-agents/editor.md",
     "./skills/conductor/bindings/claude-code-agents/explorer.md",

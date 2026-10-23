@@ -46,7 +46,7 @@ Spawn each role as its role agent. The conductor plugin ships them from `claude-
 
 To escalate, pass both `model` and `effort` from the tier table, and keep the spawn's `description` unchanged so the retry reads as the same piece of work. A per-spawn `model` replaces the agent's model, but the agent's `effort` stays unless you pass one.
 
-If `subagent_type` is unknown, the plugin is not installed or not enabled in this session. Tell the operator to run `/conductor:conductor setup`, then use the fallback type, pass `model` and `effort` on every spawn, and paste the body of `claude-code-agents/<role>.md` (everything below its frontmatter) into the brief.
+If `subagent_type` is unknown, the plugin is not installed or not enabled in this session. Tell the operator to install it with `/plugin marketplace add wedgey/agent-kit` and `/plugin install conductor@agent-kit`, or to enable it with `/plugin enable conductor@agent-kit`, then run `/reload-plugins`. Meanwhile use the fallback type, pass `model` and `effort` on every spawn, and paste the body of `claude-code-agents/<role>.md` (everything below its frontmatter) into the brief.
 
 The explorer, reviewer and verifier agents cannot edit or write files but can still run shell commands. After one of them, or any fallback spawn of those roles, returns, run `git status` and treat any change as a failed gate.
 

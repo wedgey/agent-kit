@@ -5,10 +5,9 @@ Read only during `/conductor:conductor setup`.
 ## The package
 
 - Conductor's package is the `conductor` plugin in the `agent-kit` marketplace. Install it with `/plugin marketplace add wedgey/agent-kit`, then `/plugin install conductor@agent-kit`. `/plugin uninstall conductor@agent-kit` removes it.
-- It ships the skill as `conductor:conductor`, the five role agents as `conductor:<role>`, a `PreToolUse` hook on `Bash` that runs `tools/hooks/pretooluse.mjs`, and a `SessionStart` hook that adds the pointer to every session's context.
+- It ships the skill as `conductor:conductor`, the five role agents as `conductor:<role>`, a `PreToolUse` hook on `Bash` that runs `tools/hooks/pretooluse.mjs`, and a `SessionStart` hook that adds the pointer to every session's context. The hook reads the pointer from `setup.md` and writes `/conductor` as `/conductor:conductor`.
 - It is installed and enabled when `claude plugin list --json` has an entry with `"id": "conductor@agent-kit"` and `"enabled": true`. A session started with `claude --plugin-dir <checkout>` loads it without an install and is not in that list. Then `conductor:conductor` among this session's skills is the proof.
 - Disabled: `/plugin enable conductor@agent-kit`, then `/reload-plugins` or a new session.
-- The plugin root is two levels above this skill's base directory. Its `hooks/session-start.mjs` prints the pointer.
 - In headless `-p` mode, the doctor needs permission to run `claude plugin list` and read the files named below. Without it, say which check could not run.
 - Suggest a slot count, and never write it. When `~/.claude/settings.json` has no `env.CONDUCTOR_QUEUE_SLOTS_TESTS`, suggest adding `CONDUCTOR_QUEUE_SLOTS_TESTS` = a quarter of `nproc`, at least 1, to that `env`. The hook and the queue both read it. Without it a queue runs one command at a time.
 
@@ -41,8 +40,8 @@ Output this table.
 
 Then check the hook and the pointer, and report each on its own line below the table, `Hook:` and `Pointer:`, not as rows in it.
 
-- **Hook.** Run `until true; do sleep 1; done` with the `Bash` tool. The registered hook must deny it with a reason that starts `Do not block the turn by sleeping or polling.` It cannot hang, because `until true` ends at once when nothing denies it. Then pipe `{"tool_name":"Bash","tool_input":{"command":"until grep -q x f; do sleep 20; done"}}` to `env -u CI node <skill base directory>/tools/hooks/pretooluse.mjs`. It must print JSON with `"permissionDecision":"deny"`.
-- **Pointer.** This session's context must hold the pointer from the `SessionStart` hook. It begins `Conductor governs how you work in every repo.` and names `/conductor:conductor`. If it is missing while the plugin is loaded, run `node <plugin root>/hooks/session-start.mjs` and report what it prints.
+- **Hook.** Run `until true; do sleep 1; done` with the `Bash` tool. The registered hook must deny it with a reason that starts `Do not block the turn by sleeping or polling.` It cannot hang, because `until true` ends at once when nothing denies it. A leftover settings hook alone also passes this check, so the leftover check below is what tells the two apart.
+- **Pointer.** This session's context must hold the pointer from the `SessionStart` hook. It begins `Conductor governs how you work in every repo.` and names `/conductor:conductor`.
 
 ## Leftovers of the old install
 
@@ -50,9 +49,24 @@ Before the plugin, setup wrote these files. Each one now doubles a piece the plu
 
 | Leftover | Found when | Removal |
 |---|---|---|
-| Pointer block | `~/.claude/CLAUDE.md` has a `<!-- conductor:start -->` line | Delete the lines from `<!-- conductor:start -->` through `<!-- conductor:end -->`, both markers included, and nothing else. With GNU sed: `sed -i '/^<!-- conductor:start -->$/,/^<!-- conductor:end -->$/d' ~/.claude/CLAUDE.md` |
-| Role agents | `ls ~/.claude/agents/conductor-*.md` lists files | `rm` each file it lists, for example `rm ~/.claude/agents/conductor-*.md` |
+| Pointer block | The guard below prints exactly two lines | The command below |
+| Role agents | Any of `~/.claude/agents/conductor-{editor,explorer,implementer,reviewer,verifier}.md` exists | `rm` each one that exists, by its full name. Leave any other file in that folder alone |
 | Skill copy | `~/.claude/skills/conductor` exists | `rm -r ~/.claude/skills/conductor`. If it is a symlink, `rm ~/.claude/skills/conductor` removes only the link |
+| Shared skill copy | `~/.agents/skills/conductor` exists. The old setup accepted it as an install location | Other harnesses may read this path. Remove it only when no harness on the machine uses it, with `rm -r ~/.agents/skills/conductor`, or `rm ~/.agents/skills/conductor` for a symlink |
 | Settings hook | `~/.claude/settings.json` `hooks.PreToolUse` holds an inner hook object whose `command` contains `conductor/tools/hooks/pretooluse.mjs` | Remove each such object, and its matcher group only when that leaves the group's `hooks` empty. Touch nothing else. This command does it and rewrites the file with two-space indent: `node -e 'const fs=require("fs"),f=process.argv[1],m="conductor/tools/hooks/pretooluse.mjs",s=JSON.parse(fs.readFileSync(f,"utf8")),own=(h)=>String(h.command).includes(m);s.hooks.PreToolUse=s.hooks.PreToolUse.flatMap((g)=>g.hooks?.some(own)?(g.hooks=g.hooks.filter((h)=>!own(h))).length?[g]:[]:[g]);fs.writeFileSync(f,JSON.stringify(s,null,2)+"\n")' ~/.claude/settings.json` |
+
+**Pointer block.** First run this guard. It matches a marker line with any surrounding spaces and a trailing CR.
+
+```
+grep -nE '^[[:space:]]*<!-- conductor:(start|end) -->[[:space:]]*$' ~/.claude/CLAUDE.md
+```
+
+The block is a leftover only when the guard prints exactly two lines, a `start` line and then an `end` line. Then give this removal. It deletes both markers and the lines between, and keeps a symlinked file a symlink.
+
+```
+sed -i --follow-symlinks '/^[[:space:]]*<!-- conductor:start -->[[:space:]]*$/,/^[[:space:]]*<!-- conductor:end -->[[:space:]]*$/d' ~/.claude/CLAUDE.md
+```
+
+When the guard prints anything else, such as a lone marker, two blocks or `end` before `start`, give no command, because the range would delete to the end of the file. List the lines it printed and leave the edit to the operator.
 
 After removing any of them, start a new session so the plugin's pieces are the only ones loaded.

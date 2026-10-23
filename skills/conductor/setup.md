@@ -11,3 +11,14 @@ Setup writes no files. Each harness gets conductor as one package whose install 
 5. **Reply.** Lead with whether routing works. Then give the doctor table and its lines, then the leftovers and their removals, or say there are none. Name every mismatch the doctor found and its likely cause.
 
 Re-running setup changes no file.
+
+## The pointer
+
+The package adds this text to the context of every session. The binding gives the form `/conductor` takes in its harness.
+
+```
+Conductor governs how you work in every repo.
+At the start of any coding task, load the conductor skill and follow its matched playbook.
+The repo's own rules win where they conflict.
+`/conductor` forces it on. `/conductor setup` checks the install.
+```

@@ -48,8 +48,8 @@ The todo list is how the operator follows the work without reading the transcrip
 - **Nested playbooks expand in place.** When a step runs another playbook, such as opening-a-pr, insert that playbook's leads after the step. The parent step stays in progress until they are done, and they are the only other steps that may be.
 - **Never silently drop a step.** A step that stops applying is marked skipped with its reason. New work found on the way becomes a new todo in the order it will run.
 - **Link the work state.** When the repo declares a tracker, give the list a link to the issue that holds the work state.
-- **Name the ticket.** When an item's work has its own issue or PR, start the item's text with its number, as in `#123 Fix the login redirect`. The operator can then tell from the list alone what is being worked on now and what comes next.
-- **Done means only the merge is left.** A top-level item whose work ends in a PR is done only when all that remains is waiting or watching for the merge queue, such as Mergify, to merge it. Open review threads, failing checks or unfinished verification keep it in progress.
+- **Name the ticket.** When an item's work has its own issue, PR or tracker key, put that number or key in front of the item's text, as in `#123 Fix the login redirect` or `PROJ-45 Fix the login redirect`. This applies to a playbook's lead too. The rest of the lead stays word for word. The operator can then tell from the list alone what is being worked on now and what comes next.
+- **Done means only the merge is left.** A top-level item whose work ends in a PR is done only when its PR is merge-ready as [babysit](playbooks/babysit.md) defines it and only the merge itself is left. Open review threads, failing checks or unfinished verification keep it in progress.
 
 ## Playbooks
 
