@@ -245,6 +245,18 @@ describe("the body a typed queued form runs", () => {
     ["node /s/queue.mjs run --queue=tests --'' bash -c 'touch /tmp/x'", ["touch /tmp/x"]],
     ["pytest", []],
     ["grep -n queue.mjs file", []],
+    ["node /s/queue.mjs run -- X=./evil", ["'X=./evil'"]],
+    ["node /s/queue.mjs run -- pnpm test --reporter=dot", ["pnpm test --reporter=dot"]],
+    ["node /s/queue.mjs run -- zsh -c 'touch /tmp/x'", ["zsh -c 'touch /tmp/x'"]],
+    ["node /s/queue.mjs run -- dash -c 'touch /tmp/x'", ["dash -c 'touch /tmp/x'"]],
+    ["node /s/queue.mjs status --json | jq .", []],
+    ["node /s/queue.mjs stop tests 0", []],
+    ["node /s/queue.mjs move abc top", []],
+    ['git commit -m "use node /s/queue.mjs run -- pnpm test"', []],
+    ["gh pr create --body \"node /s/queue.mjs run -- x; touch\"", []],
+    ["rg 'node .*queue\\.mjs run'", []],
+    ['pgrep -af "node.*queue.mjs run"', []],
+    ["cat > doc.md <<'EOF'\nnode /s/queue.mjs run -- pnpm test\nEOF", []],
   ])("%s runs %j", (command, bodies) => expect(queuedBodies(command)).toEqual(bodies));
 
   each([
@@ -261,12 +273,34 @@ describe("the body a typed queued form runs", () => {
     "node /s/queue.mjs run --queue=tests",
     "X=1 node /s/queue.mjs run -- vitest",
     "node /s/queue.mjs r''un -- vitest; touch /tmp/x",
+    "node /s/queue.mjs $'run' -- vitest; touch /tmp/x",
+    'node /s/queue.mjs $"run" -- vitest; touch /tmp/x',
+    "node /s/queue.mjs --exec x",
+    "node /s/queue.mjs run -- cat ~/.ssh/id_rsa",
+    "true & node /s/queue.mjs run -- touch /tmp/x",
+    "{ node /s/queue.mjs run -- touch /tmp/x; }",
+    "env node /s/queue.mjs run -- touch /tmp/x",
+    "/usr/bin/node /s/queue.mjs run -- touch /tmp/x",
   ])("denies %j, whose body cannot be checked", (command) => expect(queuedBodies(command)).toBeNull());
 
   it("names the plain command a heredoc or a flagged shell runs, when it can", () => {
     expect(typedQueued("node /s/queue.mjs run -- bash <<'EOF'\npnpm test\nEOF")).toMatchObject({ plain: "pnpm test" });
     expect(typedQueued("node /s/queue.mjs run -- bash -lc 'pnpm test'")).toMatchObject({ plain: "pnpm test" });
-    expect(typedQueued("node /s/queue.mjs run -- a; b").plain).toBeUndefined();
+    expect(typedQueued("node /s/queue.mjs run -- a; b").plain).toBe("a; b");
+    expect(typedQueued("node /s/queue.mjs run -- bash -c 'echo $0' x").plain).toBeUndefined();
+    expect(typedQueued("node /s/queue.mjs run -- a && node /s/queue.mjs run -- b").plain).toBeUndefined();
+  });
+
+  it("names the plain command when the typed form is joined to other commands", () => {
+    expect(typedQueued("cd /repo && node /s/queue.mjs run -- pnpm test")).toMatchObject({ plain: "cd /repo && pnpm test" });
+    expect(typedQueued("node /s/queue.mjs run --queue=tests -- bash -c 'pnpm test' 2>&1 | tail -40")).toMatchObject({ plain: "pnpm test 2>&1 | tail -40" });
+  });
+
+  it("reads a long command that is no typed form in linear time", () => {
+    const start = Date.now();
+    expect(typedQueued("node ".repeat(20_000))).toBeNull();
+    expect(typedQueued(`echo ${"node queue.mjs ".repeat(7_000)}`)).toBeNull();
+    expect(Date.now() - start).toBeLessThan(300);
   });
 
   each(["it's", 'say "hi"', "a; b", "echo $(date) `id`", "a\nb", "a\\'b"])("round-trips %j through its queued form", (command) =>

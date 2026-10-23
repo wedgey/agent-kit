@@ -5,7 +5,7 @@
  */
 
 import { bypassed } from "./hook-io.mjs";
-import { commandSegments, shellBodies, shellWords } from "./shell.mjs";
+import { commandSegments, segments, shellBodies, shellWords, withoutHeredocs } from "./shell.mjs";
 import { waitLoopReason } from "./wait-loop.mjs";
 
 export const BYPASS_ENV = "CONDUCTOR_HOOKS";
@@ -243,10 +243,23 @@ export function dupeKey(command) {
   return [...segments.slice(0, heavy.index).map(normalized), head].join(" && ");
 }
 
-// Quotes and backslashes are dropped first, so `r''un` or `"queue.mjs"` cannot hide a typed form.
-const TYPED = /\bnode\b[\s\S]*queue\.mjs\s+run\b/;
 const HEREDOC = /^([^\n]*?)<<-?[ \t]*(['"]?)(\w+)\2[ \t]*\n([\s\S]*?)\n[ \t]*\3[ \t]*$/;
 const PLAIN_WORD = /^[\w@%+=:,./-]+$/;
+const UNWRAPPED = /^(?:ba)?sh$/;
+const READ_ONLY_SUBCOMMANDS = new Set(["status", "stop", "move"]);
+
+/** Drops quotes and backslashes, `$'..'` and `$".."` included, so quoting cannot hide a word. */
+const unquoted = (text) => text.replaceAll("\\\n", "").replaceAll("$'", "'").replaceAll('$"', '"').replace(/['"\\]/g, "");
+
+/** Whether a segment calls `node .../queue.mjs` with any subcommand but status, stop or move. */
+function callsQueue(segment) {
+  const head = commandHead(unquoted(segment));
+  const at = head.findIndex((t) => t.endsWith("queue.mjs"));
+  return head[0] === "node" && at > 0 && !READ_ONLY_SUBCOMMANDS.has(head[at + 1]);
+}
+
+/** Whether any command start in the text, heredoc bodies and quoted text aside, calls the queue. */
+const typesQueued = (command) => segments(withoutHeredocs(command), true).some(callsQueue);
 
 /** The argv after a `queue.mjs run ... --`, or null when the text is not exactly that one call. */
 function queuedArgv(text) {
@@ -255,31 +268,43 @@ function queuedArgv(text) {
   return words && words[0] === "node" && QUEUE_TOKEN.test(words[1] ?? "") && words[2] === "run" && sep > 2 ? words.slice(sep + 1) : null;
 }
 
+/** What a queued argv runs as `{ body }`, or `{ error, plain? }`. Only bash and sh scripts are unwrapped. */
+function bodyOf(argv) {
+  if (!argv?.length) return { error: "it is not one plain queue.mjs run call with -- before the command" };
+  const shell = argv[0].slice(argv[0].lastIndexOf("/") + 1);
+  if (UNWRAPPED.test(shell) && (argv.length !== 3 || argv[1] !== "-c")) {
+    const flags = argv.slice(1, -1);
+    const flagged = flags.length > 0 && flags.every((f) => /^-[a-z]*$/.test(f)) && flags.some((f) => f.includes("c"));
+    return { error: `${argv[0]} does not run exactly one -c script`, ...(flagged ? { plain: argv.at(-1) } : {}) };
+  }
+  // A first word holding `=` is a file queue.mjs spawns, not an assignment, so it stays quoted.
+  const body = UNWRAPPED.test(shell) ? argv[2] : argv.map((w, i) => (PLAIN_WORD.test(w) && !(i === 0 && w.includes("=")) ? w : shellQuote(w))).join(" ");
+  return typesQueued(body) ? { error: "it runs another queue.mjs run inside" } : { body };
+}
+
+/** The command with its one typed queued call replaced by the body, when that body is one simple command. */
+function joinedPlain(command) {
+  const calls = commandSegments(command).filter(callsQueue);
+  if (calls.length !== 1) return {};
+  const call = calls[0].replace(REDIRECT, "");
+  const { body } = bodyOf(queuedArgv(call));
+  return body && commandSegments(body).length === 1 && command.includes(call) ? { plain: command.replace(call, () => body) } : {};
+}
+
 /**
  * What a typed `node .../queue.mjs run` form runs, read as the shell reads it: null when the
  * command has none, `{ body }` when it is one plain call, else `{ error, plain? }`, `plain` being
  * the command to type instead when it can be recovered.
  */
 export function typedQueued(command) {
-  if (!TYPED.test(command.replace(/\\\n/g, "").replace(/['"\\]/g, ""))) return null;
+  if (!typesQueued(command)) return null;
   const heredoc = HEREDOC.exec(command);
   if (heredoc) {
     const argv = queuedArgv(heredoc[1]);
-    return { error: "it feeds a script on stdin", ...(argv?.length === 1 && SHELL.test(argv[0]) ? { plain: heredoc[4] } : {}) };
+    return { error: "it feeds a script on stdin", ...(argv?.length === 1 && UNWRAPPED.test(argv[0]) ? { plain: heredoc[4] } : {}) };
   }
   const argv = queuedArgv(command);
-  if (!argv?.length) return { error: "it is not one plain queue.mjs run call with -- before the command" };
-  let body = argv.map((w) => (PLAIN_WORD.test(w) ? w : shellQuote(w))).join(" ");
-  if (SHELL.test(argv[0].slice(argv[0].lastIndexOf("/") + 1))) {
-    const script = argv.at(-1);
-    if (argv.length !== 3 || argv[1] !== "-c") {
-      const flagged = argv.length > 2 && argv.slice(1, -1).every((f) => /^-[a-z]*$/.test(f)) && argv.slice(1, -1).some((f) => f.includes("c"));
-      return { error: `${argv[0]} does not run exactly one -c script`, ...(flagged ? { plain: script } : {}) };
-    }
-    body = script;
-  }
-  if (TYPED.test(body.replace(/['"\\]/g, ""))) return { error: "it runs another queue.mjs run inside" };
-  return { body };
+  return argv ? bodyOf(argv) : { error: "it is not one plain queue.mjs run call with -- before the command", ...joinedPlain(command) };
 }
 
 /** The body a typed queued form runs: [] for none, null when it cannot be read and must be denied. */

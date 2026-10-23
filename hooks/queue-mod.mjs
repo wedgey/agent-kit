@@ -16,7 +16,7 @@ async function verdict($, command) {
 }
 
 const typeTheCommand = (why, plain) =>
-  `${why}. Type the plain command instead${plain ? `: ${plain}` : ""}; the queue wraps a heavy command itself.`;
+  `${why}. Type the plain command instead and run it in the background${plain ? `: ${plain}` : ""}; the queue wraps a heavy command itself.`;
 
 /** A deny for a typed queued form whose body a rule denies, would prompt, or cannot be read; else null. */
 async function checkTyped($, typed, outerVerdict) {

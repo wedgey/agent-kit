@@ -4,8 +4,9 @@
 /**
  * Splits on `&&`, `||`, `;`, `|` and newlines outside quotes, so a quoted pattern or
  * message is never read as a command. Use `commandSegments` where heredoc bodies may occur.
+ * `wide` also splits on `&`, parentheses, braces and backticks, to find every command start.
  */
-export function segments(command) {
+export function segments(command, wide = false) {
   const out = [];
   let current = "";
   let quote = null;
@@ -25,7 +26,7 @@ export function segments(command) {
     } else if (ch === "\\") {
       current += ch + (command[i + 1] ?? "");
       i += 1;
-    } else if (ch === ";" || ch === "|" || ch === "\n" || (ch === "&" && command[i + 1] === "&")) {
+    } else if (ch === ";" || ch === "|" || ch === "\n" || (ch === "&" && command[i + 1] === "&") || (wide && WIDE.has(ch))) {
       out.push(current);
       current = "";
       if (command[i + 1] === ch) i += 1;
@@ -36,6 +37,8 @@ export function segments(command) {
   out.push(current);
   return out.map((s) => s.trim()).filter(Boolean);
 }
+
+const WIDE = new Set(["&", "(", ")", "{", "}", "`"]);
 
 /** The heredoc tag a line opens, ignoring `<<<` here-strings and `$((1<<2))` shifts. */
 function heredocTag(line) {
@@ -118,7 +121,7 @@ const DQ_ESCAPES = new Set(["$", "`", '"', "\\"]);
 /**
  * The words the shell would pass as argv, with quotes, escapes and adjacent pieces joined, or null
  * when the text holds anything more than plain words: an operator, redirect, heredoc, expansion,
- * glob, comment or open quote.
+ * glob, tilde, comment or open quote.
  */
 export function shellWords(text) {
   const words = [];
@@ -149,7 +152,7 @@ export function shellWords(text) {
           if (text[i] !== "\n") add(text[i]);
         } else add(text[i]);
       }
-    } else if (OPERATOR.has(ch) || (ch === "#" && word === null)) {
+    } else if (OPERATOR.has(ch) || (ch === "#" && word === null) || (ch === "~" && (word === null || /[=:]$/.test(word)))) {
       return null;
     } else add(ch);
   }

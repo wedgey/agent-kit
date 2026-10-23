@@ -171,6 +171,20 @@ describe('the Bash gate', () => {
     expect(w.helper).toEqual([])
   })
 
+  test('passes a command that only mentions a typed queued form, bypassed or not', async ($, on) => {
+    const w = harness(on, () => '', { CONDUCTOR_HOOKS: 'off' }, touchDenied)
+    const commit = 'git commit -m "run node /p/skills/conductor/tools/queue.mjs run -- touch /tmp/x"'
+    await bash($, commit)
+    expect(w.ran).toEqual([commit])
+  })
+
+  test('denies a typed queued form joined to other commands, naming the plain command to run in the background', async ($, on) => {
+    const w = harness(on, () => '')
+    const r = await bash($, 'cd /repo && node /p/skills/conductor/tools/queue.mjs run --queue=tests -- pnpm test', true)
+    expect(r.deny).toMatch(/background: cd \/repo && pnpm test; the queue wraps/)
+    expect(w.ran).toEqual([])
+  })
+
   test('passes everything when bypassed, wait loops included', async ($, on) => {
     const w = harness(on, () => '', { CONDUCTOR_HOOKS: 'off' })
     await bash($, 'pytest')

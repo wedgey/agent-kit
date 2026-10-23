@@ -51,12 +51,16 @@ describe("shellWords", () => {
     expect(shellWords(String.raw`a 'b c' "d \"e\" \$f" g\ h 'i'\''j' 'k'"l" --'' "--"`)).toEqual(["a", "b c", 'd "e" $f', "g h", "i'j", "kl", "--", "--"]);
   });
 
+  it("keeps a quoted or mid-word tilde literal", () => {
+    expect(shellWords("'~/x' a~b")).toEqual(["~/x", "a~b"]);
+  });
+
   it("splits on tabs and joins a backslash-newline", () => {
     expect(shellWords("a\tb \\\nc 'd\ne'")).toEqual(["a", "b", "c", "d\ne"]);
   });
 
   it("refuses anything that is more than plain words", () => {
-    for (const text of ["a; b", "a && b", "a | b", "a > f", "a <<EOF", "a\nb", "$(x)", "`x`", 'a "$x"', "a $x", "a *", "a # c", "(a)", "a {b,c}", "'open"]) {
+    for (const text of ["a; b", "a && b", "a | b", "a > f", "a <<EOF", "a\nb", "$(x)", "`x`", 'a "$x"', "a $x", "a *", "a # c", "(a)", "a {b,c}", "'open", "cat ~/.ssh/id_rsa", "~", "a=~/x", "PATH=a:~/b"]) {
       expect(shellWords(text)).toBe(null);
     }
   });
