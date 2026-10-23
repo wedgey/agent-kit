@@ -5,7 +5,7 @@
  */
 
 import { bypassed } from "./hook-io.mjs";
-import { commandSegments } from "./shell.mjs";
+import { commandSegments, shellBodies } from "./shell.mjs";
 import { waitLoopReason } from "./wait-loop.mjs";
 
 export const BYPASS_ENV = "CONDUCTOR_HOOKS";
@@ -39,14 +39,37 @@ const runsAfter = (first, second) =>
   ((first === "npm" || first === "bundle") && second === "exec") ||
   ((first === "uv" || first === "poetry") && second === "run");
 
-/** The tool a segment runs and its arguments, with env, wrappers and runners peeled off. */
+const KEYWORDS = new Set(["(", "{", "}", "!", "if", "then", "elif", "else", "while", "until", "do"]);
+const PASS_THROUGH = new Set(["nohup", "exec", "command"]);
+const ENV_VALUE_FLAGS = new Set(["-u", "--unset", "-C", "--chdir", "-S", "--split-string"]);
+
+/** Drops the flags a wrapper takes before the command it runs; `valued` flags take the next token. */
+function dropFlags(tokens, valued) {
+  while (tokens[0]?.startsWith("-") && tokens[0] !== "-") tokens.splice(0, valued(tokens[0]) ? 2 : 1);
+}
+
+/** The tool a segment runs and its arguments, with env, wrappers, runners and shell keywords peeled off. */
 export function commandHead(segment) {
-  const tokens = segment.split(/\s+/).filter(Boolean);
+  const tokens = segment.replace(/^[\s(]+/, "").replace(/[\s)]+$/, "").split(/\s+/).filter(Boolean);
   for (;;) {
     const [first, second] = tokens;
     if (first === undefined) return tokens;
-    if (ASSIGNMENT.test(first) || first === "time" || first === "env") tokens.shift();
-    else if (first === "nice") {
+    if (KEYWORDS.has(first) || ASSIGNMENT.test(first)) tokens.shift();
+    else if (first === "time") {
+      tokens.shift();
+      dropFlags(tokens, () => false);
+    } else if (first === "env") {
+      tokens.shift();
+      dropFlags(tokens, (f) => ENV_VALUE_FLAGS.has(f));
+    } else if (PASS_THROUGH.has(first)) {
+      // `command -v x` looks x up and runs nothing: its head stays the flag.
+      if (first === "command" && /^-[vV]$/.test(second ?? "")) return tokens;
+      tokens.shift();
+      dropFlags(tokens, (f) => f === "-a");
+    } else if (first === "stdbuf") {
+      tokens.shift();
+      dropFlags(tokens, (f) => /^-[ioe]$/.test(f));
+    } else if (first === "nice") {
       tokens.shift();
       if (tokens[0] === "-n") tokens.splice(0, 2);
       else if (/^-n?\d+$/.test(tokens[0] ?? "")) tokens.shift();
@@ -180,14 +203,55 @@ export function classifyQueued(segment) {
   return flag ? flag.slice("--queue=".length) : "default";
 }
 
-/** The first segment that runs a heavy command outside the queue, as { segment, queue }, or null. */
+const SHELL = /^(?:ba|z|da)?sh$/;
+
+/** The quoted bodies of a `sh|bash -c '...'` segment, or none. */
+const bodiesOf = (segment) => (SHELL.test(commandHead(segment)[0] ?? "") ? shellBodies(segment) : []);
+
+/**
+ * The first segment that runs a heavy command outside the queue, as { segment, queue, index },
+ * or null. A `bash -c '...'` body counts as the segment it sits in; `index` is the outer segment's.
+ */
 export function findUnqueuedHeavy(command) {
-  for (const segment of commandSegments(command)) {
+  const segments = commandSegments(command);
+  for (const [index, segment] of segments.entries()) {
     if (classifyQueued(segment)) continue;
     const queue = heavyQueue(commandHead(segment));
-    if (queue) return { segment, queue };
+    if (queue) return { segment, queue, index };
+    for (const body of bodiesOf(segment)) {
+      const inner = findUnqueuedHeavy(body);
+      if (inner) return { ...inner, index };
+    }
   }
   return null;
+}
+
+const REDIRECT = /\s+\d*(?:>{1,2}|&>|<)&?\s*\S+/g;
+const normalized = (text) => text.replace(REDIRECT, "").replace(/\s+/g, " ").trim();
+
+/**
+ * What a duplicate is judged by: the segments up to and including the heavy one, redirects
+ * dropped and what follows (`| tail -40`) ignored, so two runs that differ only there are one.
+ * A `bash -c` body is keyed on itself. Without a heavy segment, the whole command.
+ */
+export function dupeKey(command) {
+  const segments = commandSegments(command);
+  const heavy = findUnqueuedHeavy(command);
+  if (!heavy) return normalized(command);
+  const last = segments[heavy.index];
+  const head = bodiesOf(last).length && !heavyQueue(commandHead(last)) ? dupeKey(bodiesOf(last).find((b) => findUnqueuedHeavy(b))) : normalized(last);
+  return [...segments.slice(0, heavy.index).map(normalized), head].join(" && ");
+}
+
+/** What each `queue.mjs run` segment runs: its `sh -c` body, or the words after `--`. */
+export function queuedBodies(command) {
+  return commandSegments(command)
+    .filter((s) => classifyQueued(s) && s.includes(" -- "))
+    .flatMap((s) => {
+      const rest = s.slice(s.indexOf(" -- ") + 4).trim();
+      const bodies = bodiesOf(rest);
+      return bodies.length ? bodies : [rest];
+    });
 }
 
 export const shellQuote = (text) => `'${text.replaceAll("'", `'\\''`)}'`;

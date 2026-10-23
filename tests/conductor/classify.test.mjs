@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import { each, expect } from "./expect.mjs";
 
-import { commandHead, heavyQueue, triage } from "../../skills/conductor/tools/hooks/classify.mjs";
+import { commandHead, dupeKey, findUnqueuedHeavy, heavyQueue, queuedBodies, triage } from "../../skills/conductor/tools/hooks/classify.mjs";
 
 const queueOf = (command) => heavyQueue(commandHead(command));
 
@@ -180,4 +180,65 @@ describe("heavy command classifier", () => {
     "pnpm ci:watch",
     "turbo run test:watch",
   ])("never queues the watch mode %s", (command) => expect(queueOf(command)).toBeNull());
+});
+
+describe("wrappers and shell syntax around a heavy command", () => {
+  each([
+    "(pnpm test)",
+    "{ pnpm test; }",
+    "if true; then pnpm test; fi",
+    "for f in a; do pnpm test; done",
+    "while false; do :; done; until pnpm test; do :; done",
+    "env -u DATABASE_URL pnpm test",
+    "env -i PATH=/bin pnpm test",
+    "env --unset=X pnpm test",
+    "time -p pnpm test",
+    "nohup pnpm test",
+    "exec pnpm test",
+    "command pnpm test",
+    "stdbuf -oL pnpm test",
+    "stdbuf -o L -e L pnpm test",
+    "! pnpm test",
+    "bash -c 'pnpm test'",
+    'sh -c "cd pkg && pnpm test"',
+    "bash -lc 'pnpm test 2>&1 | tail -5'",
+  ])("finds the heavy command in %s", (command) => expect(findUnqueuedHeavy(command)?.queue).toBe("tests"));
+
+  each(["command -v pnpm", "bash -c 'echo pnpm test'", "env -u X ls", "nohup sleep 5"])("passes %s", (command) =>
+    expect(findUnqueuedHeavy(command)).toBeNull(),
+  );
+
+  it("never reads a queued form's own bash -c body as unqueued", () => {
+    expect(findUnqueuedHeavy("node /s/queue.mjs run --queue=tests -- bash -c 'pnpm test'")).toBeNull();
+  });
+});
+
+describe("the duplicate key", () => {
+  each([
+    ["pnpm test 2>&1 | tail -40", "pnpm test 2>&1 | tail -80"],
+    ["pnpm test > out.log", "pnpm  test"],
+    ["cd a && pnpm test | tail", "cd a &&  pnpm test 2>/dev/null"],
+    ["bash -c 'pnpm test | tail -5'", "pnpm test"],
+  ])("%s and %s are one run", (a, b) => expect(dupeKey(a)).toBe(dupeKey(b)));
+
+  each([
+    ["cd a && pnpm test", "cd b && pnpm test"],
+    ["pnpm test", "pnpm build"],
+    ["echo a", "echo b"],
+  ])("%s and %s are two runs", (a, b) => expect(dupeKey(a) === dupeKey(b)).toBe(false));
+
+  it("keys a command with no heavy segment on its whole normalized text", () => {
+    expect(dupeKey("  node  -e 1 ")).toBe("node -e 1");
+  });
+});
+
+describe("the body a typed queued form runs", () => {
+  each([
+    ["node /s/queue.mjs run --queue=tests -- bash -c 'touch /tmp/x && vitest'", ["touch /tmp/x && vitest"]],
+    ['node /s/queue.mjs run -- sh -c "pnpm test"', ["pnpm test"]],
+    ["node /s/queue.mjs run --queue=e2e -- playwright test", ["playwright test"]],
+    ["cd a && node /s/queue.mjs run -- x y", ["x y"]],
+    ["pytest", []],
+    ["node /s/queue.mjs run --queue=tests", []],
+  ])("%s runs %j", (command, bodies) => expect(queuedBodies(command)).toEqual(bodies));
 });

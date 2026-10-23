@@ -5,7 +5,7 @@ Read only during `/conductor:conductor setup`.
 ## The package
 
 - Conductor's package is the `conductor` plugin in the `agent-kit` marketplace. Install it with `/plugin marketplace add wedgey/agent-kit`, then `/plugin install conductor@agent-kit`. `/plugin uninstall conductor@agent-kit` removes it.
-- It ships the skill as `conductor:conductor`, the five role agents as `conductor:<role>`, a mod, `hooks/queue-mod.mjs`, whose `tool.call` hook on `Bash` queues heavy commands (in place when the session auto-approves the queued form, else by denying with it named) and denies wait loops (it asks `tools/hooks/decide.mjs` about any heavy or queued command), and a `SessionStart` hook that adds the pointer to every session's context. The hook reads the pointer from `setup.md` and writes `/conductor` as `/conductor:conductor`.
+- It ships the skill as `conductor:conductor`, the five role agents as `conductor:<role>`, a mod, `hooks/queue-mod.mjs`, whose `tool.call` hook on `Bash` queues heavy commands (in place when the session auto-approves both the command and its queued form, else by denying with the form named; it asks `tools/hooks/decide.mjs` about any heavy or queued command), a `PreToolUse` hook on `Bash` that denies wait loops (`tools/hooks/wait-loop-hook.mjs`), and a `SessionStart` hook that adds the pointer to every session's context. The hook reads the pointer from `setup.md` and writes `/conductor` as `/conductor:conductor`.
 - It is installed and enabled when `claude plugin list --json` has an entry with `"id": "conductor@agent-kit"` and `"enabled": true`. A session started with `claude --plugin-dir <checkout>` loads it without an install and is not in that list. Then `conductor:conductor` among this session's skills is the proof.
 - Disabled: `/plugin enable conductor@agent-kit`, then `/reload-plugins` or a new session.
 - In headless `-p` mode, the doctor needs permission to run `claude plugin list` and read the files named below. Without it, say which check could not run.
@@ -38,9 +38,10 @@ Output this table.
 | Role agent | Tier | Requested | Ran | Effort | Match | Advisor calls |
 |---|---|---|---|---|---|---|
 
-Then check the hook and the pointer, and report each on its own line below the table, `Hook:` and `Pointer:`, not as rows in it.
+Then check the hook, the mod and the pointer, and report each on its own line below the table, `Hook:`, `Mod:` and `Pointer:`, not as rows in it.
 
 - **Hook.** Run `until true; do sleep 1; done` with the `Bash` tool. The registered hook must deny it with a reason that starts `Do not block the turn by sleeping or polling.` It cannot hang, because `until true` ends at once when nothing denies it. A leftover settings hook alone also passes this check, so the leftover check below is what tells the two apart.
+- **Mod.** Run `: conductor-mod-probe` with the `Bash` tool. Only the loaded mod answers it, with a deny that reads `conductor's Bash mod is loaded.` If the command just runs, say plainly that the mod did not load: heavy commands are not queued in this session, though wait loops are still denied. The likely causes are a Claude Code build without mods or mods turned off for this account. Report it on its own `Mod:` line beside `Hook:` and `Pointer:`.
 - **Pointer.** This session's context must hold the pointer from the `SessionStart` hook. It begins `Conductor governs how you work in every repo.` and names `/conductor:conductor`.
 
 ## Leftovers of the old install

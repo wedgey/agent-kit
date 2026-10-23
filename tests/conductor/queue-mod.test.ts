@@ -12,14 +12,27 @@ type Verdict = 'allow' | 'ask' | 'deny' | 'missing'
  * `allow` under bypassPermissions (or a rule allowing it), `ask` under default, acceptEdits and
  * auto, `deny` under dontAsk; `missing` stands for an engine with no `$.tool.check`.
  */
-function harness(on: On, decide: () => string = () => '', env: Record<string, string> = {}, verdict: Verdict = 'allow') {
-  const w = { ran: [] as string[], checked: [] as unknown[], helper: [] as { argv: string[]; stdin?: string; cwd?: string }[] }
+function harness(
+  on: On,
+  decide: () => string = () => '',
+  env: Record<string, string> = {},
+  verdict: Verdict | ((command: string) => Verdict) = 'allow',
+) {
+  const w = { ran: [] as string[], checked: [] as string[], helper: [] as { argv: string[]; stdin?: string; cwd?: string }[] }
+  const of = (command: string) => (typeof verdict === 'function' ? verdict(command) : verdict)
   mock.env(on, env)
+  on('session.id', () => ({ value: 's-me' }))
   on('tool.check', (_$, e) => {
-    if (e.tool_use_id !== undefined) return { decision: 'allow' as const }
-    w.checked.push(e.input)
-    if (verdict === 'missing') throw new Error('no implementation for tool.check')
-    return { decision: verdict }
+    const command = String((e.input as { command?: string }).command)
+    // A real call (it has an id) is core's own check, by the same rules, before the tool runs.
+    if (e.tool_use_id === undefined) w.checked.push(command)
+    const v = of(command)
+    if (v === 'missing') {
+      if (e.tool_use_id !== undefined) return { decision: 'allow' as const }
+      throw new Error('no implementation for tool.check')
+    }
+    if (e.tool_use_id !== undefined && v !== 'deny') return { decision: 'allow' as const }
+    return v === 'deny' ? { decision: v, reason: 'Permission to use Bash with command touch has been denied.', rule: 'Bash(touch:*)' } : { decision: v }
   })
   on('session.cwd', () => ({ value: CWD }))
   on('ui.log', () => ({ value: undefined }))
@@ -34,7 +47,7 @@ function harness(on: On, decide: () => string = () => '', env: Record<string, st
   return w
 }
 
-type Outcome = { deny?: string }
+type Outcome = { deny?: string; isError?: boolean; text?: string }
 const bash = async ($: Engine, command: string, background = false) =>
   (await $.tool.call({ tool: 'Bash', command, ...(background ? { run_in_background: true } : {}) })) as Outcome
 
@@ -50,12 +63,51 @@ describe('the Bash gate', () => {
     expect(w.helper).toEqual([])
   })
 
-  test('denies a foreground wait loop without starting Node', async ($, on) => {
+  test('leaves a wait loop to the PreToolUse hook, so the person sees one message', async ($, on) => {
     const w = harness(on)
     const r = await bash($, 'until true; do sleep 1; done')
-    expect(r.deny).toMatch(/^Do not block the turn by sleeping or polling\./)
-    expect(w.ran).toEqual([])
+    expect(r.deny).toBeUndefined()
+    expect(w.ran).toEqual(['until true; do sleep 1; done'])
     expect(w.helper).toEqual([])
+  })
+
+  test('answers the setup probe, which proves the mod loaded', async ($, on) => {
+    const w = harness(on)
+    const r = await bash($, ': conductor-mod-probe')
+    expect(r.deny).toBe("conductor's Bash mod is loaded.")
+    expect(w.ran).toEqual([])
+  })
+
+  test('hands a command whose original form is denied to core unchanged, so core denies it by its rule', async ($, on) => {
+    const touch = (c: string): Verdict => (c.startsWith('touch') ? 'deny' : 'allow')
+    const w = harness(on, () => JSON.stringify({ command: QUEUED.replace("'pytest'", "'touch /tmp/x && pytest'"), suggest: SUGGEST }), {}, touch)
+    const r = await bash($, 'touch /tmp/x && pytest', true)
+    expect(w.checked[0]).toBe('touch /tmp/x && pytest')
+    expect(w.ran).toEqual([])
+    expect(r.isError === true || r.deny !== undefined).toBe(true)
+  })
+
+  test('denies with the queued form when the original form would ask, even if the queued form is allowed', async ($, on) => {
+    const w = harness(on, () => QUEUED_OUT, {}, (c) => (c === 'pytest' ? 'ask' : 'allow'))
+    const r = await bash($, 'pytest', true)
+    expect(r.deny).toBe(SUGGEST)
+    expect(w.ran).toEqual([])
+  })
+
+  test('denies a typed queued form whose body a rule denies, naming the rule', async ($, on) => {
+    const w = harness(on, () => '', {}, (c) => (c.startsWith('touch') ? 'deny' : 'allow'))
+    const r = await bash($, "node /p/skills/conductor/tools/queue.mjs run --queue=tests -- bash -c 'touch /tmp/x && vitest'", true)
+    expect(w.checked).toContain('touch /tmp/x && vitest')
+    expect(r.deny).toMatch(/Bash\(touch:\*\)/)
+    expect(w.ran).toEqual([])
+  })
+
+  test('passes a typed queued form whose body is allowed on to decide.mjs and then to core', async ($, on) => {
+    const typed = "node /p/skills/conductor/tools/queue.mjs run --queue=tests -- bash -c 'vitest'"
+    const w = harness(on, () => '')
+    await bash($, typed, true)
+    expect(w.ran).toEqual([typed])
+    expect(w.helper).toHaveLength(1)
   })
 
   test('passes everything when bypassed, wait loops included', async ($, on) => {
@@ -84,6 +136,7 @@ describe('the Bash gate', () => {
       tool_name: 'Bash',
       tool_input: { command: 'pytest', run_in_background: true },
       cwd: CWD,
+      session: 's-me',
     })
   })
 
@@ -117,10 +170,11 @@ describe('the Bash gate', () => {
     expect(w.helper).toHaveLength(1)
   })
 
-  test('asks the engine about the queued form, not the command as typed', async ($, on) => {
+  test('asks the engine about the command as typed, then about the queued form, and rewrites only when both allow', async ($, on) => {
     const w = harness(on, () => QUEUED_OUT)
     await bash($, 'pytest', true)
-    expect(w.checked).toEqual([{ command: QUEUED }])
+    expect(w.checked).toEqual(['pytest', QUEUED])
+    expect(w.ran).toEqual([QUEUED])
   })
 
   for (const [mode, verdict] of [
@@ -130,7 +184,7 @@ describe('the Bash gate', () => {
     ['dontAsk', 'deny'],
   ] as const) {
     test(`under ${mode} (the engine answers ${verdict}) denies with the queued form to run in the background`, async ($, on) => {
-      const w = harness(on, () => QUEUED_OUT, {}, verdict)
+      const w = harness(on, () => QUEUED_OUT, {}, (c) => (c === QUEUED ? verdict : 'allow'))
       for (const background of [true, false]) {
         const r = await bash($, 'pytest', background)
         expect(r.deny).toBe(SUGGEST)
@@ -141,6 +195,7 @@ describe('the Bash gate', () => {
 
   test('denies with the queued form when the engine has no permission check to ask', async ($, on) => {
     const w = harness(on, () => QUEUED_OUT, {}, 'missing')
+    // Every query throws here, the original's included: that is no allow either.
     const r = await bash($, 'pytest', true)
     expect(r.deny).toBe(SUGGEST)
     expect(w.ran).toEqual([])
