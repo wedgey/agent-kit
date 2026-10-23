@@ -20,6 +20,7 @@ import {
   parseAgentDef,
   parseBranch,
   parseVerdict,
+  settleFinished,
   porcelainLines,
   todoInputError,
   type TodoInput,
@@ -78,6 +79,7 @@ const spendA = atom({ plugin: 'session-activity', key: 'spend' } as const, {})
 
 const TODO_TOOL = 'todos'
 const TODO_TOOL_CALL = /^mcp__session-activity__todos$/
+const HANDBACK_TOOL = /(^|__)SubagentHandback$/
 const GH_TIMEOUT_MS = 3000
 const BRANCH_EVERY_MS = 30_000
 const PR_EVERY_MS = 300_000
@@ -360,8 +362,8 @@ async function tick($: $) {
   isTicking = true
   try {
     const now = await $.clock.now()
-    const list = await $.agent.list()
-    await update($, agentsA, prev => mergeAgents(prev, list, now))
+    const [list, spawns] = await Promise.all([$.agent.list(), read($, spawnsA)])
+    await update($, agentsA, prev => mergeAgents(prev, settleFinished(list, spawns), now))
     await update($, shellsA, shells => expireFinished(shells, now, clearAfterMs))
     const shells = await read($, shellsA)
     const orphans = await read($, orphansA)
@@ -625,6 +627,7 @@ export const register: Register = (on, options) => {
         [id]: {
           ...all[id],
           verdict: verdict ?? all[id]?.verdict,
+          isFinished: true,
           // A resume retakes the snapshot, so its count must not erase an earlier run's.
           changedFiles: after === undefined ? all[id]?.changedFiles : Math.max(all[id]?.changedFiles ?? 0, newChanges(info.treeBefore ?? [], after)),
         },
@@ -641,8 +644,22 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // A delegate may report through SubagentHandback and end its run with no text of its own.
+  on('tool.call', { tool: HANDBACK_TOOL }, async ($, e, next) => {
+    const ran = await next(e)
+    const message = (e as unknown as { message?: unknown }).message
+    const id = e.agentId
+    const verdict = typeof message === 'string' ? parseVerdict(message) : undefined
+    if (id && verdict && ran.deny === undefined && !ran.isError) {
+      await update($, spawnsA, all => (all[id] ? { ...all, [id]: { ...all[id], verdict, isFinished: true } } : all))
+    }
+    return ran
+  }).catch(($, e, next) => next(e))
+
   on('turn.start', async ($, e, next) => {
     if (e.agentId) {
+      const id = e.agentId
+      await update($, spawnsA, all => (all[id]?.isFinished ? { ...all, [id]: { ...all[id], isFinished: false } } : all))
       const now = await $.clock.now()
       await metricsOf($, e.agentId, m => ({ ...m, startedAt: m.startedAt ?? now, prompt: m.prompt ?? (e.text || undefined) }))
       void maybeOpen($)

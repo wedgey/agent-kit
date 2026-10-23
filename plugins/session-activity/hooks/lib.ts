@@ -1,4 +1,4 @@
-import type { AgentRow, AgentStatusWord, BranchHealth, Orphan, ShellTask, TodoItem, TodoList, Verdict } from '../types'
+import type { AgentRow, AgentStatusWord, BranchHealth, Orphan, ShellTask, SpawnInfo, TodoItem, TodoList, Verdict } from '../types'
 
 export type ProcRow = { pid: number; ppid: number; pgid: number; cpu: number; rssKb: number; args: string }
 
@@ -393,9 +393,14 @@ export function todoTitle(item: Pick<TodoItem, 'content' | 'ticket'>, repo?: str
   return ticket ? `${ticket.label} ${text}` : text
 }
 
-// The report shape conductor's delegates end with: `STATUS  PASS | ISSUES | BLOCKED`, or a verifier's FAIL.
+// The report shape conductor's delegates end with: `STATUS  PASS | ISSUES | BLOCKED`, or a verifier's FAIL;
+// also `Status:`, bold, quoted, dashed, or a table row.
 export const parseVerdict = (answer: string) =>
-  /^[*_\s]*STATUS[*_:\s]+(PASS\+NOTES|PASS|ISSUES|BLOCKED|FAIL)\b/m.exec(answer)?.[1] as Verdict | undefined
+  /^[*_\s>|`#-]*(?:STATUS|Status)[*_:\s|`=—–-]+(PASS\+NOTES|PASS|ISSUES|BLOCKED|FAIL)\b/m.exec(answer)?.[1] as Verdict | undefined
+
+// The list can show an agent running or idle after its run ended (a hand-back ends it); the run's own end wins.
+export const settleFinished = <A extends AgentSnapshot>(list: readonly A[], spawns: Readonly<Record<string, Pick<SpawnInfo, 'isFinished'>>>) =>
+  list.map(a => (spawns[a.id]?.isFinished && isAgentActive(a.status) ? { ...a, status: 'completed' as const } : a))
 
 export function parseAgentDef(text: string): { model?: string; effort?: string; isReadOnly: boolean } {
   const lines = (/^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? '').split(/\r?\n/)

@@ -7,7 +7,7 @@ A Claude Code pane beside the chat that shows what the session is doing. `/activ
   - A done item stays in view while an agent under it is running or ended badly (failed, `ISSUES`, `BLOCKED`, `FAIL`, or a read-only agent that changed the tree), and the DONE line counts them: `DONE · 3 · 1 ✗ · 1 running`.
   - Under 46 columns the NOW items and the first NEXT item stay in view, each ticket inline and cut to 6 columns; the rest of NEXT and the DONE line share one row.
 - **Agents.** Each subagent with its model, effort, elapsed time, tool calls and tokens. A row also shows:
-  - the `STATUS` verdict its final report ends with
+  - the `STATUS` verdict of its newest report, handed back through `SubagentHandback` or given as its final answer; the row reads done once the run ends, even while the agent list still shows it running
   - a warning when it ran on another model or effort than its agent definition asks for
   - a warning when an agent whose definition forbids editing finished with new changes in the working tree
   - an escalation line when the same description was spawned again, on another model or effort, after an earlier run ended

@@ -349,9 +349,12 @@ function quietHost(
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as const
   })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('tool.call', { tool: /^SubagentHandback$/ }, () => ({ result: 'Report delivered to your caller.', text: 'Report delivered to your caller.' }))
 }
 
 async function runTurn($: Engine, agentId: string, model: string, effort: Effort, answer = '') {
+  await $.turn.start({ turnId: `t-${agentId}`, agentId, text: '' })
   for await (const _chunk of $.turn.step({ turnId: `t-${agentId}`, index: 0, model, effort, messageCount: 1, agentId })) {
   }
   const usage = { input_tokens: 400, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model }
@@ -711,4 +714,55 @@ test('manifest agent paths outside the plugin, by .., absolute path, symbolic li
     '/plugins/lab/big.md': `${outside}${'x'.repeat(300 * 1024)}`,
   }
   expect(await routedRow(on, $, 'lab:runner', files, undefined, { '/plugins/lab/linked': '/evil' })).not.toMatch(/✓/)
+})
+
+const handBack = ($: Engine, agentId: string, message: string) =>
+  $.tool.call({ tool: 'SubagentHandback', message, agentId } as unknown as Parameters<Engine['tool']['call']>[0])
+
+test('a report handed back through SubagentHandback gives the verdict, and the run reads as done though the list still says running', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on)
+  on('agent.list', () => ({ value: [{ id: 'h1', type: 'conductor:implementer', description: 'Build unit 2', status: 'running' }] }))
+  on('agent.spawn', () => ({ model: 'sonnet', agentId: 'h1' }))
+
+  await spawn($, 'Build unit 2', 'conductor:implementer')
+  await runTurn($, 'h1', 'claude-sonnet-5-5', 'medium', 'Working on it.')
+  await openPane($)
+  let ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: 'AGENTS · 0 running' })).toBeDefined()
+  await ui.unmount()
+
+  await spawn($, 'Build unit 2', 'conductor:implementer', { resume: { agentId: 'h1' } })
+  await $.turn.start({ turnId: 't-h1b', agentId: 'h1', text: 'go on' })
+  await openPane($)
+  await openPane($)
+  ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: 'AGENTS · 1 running' })).toBeDefined()
+  await ui.unmount()
+
+  await handBack($, 'h1', 'STATUS     ISSUES\nDID  a.ts')
+  await $.turn.complete({ turnId: 't-h1b', agentId: 'h1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' })
+  await openPane($)
+  await openPane($)
+  ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: 'ISSUES' })).toBeDefined()
+  expect((await ui.find({ key: 'agent:h1:toggle' }))?.text).toMatch(/^✓ implementer {2}Build unit 2/)
+  expect(await ui.find({ key: 'agent:h1:stop' })).toBeUndefined()
+})
+
+test('a resumed delegate shows the verdict of its newest run', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on)
+  on('agent.list', () => ({ value: [{ id: 'v1', type: 'conductor:reviewer', description: 'Review unit 3', status: 'completed' }] }))
+  on('agent.spawn', () => ({ model: 'opus', agentId: 'v1' }))
+
+  await spawn($, 'Review unit 3', 'conductor:reviewer')
+  await runTurn($, 'v1', 'claude-opus-5-5', 'high', 'STATUS ISSUES')
+  await spawn($, 'Review unit 3', 'conductor:reviewer', { resume: { agentId: 'v1' } })
+  await runTurn($, 'v1', 'claude-opus-5-5', 'high', 'STATUS PASS')
+  await openPane($)
+
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: 'PASS' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'ISSUES' })).toBeUndefined()
 })

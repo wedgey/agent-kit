@@ -74,6 +74,7 @@ export type SpawnInfo = {
   escalatedFrom?: string
   treeBefore?: string[]
   changedFiles?: number
+  isFinished?: boolean
 }
 
 export type BranchHealth = { branch: string; trunk?: string; behind?: number; changed: number; pr?: number; repo?: string }

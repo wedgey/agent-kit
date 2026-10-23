@@ -30,6 +30,7 @@ import {
   currentTodo,
   todoInputError,
   parseVerdict,
+  settleFinished,
   parseAgentDef,
   modelMatches,
   newChanges,
@@ -146,6 +147,19 @@ describe('agents', () => {
     const first = mergeAgents([], [{ id: 'a1', type: 'Explore', description: 'Find callers', status: 'running' }], 1000)
     const second = mergeAgents(first, [], 5000)
     expect(second).toEqual([{ id: 'a1', type: 'Explore', description: 'Find callers', status: 'completed', firstSeenAt: 1000, endedAt: 5000 }])
+  })
+})
+
+describe('finished runs', () => {
+  test('an agent whose run has ended reads as completed, whatever the list still says', () => {
+    const list = [
+      { id: 'a', type: 't', description: 'd', status: 'running' },
+      { id: 'b', type: 't', description: 'd', status: 'idle' },
+      { id: 'c', type: 't', description: 'd', status: 'failed' },
+      { id: 'd', type: 't', description: 'd', status: 'running' },
+    ] as const
+    const settled = settleFinished(list, { a: { isFinished: true }, b: { isFinished: true }, c: { isFinished: true }, d: { isFinished: false } })
+    expect(settled.map(a => a.status)).toEqual(['completed', 'completed', 'failed', 'running'])
   })
 })
 
@@ -406,6 +420,10 @@ describe('delegates', () => {
     expect(parseVerdict('notes\nSTATUS: ISSUES\n')).toBe('ISSUES')
     expect(parseVerdict('**STATUS** FAIL')).toBe('FAIL')
     expect(parseVerdict('all good')).toBeUndefined()
+    expect(parseVerdict('Status: BLOCKED')).toBe('BLOCKED')
+    expect(parseVerdict('> **STATUS** — PASS')).toBe('PASS')
+    expect(parseVerdict('| STATUS | ISSUES |')).toBe('ISSUES')
+    expect(parseVerdict('The STATUS line will say PASS')).toBeUndefined()
   })
 
   test('an agent definition gives its model, effort and whether it may write', () => {
