@@ -50,8 +50,8 @@ import {
   summarizeToolUse,
   treeOf,
   usageTokens,
-  cores,
-  gb,
+  holderUsage,
+  queueOutcome,
   isOwnCwd,
   exclusive,
   parseQueueStatus,
@@ -463,14 +463,7 @@ async function queueActOnce($: $, what: string, args: string[]) {
   try {
     const tool = await queueTool($)
     if (!tool) throw new Error('the conductor plugin is not installed')
-    const out = await $.process.run(['node', tool, ...args], { timeoutMs: QUEUE_TIMEOUT_MS })
-    if (out.exitCode !== 0) throw new Error(out.stderr.trim() || `exit ${out.exitCode}`)
-    const r = JSON.parse(out.stdout) as { ok?: boolean; stopped?: number; killed?: number; reason?: string }
-    note = !r.ok
-      ? `${what}: not done (${r.reason ?? 'unknown'})`
-      : r.stopped === undefined
-        ? `${what}: done`
-        : `${what}: ${r.stopped} processes stopped${r.killed ? `, ${r.killed} killed` : ''}`
+    note = queueOutcome(what, await $.process.run(['node', tool, ...args], { timeoutMs: QUEUE_TIMEOUT_MS }))
   } catch (err) {
     note = `${what}: failed: ${err instanceof Error ? err.message : String(err)}`
   }
@@ -1067,12 +1060,15 @@ export const register: Register = (on, options) => {
     const holderRow = (q: HeavyQueue, holder: QueueHolder) => {
       const key = `queue:${q.name}:${holder.slot}`
       const mark = holder.state === 'idle' || holder.state === 'orphan' ? holder.state : undefined
-      return queueRow(key, holder.state === 'unknown' ? '◌' : '●', mark ? 'warning' : 'suggestion', `${q.name}  ${where(holder.cwd, holder.command)}`, [
+      const usage = holderUsage(holder)
+      // Without a process there is nothing to stop.
+      const isGone = holder.pid === null
+      return queueRow(key, holder.state === 'unknown' ? '◌' : '●', mark ? 'warning' : 'suggestion', `${q.name}  ${isGone ? '(process gone)' : where(holder.cwd, holder.command)}`, [
         isOwn(holder.pid, holder.cwd) && <Text color="suggestion">you</Text>,
         mark !== undefined && <Text color="warning">{mark}</Text>,
-        !isNarrow && <Text dimColor>{formatDuration(holder.ageMs)}</Text>,
-        !isNarrow && holder.state !== 'orphan' && <Text dimColor>{`${cores(holder.cpuPct)} · ${gb(holder.memKb)}`}</Text>,
-        <Button key={`${key}:stop`} label={isNarrow ? '■' : 'stop'} dimColor onPress={() => void stopHolder($, q, holder)} />,
+        !isNarrow && holder.ageMs !== null && <Text dimColor>{formatDuration(holder.ageMs)}</Text>,
+        !isNarrow && usage !== undefined && <Text dimColor>{usage}</Text>,
+        !isGone && <Button key={`${key}:stop`} label={isNarrow ? '■' : 'stop'} dimColor onPress={() => void stopHolder($, q, holder)} />,
       ])
     }
     const waiterRow = (q: HeavyQueue, w: QueueWaiter, i: number) => {
@@ -1080,6 +1076,7 @@ export const register: Register = (on, options) => {
       const move = (to: 'top' | 'up' | 'down') => () => void queueAct($, `move ${w.command ?? w.ticket} ${to === 'top' ? 'to the top' : to}`, ['move', w.ticket, to])
       return queueRow(key, '○', 'inactive', `#${i + 1} ${q.name}  ${where(w.cwd, w.command)}`, [
         isOwn(w.pid, w.cwd) && <Text color="suggestion">you</Text>,
+        w.priority === 'gate' && <Text color="suggestion">gate</Text>,
         <Text dimColor>{`waiting ${formatDuration(w.waitedMs)}`}</Text>,
         <Button key={`${key}:top`} label="top" dimColor onPress={move('top')} />,
         <Button key={`${key}:up`} label="↑" dimColor onPress={move('up')} />,

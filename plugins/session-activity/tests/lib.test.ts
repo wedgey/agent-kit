@@ -31,7 +31,9 @@ import {
   todoInputError,
   parseVerdict,
   settleFinished,
-  gb,
+  shortMemory,
+  holderUsage,
+  queueOutcome,
   isOwnCwd,
   exclusive,
   parseQueueStatus,
@@ -190,12 +192,32 @@ describe('queue', () => {
     const status = parseQueueStatus(JSON.stringify(STATUS))!
     expect(queueHeader(status)).toBe('tests 2/2 · e2e 0/1 · load 12 / 8 cores · 8.0G free')
     expect(queueTotals(status)).toEqual({ busy: 2, slots: 3, waiting: 2 })
+    const blind = parseQueueStatus(JSON.stringify({ ...STATUS, machine: { cores: 8, load1: 1.4, memAvailKb: null, memTotalKb: null } }))!
+    expect(queueHeader(blind)).toBe('tests 2/2 · e2e 0/1 · load 1 / 8 cores')
   })
 
   test('a place is the worktree name, else the last folder', () => {
     expect(place('/workspace/.worktrees/q-plain/apps/web')).toBe('q-plain')
     expect(place('/repo/apps/web')).toBe('web')
-    expect(gb(838_861)).toBe('0.8G')
+    expect(shortMemory(50_152)).toBe('49M')
+    expect(shortMemory(1_048_576)).toBe('1.0G')
+    expect(shortMemory(17_536_892)).toBe('16.7G')
+  })
+
+  test('a holder with no CPU or memory reading shows none, and a half reading a ?', () => {
+    expect(holderUsage({ cpuPct: 101, memKb: 50_152 })).toBe('1.0 cores · 49M')
+    expect(holderUsage({ cpuPct: null, memKb: null })).toBeUndefined()
+    expect(holderUsage({ cpuPct: 0, memKb: null })).toBe('0.0 cores · ?')
+  })
+
+  test("a queue command's outcome comes from its JSON whatever its exit code, else from stderr or the code", () => {
+    expect(queueOutcome('stop tests slot 0', { exitCode: 0, stdout: '{"ok":true,"stopped":2,"killed":0}', stderr: '' })).toBe('stop tests slot 0: 2 processes stopped')
+    expect(queueOutcome('stop tests slot 7', { exitCode: 1, stdout: '{"ok":false,"reason":"no live holder in slot 7 of tests"}', stderr: '' })).toBe(
+      'stop tests slot 7: not done (no live holder in slot 7 of tests)',
+    )
+    expect(queueOutcome('move x up', { exitCode: 0, stdout: '{"ok":true}', stderr: '' })).toBe('move x up: done')
+    expect(queueOutcome('move x up', { exitCode: 2, stdout: 'Error: boom', stderr: 'node: boom\n' })).toBe('move x up: failed: node: boom')
+    expect(queueOutcome('move x up', { exitCode: 2, stdout: '', stderr: '' })).toBe('move x up: failed: exit 2')
   })
 
   test("a cwd is this session's when under its cwd and not inside a worktree below it", () => {

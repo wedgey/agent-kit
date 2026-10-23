@@ -308,7 +308,7 @@ type Host = {
   sessionId?: string
   store?: Record<string, unknown>
   statuses?: (string | undefined)[]
-  node?: (args: readonly string[]) => Promise<{ exitCode: number; stdout: string } | undefined> | { exitCode: number; stdout: string } | undefined
+  node?: (args: readonly string[]) => Promise<{ exitCode: number; stdout: string; stderr?: string } | undefined> | { exitCode: number; stdout: string; stderr?: string } | undefined
 }
 
 function quietHost(
@@ -831,7 +831,191 @@ test('another session gets no stored list', async ($, on) => {
 
 const CONDUCTOR = '/plugins/conductor'
 const QUEUE_TOOL = `${CONDUCTOR}/skills/conductor/tools/queue.mjs`
+// Captured from conductor's queue.mjs status --json: an orphan's lock holder unknown, an "unknown" holder unread.
+const REAL_STATUS = {
+  "protocol": 1,
+  "queues": [
+    {
+      "name": "e2e",
+      "slots": 1,
+      "slotsSource": "files",
+      "holders": [
+        {
+          "slot": 0,
+          "pid": null,
+          "cwd": null,
+          "command": null,
+          "ageMs": null,
+          "state": "orphan",
+          "cpuPct": null,
+          "memKb": null
+        }
+      ],
+      "waiters": []
+    },
+    {
+      "name": "tests",
+      "slots": 2,
+      "slotsSource": "records",
+      "holders": [
+        {
+          "slot": 0,
+          "pid": 500788,
+          "cwd": "/tmp",
+          "command": "sh -c while :; do :; done",
+          "ageMs": 16346,
+          "state": "busy",
+          "cpuPct": 101,
+          "memKb": 50152
+        },
+        {
+          "slot": 1,
+          "pid": 501210,
+          "cwd": "/tmp",
+          "command": "sleep 60",
+          "ageMs": 8745,
+          "state": "idle",
+          "cpuPct": 0,
+          "memKb": 50544
+        }
+      ],
+      "waiters": [
+        {
+          "ticket": "gate-1792752271593-501700",
+          "pid": 501700,
+          "cwd": "/tmp",
+          "command": "sleep 32",
+          "priority": "gate",
+          "rank": 0,
+          "waitedMs": 723
+        },
+        {
+          "ticket": "normal-1792752271593-501699",
+          "pid": 501699,
+          "cwd": "/tmp",
+          "command": "sleep 31",
+          "priority": "normal",
+          "rank": 1,
+          "waitedMs": 723
+        }
+      ]
+    }
+  ],
+  "machine": {
+    "cores": 8,
+    "load1": 1.39,
+    "memAvailKb": 17536892,
+    "memTotalKb": 22581312
+  }
+}
+const REAL_STATUS_UNKNOWN = {
+  "protocol": 1,
+  "queues": [
+    {
+      "name": "e2e",
+      "slots": 1,
+      "slotsSource": "files",
+      "holders": [
+        {
+          "slot": 0,
+          "pid": null,
+          "cwd": null,
+          "command": null,
+          "ageMs": null,
+          "state": "orphan",
+          "cpuPct": null,
+          "memKb": null
+        }
+      ],
+      "waiters": []
+    },
+    {
+      "name": "movetest",
+      "slots": 1,
+      "slotsSource": "records",
+      "holders": [
+        {
+          "slot": 0,
+          "pid": 505839,
+          "cwd": "/tmp",
+          "command": "sleep 120",
+          "ageMs": 1079,
+          "state": "idle",
+          "cpuPct": 0,
+          "memKb": 50512
+        }
+      ],
+      "waiters": [
+        {
+          "ticket": "normal-1792752352759-505903",
+          "pid": 505903,
+          "cwd": "/tmp",
+          "command": "sleep 41",
+          "priority": "normal",
+          "rank": 0,
+          "waitedMs": 577
+        },
+        {
+          "ticket": "normal-1792752352821-505921",
+          "pid": 505921,
+          "cwd": "/tmp",
+          "command": "sleep 42",
+          "priority": "normal",
+          "rank": 1,
+          "waitedMs": 515
+        }
+      ]
+    },
+    {
+      "name": "tests",
+      "slots": 2,
+      "slotsSource": "records",
+      "holders": [
+        {
+          "slot": 0,
+          "pid": 500788,
+          "cwd": "/tmp",
+          "command": "sh -c while :; do :; done",
+          "ageMs": 98374,
+          "state": "busy",
+          "cpuPct": 100,
+          "memKb": 50152
+        },
+        {
+          "slot": 1,
+          "pid": 504460,
+          "cwd": "/tmp",
+          "command": "sleep 31",
+          "ageMs": 30830,
+          "state": "unknown",
+          "cpuPct": null,
+          "memKb": null
+        }
+      ],
+      "waiters": [
+        {
+          "ticket": "normal-1792752289603-502597",
+          "pid": 502597,
+          "cwd": "/tmp",
+          "command": "sleep 33",
+          "priority": "normal",
+          "rank": 0,
+          "waitedMs": 64741
+        }
+      ]
+    }
+  ],
+  "machine": {
+    "cores": 8,
+    "load1": 1.53,
+    "memAvailKb": 17449652,
+    "memTotalKb": 22581312
+  }
+}
+
+// The same shape, with cwds that exercise place and the "you" mark.
 const QUEUE_FIXTURE = {
+  protocol: 1,
   queues: [
     {
       name: 'tests',
@@ -849,15 +1033,28 @@ const QUEUE_FIXTURE = {
     {
       name: 'e2e',
       slots: 1,
+      slotsSource: 'files',
+      holders: [{ slot: 0, pid: null, cwd: null, command: null, ageMs: null, state: 'orphan', cpuPct: null, memKb: null }],
+      waiters: [],
+    },
+    {
+      name: 'build',
+      slots: 1,
       slotsSource: 'records',
-      holders: [{ slot: 0, pid: null, cwd: null, command: null, ageMs: 900_000, state: 'orphan', cpuPct: 0, memKb: 0 }],
+      holders: [{ slot: 0, pid: 130, cwd: '/workspace/.worktrees/q-plain', command: 'pnpm build', ageMs: 30_000, state: 'unknown', cpuPct: null, memKb: null }],
       waiters: [],
     },
   ],
   machine: { cores: 8, load1: 12.3, memAvailKb: 8_388_608, memTotalKb: 21_000_000 },
 }
 
-function queueHost(on: On, answers: Record<string, unknown> = {}, opts: { isInstalled?: boolean; statuses?: (string | undefined)[] } = {}) {
+type QueueAnswer = { exitCode: number; stdout: string; stderr?: string }
+
+function queueHost(
+  on: On,
+  answers: Record<string, QueueAnswer> = {},
+  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown } = {},
+) {
   const calls: string[][] = []
   const files: Record<string, string> = opts.isInstalled === false ? {} : { '/home/me/.claude/plugins/installed_plugins.json': installed({ 'conductor@agent-kit': CONDUCTOR }) }
   quietHost(on, files, [''], undefined, undefined, {}, {
@@ -865,8 +1062,8 @@ function queueHost(on: On, answers: Record<string, unknown> = {}, opts: { isInst
     node: args => {
       if (args[0] !== QUEUE_TOOL) return undefined
       calls.push(args.slice(1))
-      const answer = args[1] === 'status' ? QUEUE_FIXTURE : answers[args[1] ?? '']
-      return { exitCode: 0, stdout: JSON.stringify(answer ?? { ok: true }) }
+      if (args[1] === 'status') return { exitCode: 0, stdout: JSON.stringify(opts.status ?? QUEUE_FIXTURE) }
+      return answers[args[1] ?? ''] ?? { exitCode: 0, stdout: '{"ok":true}' }
     },
   })
   on('agent.list', () => ({ value: [] }))
@@ -882,22 +1079,24 @@ test('the QUEUE section lists holders with their state and waiters in rank order
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
   const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
   const at = lines.findIndex(l => l.startsWith('QUEUE'))
-  expect(lines.slice(at, at + 6)).toEqual([
-    'QUEUE · tests 2/2 · e2e 1/1 · load 12 / 8 cores · 8.0G free',
-    '● tests  q-plain pnpm test 4m00s 3.4 cores · 0.8G [stop]',
-    '● tests  repo pnpm test:changed you idle 1m00s 0.0 cores · 0.3G [stop]',
-    '● e2e  (process gone) orphan 15m00s [stop]',
-    '○ #1 tests  rd-441 pnpm typecheck waiting 1m05s [top] [↑] [↓]',
+  expect(lines.slice(at, at + 7)).toEqual([
+    'QUEUE · tests 2/2 · e2e 1/1 · build 1/1 · load 12 / 8 cores · 8.0G free',
+    '● tests  q-plain pnpm test 4m00s 3.4 cores · 819M [stop]',
+    '● tests  repo pnpm test:changed you idle 1m00s 0.0 cores · 307M [stop]',
+    '● e2e  (process gone) orphan',
+    '◌ build  q-plain pnpm build 30s [stop]',
+    '○ #1 tests  rd-441 pnpm typecheck gate waiting 1m05s [top] [↑] [↓]',
     '○ #2 tests  web pnpm build you waiting 5s [top] [↑] [↓]',
   ])
+  expect(await ui.find({ key: 'queue:e2e:0:stop' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'idle' })).toMatchObject({ props: { color: 'warning' } })
   expect(await ui.find({ type: 'Text', text: 'orphan' })).toMatchObject({ props: { color: 'warning' } })
-  expect(statuses.at(-1)).toBe('◆ 0/1 Ship · queue 3/3 +2')
+  expect(statuses.at(-1)).toBe('◆ 0/1 Ship · queue 4/4 +2')
 })
 
 test('stop asks first: a yes runs queue stop and says what it did, a no or a dismissal runs nothing', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
-  const calls = queueHost(on, { stop: { ok: true, stopped: 3, killed: 1 } })
+  const calls = queueHost(on, { stop: { exitCode: 0, stdout: '{"ok":true,"stopped":3,"killed":1}' } })
   let answer: string | undefined = 'Keep it'
   const asked: string[] = []
   on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
@@ -922,7 +1121,7 @@ test('stop asks first: a yes runs queue stop and says what it did, a no or a dis
 
 test('the move buttons run queue move and say so', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
-  const calls = queueHost(on, { move: { ok: true } })
+  const calls = queueHost(on, { move: { exitCode: 0, stdout: '{"ok":true}' } })
   await openPane($)
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
   await ui.press({ key: 'queue:w2:top' })
@@ -950,12 +1149,63 @@ test('under 46 columns the QUEUE section is its header and holders, with waiters
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 40 } })
   const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
   const at = lines.findIndex(l => l.startsWith('QUEUE'))
-  expect(lines.slice(at, at + 5)).toEqual([
-    'QUEUE · tests 2/2 · e2e 1/1 · load 12 / 8 cores · 8.0G free',
+  expect(lines.slice(at, at + 6)).toEqual([
+    'QUEUE · tests 2/2 · e2e 1/1 · build 1/1 · load 12 / 8 cores · 8.0G free',
     '● tests  q-plain pnpm test [■]',
     '● tests  repo pnpm test:changed you idle [■]',
-    '● e2e  (process gone) orphan [■]',
+    '● e2e  (process gone) orphan',
+    '◌ build  q-plain pnpm build [■]',
     '+2 waiting',
   ])
   expect(await ui.find({ key: 'queue:w1:top' })).toBeUndefined()
+})
+
+test("a failed queue command shows the tool's reason, though it exits 1 with nothing on stderr", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  queueHost(on, {
+    move: { exitCode: 1, stdout: '{"ok":false,"reason":"a normal run can\'t pass a gate run"}', stderr: '' },
+    stop: { exitCode: 1, stdout: '{"ok":false,"reason":"no live holder in slot 0 of tests"}', stderr: '' },
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
+    const question = (e.questions[0] as { question: string }).question
+    return { result: { questions: e.questions, answers: { [question]: 'Stop it' } } }
+  })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'queue:w2:up' })
+  expect(await ui.find({ type: 'Text', text: "move pnpm build up: not done (a normal run can't pass a gate run)" })).toBeDefined()
+  await ui.press({ key: 'queue:tests:0:stop' })
+  expect(await ui.find({ type: 'Text', text: 'stop tests slot 0: not done (no live holder in slot 0 of tests)' })).toBeDefined()
+})
+
+test('the real status shapes draw with no made-up zeros: an orphan without a process has no stop, an unread holder no usage', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  queueHost(on, {}, { status: REAL_STATUS_UNKNOWN })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
+  const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
+  const at = lines.findIndex(l => l.startsWith('QUEUE'))
+  expect(lines.slice(at, at + 8)).toEqual([
+    'QUEUE · e2e 1/1 · movetest 1/1 · tests 2/2 · load 2 / 8 cores · 16.6G free',
+    '● e2e  (process gone) orphan',
+    '● movetest  tmp sleep 120 idle 1s 0.0 cores · 49M [stop]',
+    '● tests  tmp sh -c while :; do :; done 1m38s 1.0 cores · 49M [stop]',
+    '◌ tests  tmp sleep 31 30s [stop]',
+    '○ #1 movetest  tmp sleep 41 waiting 0s [top] [↑] [↓]',
+    '○ #2 movetest  tmp sleep 42 waiting 0s [top] [↑] [↓]',
+    '○ #1 tests  tmp sleep 33 waiting 1m04s [top] [↑] [↓]',
+  ])
+  expect(lines.join('\n')).not.toMatch(/0\.0G/)
+})
+
+test('a free figure the machine could not read is left out of the header; an orphan whose process is known can be stopped', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const known = { slot: 0, pid: 777, cwd: '/tmp', command: 'pnpm e2e', ageMs: null, state: 'orphan', cpuPct: null, memKb: null }
+  const status = { ...REAL_STATUS, queues: [{ ...REAL_STATUS.queues[0], holders: [known] }], machine: { ...REAL_STATUS.machine, memAvailKb: null, memTotalKb: null } }
+  queueHost(on, {}, { status })
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
+  const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
+  const at = lines.findIndex(l => l.startsWith('QUEUE'))
+  expect(lines.slice(at, at + 2)).toEqual(['QUEUE · e2e 1/1 · load 1 / 8 cores', '● e2e  tmp pnpm e2e orphan [stop]'])
 })

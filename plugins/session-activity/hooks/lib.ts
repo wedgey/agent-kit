@@ -465,9 +465,26 @@ export async function exclusive<R>(guard: { isRunning: boolean }, fn: () => Prom
   }
 }
 
-export const gb = (kb: number) => `${(kb / 1048576).toFixed(1)}G`
+// `49M` under a gigabyte, `16.7G` from there.
+export const shortMemory = (kb: number) => (kb < 1048576 ? `${Math.round(kb / 1024)}M` : `${(kb / 1048576).toFixed(1)}G`)
 
-export const cores = (pct: number) => `${(Math.max(0, pct) / 100).toFixed(1)} cores`
+// No reading at all draws nothing; a half reading draws its missing half as `?`, never a zero.
+export const holderUsage = (h: { cpuPct: number | null; memKb: number | null }) =>
+  h.cpuPct === null && h.memKb === null ? undefined : `${h.cpuPct === null ? '?' : cores(h.cpuPct)} · ${h.memKb === null ? '?' : shortMemory(h.memKb)}`
+
+// queue.mjs answers JSON on stdout whatever its exit code (a refusal is exit 1, `{ ok: false, reason }`).
+export function queueOutcome(what: string, out: { exitCode: number; stdout: string; stderr: string }): string {
+  let r: { ok?: boolean; stopped?: number; killed?: number; reason?: string }
+  try {
+    r = JSON.parse(out.stdout)
+  } catch {
+    return `${what}: failed: ${out.stderr.trim() || `exit ${out.exitCode}`}`
+  }
+  if (!r?.ok) return `${what}: not done (${r?.reason ?? (out.stderr.trim() || `exit ${out.exitCode}`)})`
+  return r.stopped === undefined ? `${what}: done` : `${what}: ${r.stopped} processes stopped${r.killed ? `, ${r.killed} killed` : ''}`
+}
+
+export const cores = (pct: number): string => `${(Math.max(0, pct) / 100).toFixed(1)} cores`
 
 // Where a run is: its worktree's name, else its last folder.
 export const place = (cwd: string) => /\/\.worktrees\/([^/]+)/.exec(cwd)?.[1] ?? cwd.split('/').filter(Boolean).pop() ?? cwd
@@ -494,7 +511,8 @@ export const queueTotals = (status: QueueStatus) => ({
 
 export function queueHeader(status: QueueStatus): string {
   const m = status.machine
-  return [...status.queues.map(q => `${q.name} ${q.holders.length}/${q.slots}`), `load ${Math.round(m.load1)} / ${m.cores} cores`, `${gb(m.memAvailKb)} free`].join(' · ')
+  const free = m.memAvailKb === null ? [] : [`${shortMemory(m.memAvailKb)} free`]
+  return [...status.queues.map(q => `${q.name} ${q.holders.length}/${q.slots}`), `load ${Math.round(m.load1)} / ${m.cores} cores`, ...free].join(' · ')
 }
 
 // BRANCH_SCRIPT's five lines: branch, trunk, commits behind trunk, changed files, origin's URL.
