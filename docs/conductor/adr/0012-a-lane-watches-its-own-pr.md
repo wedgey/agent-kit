@@ -1,0 +1,9 @@
+# A lane watches its own PR
+
+After a lane reported Merge-ready, it went idle until the orchestrator sent it a message. The orchestrator watched every PR, and relayed each merge, red check and Mergify dequeue to the lane that had to act. On 2026-10-24 we measured three epics. The orchestrator relayed seven merges between 2 and 41 minutes after they happened, with a median of 17 minutes. It also sent 15 relays of red checks and dequeues, and each relay cost it a turn on a large context. Lanes spent 41% of their elapsed time idle, waiting for a message. Most of that idle time was the wait for the merge itself, a spend-limit stop or a stopped orchestrator, so a faster relay saves minutes per event, not hours.
+
+So a lane watches its own PR. `tools/watch-pr.mjs` asks `gh` about the PR and its base branch's own PR every minute, and exits on the first change with a list of events. The lane runs it in the background, at no model cost, and wakes on its completion notice. It handles the event itself: it rebases when its base merges or moves, fixes a red check or a new review through babysit, and reports Merged when its PR lands. The orchestrator no longer relays these events, and it messages a stacked lane only when that lane is not watching.
+
+The first look is a baseline, and only a merge or a close is reported from it. The lane read the PR's state before it started the watch. A check that is red by design, such as a required check on a draft PR, would otherwise wake the lane at once on every start. A live run against yokegtm's open drafts showed exactly that before the rule.
+
+A watch cannot see an event that needs no `gh` read, such as a ruling from the operator. Those still come from the orchestrator. Each lane makes two `gh` calls a minute, so ten lanes make about 1,200 calls an hour, within GitHub's limit of 5,000.

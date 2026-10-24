@@ -69,9 +69,10 @@ A lane is a background subagent in its own worktree, spawned under the ticket's 
 | Verb | Mechanism |
 |---|---|
 | dispatch | `Agent` with `subagent_type: "general-purpose"`, `isolation: "worktree"`, the lane brief as `prompt`, and the lane's tier as `model` and `effort`. That is `sonnet` and `medium`, or `opus` and `high` for a ticket that needs design or an escalated lane. Set `description` to the ticket, such as `#562 lane`. Not a role agent, because a lane must spawn its own delegates and the role agents cannot. Spawn it while the ticket's item is the one most recently marked in progress |
-| wait | A lane reports by ending its turn with the report as its text. Its completion notice carries it. A notice that says it is waiting on its own background work is interim, so keep waiting |
+| wait | A lane reports by ending its turn with the report as its text. Its completion notice carries it. A notice that says it is waiting on its own background work is interim, so keep waiting. A notice that carries one of the lane reports is the report, even while the lane's PR watcher still runs |
 | continue | `SendMessage` to the lane's agent id. It arrives between the lane's tool calls, or wakes it when idle |
 | stop | `TaskStop` with the lane's task id. Then `git worktree remove` its worktree once its branch is pushed |
+| watch | `node <skill dir>/tools/watch-pr.mjs <pr>` through `Bash` with `run_in_background: true`. `<skill dir>` is the folder that holds conductor's `SKILL.md`. It asks `gh` about the PR, and about its base branch's own PR, every 60 seconds (`--interval`), and exits on the first change with one JSON line of events. It gives up after 12 hours (`--hours`). It costs no model turns while it waits, and its completion notice wakes the lane |
 | read state | `git -C <worktree> log --oneline -3`, `gh pr view <branch>`, and the lane's last interim notice. Never its transcript file |
 
 The lane's worktree branches from `origin`'s default branch tip, not the local checkout. When BASE is a stacked parent, the lane runs `git fetch origin <parent>` and `git switch -c <BRANCH> origin/<parent>`, because the parent's own worktree still holds that branch. An escalated lane runs `git fetch origin <BRANCH>` and `git switch -c <BRANCH> origin/<BRANCH>`.

@@ -11,13 +11,14 @@ Several tickets toward one outcome, each ending in its own PR. You dispatch one 
 5. **Steer by notices.** Each lane reports back when it is merge-ready, its head moved, it is blocked or it failed. wait for those reports and never poll. When one arrives:
    - **Merge-ready.** Read the reviewer's STATUS and the verifier's verdict on the PR, and the diff's file list and size. A lane saying "ready" is a claim. spawn a reviewer only when the files or the size surprise you. Then dispatch the next ready ticket.
    - **Context full.** dispatch the same brief at the same tier, with BRANCH set to the pushed branch and the report pasted in full under CONTEXT. stop the old lane. This is a handover, not an escalation.
-   - **Head moved.** Tell every lane stacked on that branch to rebase onto the new head.
+   - **Head moved.** Lanes stacked on that branch see it through their own watcher and rebase themselves. Message a stacked lane only when it is not watching, such as a lane you just resumed.
+   - **Merged.** Close the lane per step 8, then dispatch the next ready ticket.
    - **Escalate.** A Failed report, or a Blocked report on a design question from a lane at strong-code, goes one tier up, per roles.md Escalation. have the lane push its branch, stop it, and dispatch the same brief at frontier with BRANCH set to that branch and the failure attached. A failure at frontier comes back to you.
    - **Blocked.** Any other block gets a reply. Settle what you can. Product calls go to the operator through ask. A second block on the same premise means [attack-the-premise](../principles/attack-the-premise.md) before anything else.
    - **A change others build on.** When one lane changes an interface another lane uses, tell that lane what changed and where.
    - **Silent too long.** Read the lane's state, as the binding says, before you message it. stop a lane only to replace it, and say why on its ticket.
 6. **Verify the epic.** When every ticket's PR is merge-ready, build the combined result in a scratch worktree, the top of the stack or every branch merged in graph order, yourself or through an editor, and run SETUP there. Then spawn one verifier on that worktree against the epic's own acceptance. One ticket can pass alone while the epic still fails, so this check is never skipped.
-7. **Land on request.** Only an explicit request to land, ship or merge starts [shipping](shipping.md), run over the tickets' PRs in graph order. Lanes stacked on a branch that just merged hear from you which base to use now. Each lane owns its own rebase.
+7. **Land on request.** Only an explicit request to land, ship or merge starts [shipping](shipping.md), run over the tickets' PRs in graph order. Lanes stacked on a branch that just merged see the merge through their watcher and rebase onto trunk themselves. Each lane owns its own rebase.
 8. **Close the lanes.** When a ticket's PR has merged, stop its lane, remove its worktree and tick its item. Update the epic's issue, or the tickets file, with what landed, what did not, and why.
 
 **Reply:** one row per ticket with its PR as a full URL, its verdict and whether it landed, the graph as it ended, the epic verifier's verdict, and what is left for the operator, in the order and form of SKILL.md "Writing the reply".
