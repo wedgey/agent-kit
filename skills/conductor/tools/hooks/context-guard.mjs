@@ -5,10 +5,13 @@
  * Every turn re-reads the whole context, so a long lane's late turns cost the most: across 25 lanes
  * measured on 2026-10-24, the second half of each lane's turns used 65% of its tokens.
  * The session's own agent steers an epic for days, so it gets a lower limit of its own.
- * It speaks once when the limit is crossed, then once per further step.
+ * It speaks once per step past the limit, on the first hooked call in that step. Claude Code runs no
+ * PostToolUse hook after a failed or refused call, so the call that crossed may never reach it.
  */
 
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -73,6 +76,26 @@ function limitFrom(raw, fallback) {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+/** The last step each session and delegate was told about, so a missed crossing is caught on the next call. */
+export function fileMemory(dir = join(tmpdir(), "conductor-context-guard")) {
+  const file = (input) => join(dir, createHash("sha1").update(`${input.session_id}/${input.agent_id ?? ""}`).digest("hex").slice(0, 16));
+  return {
+    get(input) {
+      try {
+        return Number(readFileSync(file(input), "utf8"));
+      } catch {
+        return undefined;
+      }
+    },
+    set(input, step) {
+      try {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(file(input), String(step));
+      } catch {}
+    },
+  };
+}
+
 const band = (tokens, limit) => (tokens < limit ? -1 : Math.floor((tokens - limit) / STEP));
 const k = (tokens) => `${Math.round(tokens / 1000)}k`;
 
@@ -86,18 +109,21 @@ const SESSION_ACTION =
   `Otherwise, if you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
   `Otherwise, when the stage in hand ends, tell the operator in one line that a fresh session would be cheaper.`;
 
-export function contextNote(input, env, read = readTail) {
+export function contextNote(input, env, read = readTail, memory = fileMemory()) {
   const own = sessionTranscript(input);
   const path = own ?? delegateTranscript(input);
   const limit = own ? limitFrom(env.CONDUCTOR_SESSION_CONTEXT_LIMIT, DEFAULT_SESSION_LIMIT) : limitFrom(env.CONDUCTOR_CONTEXT_LIMIT, DEFAULT_LIMIT);
   if (!path || !limit || bypassed("", env, BYPASS_ENV)) return null;
-  let now, before;
+  let now;
   try {
-    [now, before] = lastTwoContexts(read(path));
+    [now] = lastTwoContexts(read(path));
   } catch {
     return null;
   }
-  if (band(now, limit) <= band(before, limit)) return null;
+  const step = band(now, limit);
+  const told = memory.get(input);
+  if (step < 0 || (Number.isFinite(told) && step <= told)) return null;
+  memory.set(input, step);
   const note =
     `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. Every turn re-reads all of it. ` +
     (own ? SESSION_ACTION : DELEGATE_ACTION);

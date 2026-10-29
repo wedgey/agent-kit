@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { contextNote, contextTokens, delegateTranscript, lastTwoContexts, sessionTranscript } from "../../skills/conductor/tools/hooks/context-guard.mjs";
+import { contextNote, contextTokens, delegateTranscript, fileMemory, lastTwoContexts, sessionTranscript } from "../../skills/conductor/tools/hooks/context-guard.mjs";
 
 const turn = (id, cacheRead, extra = {}) =>
   JSON.stringify({
@@ -30,6 +31,12 @@ function session(lines) {
   return { session_id: "s1", transcript_path: join(dir, "s1.jsonl"), agent_id: "a1", agent_type: "general-purpose", hook_event_name: "PostToolUse" };
 }
 const note = (out) => out?.hookSpecificOutput?.additionalContext;
+const memory = () => {
+  const spoken = new Map();
+  const key = (input) => `${input.session_id}/${input.agent_id ?? ""}`;
+  return { get: (input) => spoken.get(key(input)), set: (input, band) => spoken.set(key(input), band) };
+};
+const guard = (input, env, mem = memory()) => contextNote(input, env, undefined, mem);
 
 describe("the context guard, a PostToolUse hook for delegates and the session's own agent", () => {
   it("counts every input token the turn sent, and not its output", () => {
@@ -49,27 +56,45 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
   });
 
   it("says nothing below the limit", () => {
-    expect(contextNote(session([turn("m1", 100_000), result(), turn("m2", 200_000)]), {})).toBeNull();
+    expect(guard(session([turn("m1", 100_000), result(), turn("m2", 200_000)]), {})).toBeNull();
   });
 
   it("speaks once, on the turn that crosses the limit, and names the size and the limit", () => {
-    const out = contextNote(session([turn("m1", 240_000), result(), turn("m2", 251_000)]), {});
+    const mem = memory();
+    const out = guard(session([turn("m1", 240_000), result(), turn("m2", 251_000)]), {}, mem);
     expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
     expect(note(out)).toMatch(/251k tokens.*250k/);
     expect(note(out)).toMatch(/Context full/);
-    expect(contextNote(session([turn("m1", 251_000), result(), turn("m2", 260_000)]), {})).toBeNull();
+    expect(guard(session([turn("m1", 251_000), result(), turn("m2", 260_000)]), {}, mem)).toBeNull();
   });
 
   it("speaks again at each further step past the limit", () => {
-    expect(note(contextNote(session([turn("m1", 299_000), result(), turn("m2", 301_000)]), {}))).toMatch(/301k/);
-    expect(contextNote(session([turn("m1", 301_000), result(), turn("m2", 340_000)]), {})).toBeNull();
+    const mem = memory();
+    expect(note(guard(session([turn("m1", 240_000), result(), turn("m2", 251_000)]), {}, mem))).toMatch(/251k/);
+    expect(note(guard(session([turn("m1", 299_000), result(), turn("m2", 301_000)]), {}, mem))).toMatch(/301k/);
+    expect(guard(session([turn("m1", 301_000), result(), turn("m2", 340_000)]), {}, mem)).toBeNull();
+  });
+
+  it("speaks on a later call when the call that crossed the limit got no hook, such as a failed one", () => {
+    const mem = memory();
+    expect(note(guard(ownSession([turn("m1", 152_000), result(), turn("m2", 153_000)]), {}, mem))).toMatch(/153k/);
+    expect(guard(ownSession([turn("m1", 153_000), result(), turn("m2", 154_000)]), {}, mem)).toBeNull();
+  });
+
+  it("keeps what it said per transcript and agent in a state folder", () => {
+    const dir = mkdtempSync(join(tmpdir(), "context-guard-state-"));
+    const a = fileMemory(dir);
+    const s = session([turn("m1", 251_000)]);
+    a.set(s, 0);
+    expect(fileMemory(dir).get(s)).toBe(0);
+    expect(fileMemory(dir).get({ ...s, agent_id: "a2" })).toBeUndefined();
   });
 
   it("takes the limit from CONDUCTOR_CONTEXT_LIMIT, and ignores a blank or bad value", () => {
     const s = session([turn("m1", 140_000), result(), turn("m2", 160_000)]);
-    expect(note(contextNote(s, { CONDUCTOR_CONTEXT_LIMIT: "150000" }))).toMatch(/150k/);
-    expect(contextNote(s, { CONDUCTOR_CONTEXT_LIMIT: "" })).toBeNull();
-    expect(contextNote(s, { CONDUCTOR_CONTEXT_LIMIT: "lots" })).toBeNull();
+    expect(note(guard(s, { CONDUCTOR_CONTEXT_LIMIT: "150000" }))).toMatch(/150k/);
+    expect(guard(s, { CONDUCTOR_CONTEXT_LIMIT: "" })).toBeNull();
+    expect(guard(s, { CONDUCTOR_CONTEXT_LIMIT: "lots" })).toBeNull();
   });
 
   it("reads the session's own transcript when no agent_id comes in", () => {
@@ -78,37 +103,38 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
   });
 
   it("tells the session's own agent at its lower limit to hand an epic over", () => {
-    const out = note(contextNote(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}));
+    const mem = memory();
+    const out = note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}, mem));
     expect(out).toMatch(/151k tokens.*150k/);
     expect(out).toMatch(/Hand over/);
-    expect(contextNote(ownSession([turn("m1", 151_000), result(), turn("m2", 160_000)]), {})).toBeNull();
-    expect(note(contextNote(ownSession([turn("m1", 199_000), result(), turn("m2", 201_000)]), {}))).toMatch(/201k/);
+    expect(guard(ownSession([turn("m1", 151_000), result(), turn("m2", 160_000)]), {}, mem)).toBeNull();
+    expect(note(guard(ownSession([turn("m1", 199_000), result(), turn("m2", 201_000)]), {}, mem))).toMatch(/201k/);
   });
 
   it("takes the session's limit from CONDUCTOR_SESSION_CONTEXT_LIMIT, apart from the delegates' limit", () => {
     const s = ownSession([turn("m1", 90_000), result(), turn("m2", 110_000)]);
-    expect(note(contextNote(s, { CONDUCTOR_SESSION_CONTEXT_LIMIT: "100000" }))).toMatch(/100k/);
-    expect(contextNote(s, { CONDUCTOR_CONTEXT_LIMIT: "100000" })).toBeNull();
-    expect(note(contextNote(ownSession([turn("m1", 140_000), result(), turn("m2", 160_000)]), { CONDUCTOR_SESSION_CONTEXT_LIMIT: "" }))).toMatch(/150k/);
+    expect(note(guard(s, { CONDUCTOR_SESSION_CONTEXT_LIMIT: "100000" }))).toMatch(/100k/);
+    expect(guard(s, { CONDUCTOR_CONTEXT_LIMIT: "100000" })).toBeNull();
+    expect(note(guard(ownSession([turn("m1", 140_000), result(), turn("m2", 160_000)]), { CONDUCTOR_SESSION_CONTEXT_LIMIT: "" }))).toMatch(/150k/);
   });
 
   it("tells a lane run as a separate session to report Context full, not to hand the epic over", () => {
-    expect(note(contextNote(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}))).toMatch(/If you are a lane.*Context full report.*Otherwise, if you steer an epic/);
+    expect(note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}))).toMatch(/If you are a lane.*Context full report.*Otherwise, if you steer an epic/);
   });
 
   it("honours every bypass", () => {
     const s = session([turn("m1", 240_000), result(), turn("m2", 251_000)]);
-    expect(contextNote(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), { CONDUCTOR_HOOKS: "off" })).toBeNull();
-    expect(contextNote(s, { CONDUCTOR_HOOKS: "off" })).toBeNull();
-    expect(contextNote(s, { CI: "1" })).toBeNull();
-    expect(contextNote({ ...s, agent_id: "missing" }, {})).toBeNull();
-    expect(contextNote(null, {})).toBeNull();
+    expect(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), { CONDUCTOR_HOOKS: "off" })).toBeNull();
+    expect(guard(s, { CONDUCTOR_HOOKS: "off" })).toBeNull();
+    expect(guard(s, { CI: "1" })).toBeNull();
+    expect(guard({ ...s, agent_id: "missing" }, {})).toBeNull();
+    expect(guard(null, {})).toBeNull();
   });
 
   it("prints the note from stdin and nothing for garbage, exit 0", () => {
     const file = fileURLToPath(new URL("../../skills/conductor/tools/hooks/context-guard.mjs", import.meta.url));
-    const run = (input) => spawnSync("node", [file], { input, env: { ...process.env, CI: "", CONDUCTOR_HOOKS: "", CONDUCTOR_CONTEXT_LIMIT: "" }, encoding: "utf8" });
-    const out = run(JSON.stringify(session([turn("m1", 240_000), result(), turn("m2", 251_000)])));
+    const run = (input) => spawnSync("node", [file], { input, env: { ...process.env, CI: "", CONDUCTOR_HOOKS: "", CONDUCTOR_CONTEXT_LIMIT: "", CONDUCTOR_SESSION_CONTEXT_LIMIT: "" }, encoding: "utf8" });
+    const out = run(JSON.stringify({ ...ownSession([turn("m1", 140_000), result(), turn("m2", 151_000)]), session_id: randomUUID() }));
     expect(JSON.parse(out.stdout).hookSpecificOutput.additionalContext).toMatch(/Context full/);
     expect(run("nope")).toMatchObject({ status: 0, stdout: "" });
   });
