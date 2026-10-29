@@ -67,27 +67,37 @@ describe("looking at lanes, on the watch's own clock", () => {
     return { now: () => t, advance: (minutes) => (t += minutes * 60_000) };
   };
   const minute = 60_000;
+  const box = () => ({ load1: 1, cores: 8, freeMB: 9000 });
 
   it("reports a lane mid-turn once the watch has seen it unchanged for the quiet limit", () => {
     const c = clock();
-    const look = lookAtLanes([file([said(tool), got(result)])], { quietMinutes: 3, intervalMs: minute, now: c.now });
+    const look = lookAtLanes([file([said(tool), got(result)])], { quietMinutes: 3, intervalMs: minute, now: c.now, box });
     expect(look()).toEqual([]);
     c.advance(1);
     expect(look()).toEqual([]);
     c.advance(1);
     expect(look()).toEqual([]);
     c.advance(1);
-    expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "owes-reply", quietMinutes: 3 }]);
+    expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "owes-reply", quietMinutes: 3, box: box() }]);
+  });
+
+  it("blames the box, not the lanes, when two or more go quiet in the same look", () => {
+    const c = clock();
+    const stuck = [said(tool), got(result)];
+    const look = lookAtLanes([file(stuck), file(stuck)], { quietMinutes: 1, intervalMs: minute, now: c.now, box });
+    look();
+    c.advance(1);
+    expect(look()).toEqual([{ event: "box-slow", lanes: ["lane-a", "lane-a"], box: box() }]);
   });
 
   it("gives a tool call three times the quiet limit, because healthy foreground calls ran past it", () => {
     const c = clock();
-    const look = lookAtLanes([file([got(result), said(tool)])], { quietMinutes: 3, intervalMs: minute, now: c.now });
+    const look = lookAtLanes([file([got(result), said(tool)])], { quietMinutes: 3, intervalMs: minute, now: c.now, box });
     for (let i = 0; i < 9; i++) {
       expect(look()).toEqual([]);
       c.advance(1);
     }
-    expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "tool-running", quietMinutes: 9 }]);
+    expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "tool-running", quietMinutes: 9, box: box() }]);
   });
 
   it("leaves a lane alone that ended its turn, however long it waits", () => {

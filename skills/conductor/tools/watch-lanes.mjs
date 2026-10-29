@@ -10,11 +10,12 @@
  *
  * Defaults: 15 quiet minutes, three times that for a lane inside a tool call, a look every 60 seconds, 72 hours.
  *
- * Prints one JSON line, { events }, and exits 0. Events: { event: "stalled", lane, state, quietMinutes },
- * { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
+ * Prints one JSON line, { events }, and exits 0. Events: { event: "stalled", lane, state, quietMinutes, box },
+ * { event: "box-slow", lanes, box } when two or more stall in one look, { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
  */
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { availableParallelism, freemem, loadavg } from "node:os";
 import { basename } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -74,7 +75,9 @@ const QUIET_FACTOR = { "owes-reply": 1, "tool-running": 3 };
  * A look at every lane, counting quiet time from the first look that saw the file as it is now.
  * A gap of more than three intervals between looks means the machine slept, so every count starts again.
  */
-export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now }) {
+const machine = () => ({ load1: Math.round(loadavg()[0] * 10) / 10, cores: availableParallelism(), freeMB: Math.round(freemem() / 1048576) });
+
+export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now, box = machine }) {
   const seen = new Map();
   let lastLook = null;
   let started = null;
@@ -105,7 +108,13 @@ export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now })
       const factor = QUIET_FACTOR[before.state];
       if (factor && quiet >= quietMinutes * factor) found.push({ event: "stalled", lane, state: before.state, quietMinutes: quiet });
     }
-    return found;
+    const stalled = found.filter((f) => f.event === "stalled");
+    if (!stalled.length) return found;
+    // Lanes going quiet together point at the box, and replacing them would only add load to it.
+    const load = box();
+    const rest = found.filter((f) => f.event !== "stalled");
+    if (stalled.length > 1) return [...rest, { event: "box-slow", lanes: stalled.map((f) => f.lane), box: load }];
+    return [...rest, { ...stalled[0], box: load }];
   };
 }
 
