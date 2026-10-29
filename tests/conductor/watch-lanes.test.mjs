@@ -24,6 +24,12 @@ describe("a lane's turn state, from the tail of its transcript", () => {
     expect(turnState([got(result), said(text)].join("\n"))).toBe("turn-ended");
   });
 
+  it("has ended its turn after handing its report back, or after the operator interrupted it", () => {
+    const handback = { type: "tool_use", id: "h1", name: "SubagentHandback", input: {} };
+    expect(turnState([said(handback), got({ type: "tool_result", tool_use_id: "h1", content: "Report delivered" })].join("\n"))).toBe("turn-ended");
+    expect(turnState([said(tool), got({ type: "text", text: "[Request interrupted by user]" })].join("\n"))).toBe("turn-ended");
+  });
+
   it("is mid-turn after thinking alone, which never ends a turn", () => {
     expect(turnState([got(result), said({ type: "thinking", thinking: "hm" })].join("\n"))).toBe("owes-reply");
   });
@@ -40,6 +46,13 @@ describe("reading a lane's last entry", () => {
     const huge = JSON.stringify({ type: "api-request-blob", body: "x".repeat(600_000) });
     writeFileSync(file, [said(tool), got(result), huge].join("\n") + "\n");
     expect(lastEntryState(file, 1024)).toBe("owes-reply");
+  });
+
+  it("judges only the bytes the look found unchanged, not a write that lands during the look", () => {
+    const file = join(mkdtempSync(join(tmpdir(), "watch-lanes-")), "lane-a.output");
+    const before = [said(tool), got(result)].join("\n") + "\n";
+    writeFileSync(file, before + said(text) + "\n");
+    expect(lastEntryState(file, 1024, Buffer.byteLength(before))).toBe("owes-reply");
   });
 });
 
@@ -67,6 +80,16 @@ describe("looking at lanes, on the watch's own clock", () => {
     expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "owes-reply", quietMinutes: 3 }]);
   });
 
+  it("gives a tool call three times the quiet limit, because healthy foreground calls ran past it", () => {
+    const c = clock();
+    const look = lookAtLanes([file([got(result), said(tool)])], { quietMinutes: 3, intervalMs: minute, now: c.now });
+    for (let i = 0; i < 9; i++) {
+      expect(look()).toEqual([]);
+      c.advance(1);
+    }
+    expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "tool-running", quietMinutes: 9 }]);
+  });
+
   it("leaves a lane alone that ended its turn, however long it waits", () => {
     const c = clock();
     const look = lookAtLanes([file([got(result), said(text)])], { quietMinutes: 1, intervalMs: minute, now: c.now });
@@ -86,8 +109,14 @@ describe("looking at lanes, on the watch's own clock", () => {
     expect(look()).toEqual([]);
   });
 
-  it("reports a lane whose transcript is gone", () => {
-    expect(lookAtLanes(["/nope/lane-b.output"], { quietMinutes: 1, intervalMs: minute })()).toEqual([{ event: "gone", lane: "lane-b" }]);
+  it("reports a transcript that vanished, and one that never appeared within the quiet limit", () => {
+    const c = clock();
+    const look = lookAtLanes(["/nope/lane-b.output"], { quietMinutes: 2, intervalMs: minute, now: c.now });
+    expect(look()).toEqual([]);
+    c.advance(1);
+    expect(look()).toEqual([]);
+    c.advance(1);
+    expect(look()).toEqual([{ event: "gone", lane: "lane-b" }]);
   });
 });
 
