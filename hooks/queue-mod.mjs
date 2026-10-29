@@ -75,8 +75,8 @@ async function checkTyped($, typed, outerVerdict) {
 }
 
 /** @type {import('claude-code').Register} */
-export const register = (on, options) => {
-  registerHandover(on, options);
+export const register = (on) => {
+  registerHandover(on);
   on("tool.call", { tool: "Bash" }, async ($, e, next) => {
     if (e.command.trim() === PROBE) return { deny: "conductor's Bash mod is loaded." };
     let outer;

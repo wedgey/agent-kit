@@ -7,7 +7,7 @@ const KEEP = 'Epic #431. Lane #569: agent a1, task t1, branch fix/569, PR open. 
 const RESUME = "Continue the epic from #431's latest hand-over comment."
 
 /** The engine beneath the mod: compact answers per `compact`, every submit and toast is recorded. */
-function harness(on: On, compact: (n: number) => { skip?: string } | Error = () => ({})) {
+function harness(on: On, compact: (n: number) => { skip?: string } | Error = () => ({}), submitFails = false) {
   const w = { compacted: [] as (string | undefined)[], submitted: [] as string[], toasts: [] as string[], registered: [] as string[] }
   on('tool.register', (_$, e) => {
     w.registered.push(e.name)
@@ -21,12 +21,14 @@ function harness(on: On, compact: (n: number) => { skip?: string } | Error = () 
   })
   on('prompt.submit', (_$, e) => {
     w.submitted.push(e.text)
+    if (submitFails) throw new Error('no prompt box')
     return { text: e.text } as never
   })
   on('ui.toast', (_$, e) => {
     w.toasts.push(String(e.text))
     return { value: undefined }
   })
+  on('ui.log', () => ({ value: undefined }))
   on('turn.complete', () => ({ text: '' }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   return w
@@ -81,14 +83,42 @@ describe('the handover', () => {
     expect(w.submitted).toEqual([RESUME])
   })
 
-  test('gives up and tells the operator when compact keeps rejecting, submitting nothing', async ($, on) => {
+  test('keeps the handover for the next turn end when a notice turn outlasts the retries', async ($, on) => {
     const clock = mock.clock(on)
-    const w = harness(on, () => new Error('a turn is running'))
+    let busy = true
+    const w = harness(on, () => (busy ? new Error('a turn is running') : {}))
     await handover($, { keep: KEEP, resume: RESUME })
     await turnEnds($)
     await clock.advance(60_000)
     expect(w.submitted).toEqual([])
-    expect(w.toasts.join('\n')).toContain('Run /compact')
+    busy = false
+    await turnEnds($)
+    await clock.advance(0)
+    expect(w.submitted).toEqual([RESUME])
+  })
+
+  test('shows the resume prompt when it cannot be submitted', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on, () => ({}), true)
+    await handover($, { keep: KEEP, resume: RESUME })
+    await turnEnds($)
+    await clock.advance(0)
+    expect(w.toasts.join('\n')).toContain(RESUME)
+  })
+
+  test('refuses a second call while one is under way, so it never runs twice', async ($, on) => {
+    const clock = mock.clock(on)
+    let busy = true
+    const w = harness(on, () => (busy ? new Error('a turn is running') : {}))
+    await handover($, { keep: KEEP, resume: RESUME })
+    await turnEnds($)
+    await clock.advance(0)
+    const again = await handover($, { keep: 'other', resume: 'other' })
+    expect(String(again.result)).toContain('already under way')
+    await turnEnds($)
+    busy = false
+    await clock.advance(30_000)
+    expect(w.submitted).toEqual([RESUME])
   })
 
   test('submits nothing when a hook skips the compaction, and says so', async ($, on) => {
@@ -101,15 +131,17 @@ describe('the handover', () => {
     expect(w.toasts.join('\n')).toContain('vetoed')
   })
 
-  test('is cancelled when the operator interrupts the turn', async ($, on) => {
-    const clock = mock.clock(on)
-    const w = harness(on)
-    await handover($, { keep: KEEP, resume: RESUME })
-    await turnEnds($, { reason: 'aborted', isAborted: true })
-    await clock.advance(5_000)
-    expect(w.compacted).toEqual([])
-    expect(w.submitted).toEqual([])
-  })
+  for (const reason of ['aborted', 'error', 'refusal'] as const) {
+    test(`is cancelled by a turn that ends ${reason}`, async ($, on) => {
+      const clock = mock.clock(on)
+      const w = harness(on)
+      await handover($, { keep: KEEP, resume: RESUME })
+      await turnEnds($, { reason, isAborted: reason === 'aborted' })
+      await clock.advance(5_000)
+      expect(w.compacted).toEqual([])
+      expect(w.submitted).toEqual([])
+    })
+  }
 
   test("ignores a subagent's turn end and waits for the main loop's", async ($, on) => {
     const clock = mock.clock(on)

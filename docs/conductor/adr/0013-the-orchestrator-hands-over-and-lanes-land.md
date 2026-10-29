@@ -1,3 +1,7 @@
+---
+status: handover superseded by ADR 0015; lanes landing their own PRs stands
+---
+
 # The orchestrator hands over, and lanes land their own PRs
 
 ADR 0011 gave lanes a context limit and left the session's own agent to the operator. On 2026-10-28 and 29 we measured one epic's orchestrator over two days. It made 361 model calls with a median context of 325k tokens and a largest of 966k, and those calls re-read about 250M tokens. It had been resumed and compacted twice rather than restarted. Text-only calls, mostly status updates written after a lane notice, used 28% of that. Calls that ran a shell command itself used about 25%: rebases, pushes, lint, typecheck, unit and end-to-end tests, and deploy checks while it shipped each PR. Every notice cost a call at that context size, whatever the notice said.

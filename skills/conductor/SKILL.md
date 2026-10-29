@@ -43,7 +43,7 @@ Playbooks use these. The binding says how each one works in your harness.
 - **show** a visual: a diagram, a mockup, a screenshot.
 - **isolate** a delegate's writes in their own worktree or sandbox.
 - **background** a command so the turn is free, then wait for its completion notice.
-- **hand over** the session to itself: shrink its context to what you keep, then go on, without ending it.
+- **hand over in place**: hand the session to itself: shrink its context to what you keep, then go on, without ending it.
 
 ## The todo list
 

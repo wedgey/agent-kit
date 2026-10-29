@@ -1,12 +1,9 @@
-// Conductor's in-place handover. The orchestrator calls the handover tool once an epic's state is on
-// its issue; when that turn ends, the session compacts to what must survive and goes on by itself.
-// The session never ends, so its subagent lanes and background watches keep running through it.
-
-export const TOOL = "handover";
+const TOOL = "handover";
 const CALLED_AS = `mcp__conductor__${TOOL}`;
-// compact rejects while a turn runs, and turn.complete fires before the engine counts the turn over.
-export const RETRY_MS = 1_000;
-export const TRIES = 30;
+// compact rejects while a turn runs. A lane notice queued at the turn's end starts another turn at
+// once, so a handover that runs out of tries waits for the next main-loop turn end rather than dropping.
+const RETRY_MS = 1_000;
+const TRIES = 30;
 
 const DESCRIPTION =
   "Hands this session over to itself: when your turn ends, the conversation is compacted to `keep` and `resume` is submitted as the next prompt. " +
@@ -24,8 +21,12 @@ const SCHEMA = {
   required: ["keep", "resume"],
 };
 
-/** The handover the next main-loop turn end runs, or null. One per session. */
+// shortcut: a plugin reload between the tool call and the compaction drops the handover, and the
+// context guard speaks again 50k later; move both into $.state if reloads mid-epic show up.
+/** The handover the next main-loop turn end runs, or null. */
 let pending = null;
+/** Whether a handover is compacting or submitting now. */
+let running = false;
 
 const instructionsFor = (keep) =>
   `This session is handing over to itself to shrink its context. Keep only what follows, word for word where it names ids, and drop the rest of the conversation.\n\n${keep}`;
@@ -35,13 +36,13 @@ async function compactThenResume($, handover) {
     try {
       const done = await $.session.compact({ instructions: instructionsFor(handover.keep) });
       if (done?.skip) {
-        $.ui.toast(`conductor: the handover's compaction was skipped (${done.skip}). Run /compact, then continue the epic.`);
+        $.ui.toast(`conductor: the handover's compaction was skipped (${done.skip}). Run /compact, then send: ${handover.resume}`);
         return;
       }
       break;
-    } catch (error) {
+    } catch {
       if (tried >= TRIES) {
-        $.ui.toast(`conductor: the handover could not compact (${error?.message ?? error}). Run /compact, then continue the epic.`);
+        pending ??= handover;
         return;
       }
       await $.clock.sleep(RETRY_MS);
@@ -50,6 +51,7 @@ async function compactThenResume($, handover) {
   try {
     await $.prompt.submit({ text: handover.resume });
   } catch (error) {
+    $.ui.log(`conductor: the handover could not submit its resume prompt: ${handover.resume}`, { to: "debug" });
     $.ui.toast(`conductor: the session compacted but could not continue (${error?.message ?? error}). Send: ${handover.resume}`);
   }
 }
@@ -65,6 +67,7 @@ export const register = (on) => {
 
   on("tool.call", { tool: CALLED_AS }, async (_$, e) => {
     if (e.agentId) return { result: "Not handed over: only the session's own agent hands over. A lane reports Context full instead.", isError: true };
+    if (pending || running) return { result: "A handover is already under way. End your turn." };
     const keep = typeof e.keep === "string" ? e.keep.trim() : "";
     const resume = typeof e.resume === "string" ? e.resume.trim() : "";
     if (!keep || !resume) return { result: "Not handed over: give both keep and resume.", isError: true };
@@ -74,16 +77,20 @@ export const register = (on) => {
 
   on("turn.complete", async ($, e, next) => {
     const done = await next(e);
-    if (e.agentId || !pending) return done;
+    if (e.agentId || !pending || running) return done;
     const handover = pending;
     pending = null;
-    // An interrupted turn means the operator stepped in, so the handover waits for them.
     if (e.reason !== "answer") {
-      $.ui.toast("conductor: the handover was cancelled because the turn did not finish.");
+      $.ui.toast("conductor: the handover was cancelled because the turn did not end with an answer.");
       return done;
     }
-    // Rejects only once the plugin has unloaded, when nobody is left to tell.
-    $.clock.after(0, () => void compactThenResume($, handover).catch(() => {}));
+    running = true;
+    $.clock.after(0, () =>
+      void compactThenResume($, handover)
+        // Rejects only when the plugin has unloaded or its toast failed; nobody is left to tell.
+        .catch(() => {})
+        .finally(() => (running = false)),
+    );
     return done;
   });
 };
