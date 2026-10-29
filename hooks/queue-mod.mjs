@@ -1,6 +1,8 @@
 // Conductor's queue on Bash calls. The command text is triaged here, in the module; only a heavy
 // or queued command reaches Node, through decide.mjs, which reads the queue. Wait loops are left
 // to the PreToolUse command hook, which holds even where mods do not load.
+// hooks.json takes one module per plugin, so this one also registers the handover.
+import { register as registerHandover } from "./handover-mod.mjs";
 import { ancestorDirs, mergeQueueConfigs, parseQueueConfig, REPO_CONFIG, triage, typedQueued } from "../skills/conductor/tools/hooks/classify.mjs";
 
 /** The setup doctor's probe: only a loaded mod answers it. */
@@ -73,7 +75,8 @@ async function checkTyped($, typed, outerVerdict) {
 }
 
 /** @type {import('claude-code').Register} */
-export const register = (on) => {
+export const register = (on, options) => {
+  registerHandover(on, options);
   on("tool.call", { tool: "Bash" }, async ($, e, next) => {
     if (e.command.trim() === PROBE) return { deny: "conductor's Bash mod is loaded." };
     let outer;

@@ -1,0 +1,7 @@
+# The orchestrator hands over in place
+
+ADR 0013 moved an epic to a fresh session when the orchestrator's context passed its limit. Each handover then needed the operator. On 2026-10-29 the Project 4 orchestrator started its successor with `claude --bg`, and the operator had to `/exit` and `claude attach` to it. It also cost every working lane a Context full report, a stop and a fresh start, because a subagent lane ends with its session.
+
+Claude Code 2.1.312 lets a plugin's mod compact its own session (`$.session.compact`, the call `/compact` makes) and submit the next prompt (`$.prompt.submit`). So conductor's mod adds a `handover` tool. The orchestrator writes the epic's state to its issue, calls the tool with what the session must keep and the prompt that goes on, and ends its turn. When the turn ends, the mod compacts with those instructions and submits the prompt. The session is the same one, so its lanes, watches and message routes carry on, and nobody acts. A probe on 2026-10-29 compacted 9 s after its turn ended, went on from the submitted prompt with the kept ids, and still received a running subagent's notices.
+
+We kept compaction over `/clear`. `/clear` ends the conversation, which a subagent lane does not outlive, and the new conversation would not know the lanes' ids. A compaction is steered by the `keep` text, and the issue stays the record if the summary drops something. A harness without the tool keeps ADR 0013's handover to a fresh session. How small the context is after a compaction, against a fresh session's, is not measured yet.

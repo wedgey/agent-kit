@@ -36,7 +36,7 @@ It also suggests a slot count. Set it once per machine in `~/.claude/settings.js
 
 A quarter of your cores is a good start for tests. Without a value each queue runs one command at a time. `CONDUCTOR_QUEUE_MIN_FREE_MB` (default 4096) is the free memory a second slot needs.
 
-`CONDUCTOR_CONTEXT_LIMIT` (default 250000) is the context, in tokens, at which a lane hands over to a fresh lane. `CONDUCTOR_SESSION_CONTEXT_LIMIT` (default 150000) is the same for the session's own agent, at which an epic's orchestrator hands the epic over to a fresh session.
+`CONDUCTOR_CONTEXT_LIMIT` (default 250000) is the context, in tokens, at which a lane hands over to a fresh lane. `CONDUCTOR_SESSION_CONTEXT_LIMIT` (default 150000) is the same for the session's own agent, at which an epic's orchestrator writes the epic's state to its issue and compacts its own session to that state. Its lanes keep running and you do nothing.
 
 ### 3. Prepare the repo
 
