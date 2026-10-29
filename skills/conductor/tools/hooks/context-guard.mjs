@@ -80,8 +80,10 @@ const DELEGATE_ACTION =
   `Finish the edit in hand and run its check. Start no new stage. ` +
   `If you are a lane, push your branch and end your turn with a Context full report, per roles.md "Lanes". ` +
   `Otherwise end your turn with your report, and put what remains under OPEN.`;
+// A lane run as its own session has no agent_id either, so the session note must route it to its report.
 const SESSION_ACTION =
-  `If you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
+  `If you are a lane, push your branch and send a Context full report to REPORT TO, per roles.md "Lanes". ` +
+  `Otherwise, if you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
   `Otherwise, when the stage in hand ends, tell the operator in one line that a fresh session would be cheaper.`;
 
 export function contextNote(input, env, read = readTail) {

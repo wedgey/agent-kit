@@ -77,11 +77,10 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
     expect(sessionTranscript({ transcript_path: "/p/s1.jsonl", session_id: "s1", agent_id: "a1" })).toBeNull();
   });
 
-  it("tells the session's own agent at its lower limit to hand an epic over, not to send a Context full report", () => {
+  it("tells the session's own agent at its lower limit to hand an epic over", () => {
     const out = note(contextNote(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}));
     expect(out).toMatch(/151k tokens.*150k/);
     expect(out).toMatch(/Hand over/);
-    expect(out).not.toMatch(/Context full report/);
     expect(contextNote(ownSession([turn("m1", 151_000), result(), turn("m2", 160_000)]), {})).toBeNull();
     expect(note(contextNote(ownSession([turn("m1", 199_000), result(), turn("m2", 201_000)]), {}))).toMatch(/201k/);
   });
@@ -90,7 +89,11 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
     const s = ownSession([turn("m1", 90_000), result(), turn("m2", 110_000)]);
     expect(note(contextNote(s, { CONDUCTOR_SESSION_CONTEXT_LIMIT: "100000" }))).toMatch(/100k/);
     expect(contextNote(s, { CONDUCTOR_CONTEXT_LIMIT: "100000" })).toBeNull();
-    expect(contextNote(s, { CONDUCTOR_SESSION_CONTEXT_LIMIT: "" })).toBeNull();
+    expect(note(contextNote(ownSession([turn("m1", 140_000), result(), turn("m2", 160_000)]), { CONDUCTOR_SESSION_CONTEXT_LIMIT: "" }))).toMatch(/150k/);
+  });
+
+  it("tells a lane run as a separate session to report Context full, not to hand the epic over", () => {
+    expect(note(contextNote(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}))).toMatch(/If you are a lane.*Context full report.*Otherwise, if you steer an epic/);
   });
 
   it("honours every bypass", () => {
