@@ -10,7 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,22 +76,33 @@ function limitFrom(raw, fallback) {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-/** The last step each session and delegate was told about, so a missed crossing is caught on the next call. */
-export function fileMemory(dir = join(tmpdir(), "conductor-context-guard")) {
+/**
+ * The last step each session and delegate was at, so a missed crossing is caught on the next call.
+ * get: -1 when nothing is stored, undefined when the file is unreadable. set: whether it was kept.
+ */
+export function fileMemory(dir = join(tmpdir(), `conductor-context-guard-${process.getuid?.() ?? "user"}`)) {
   const file = (input) => join(dir, createHash("sha1").update(`${input.session_id}/${input.agent_id ?? ""}`).digest("hex").slice(0, 16));
   return {
     get(input) {
+      let text;
       try {
-        return Number(readFileSync(file(input), "utf8"));
-      } catch {
-        return undefined;
+        text = readFileSync(file(input), "utf8");
+      } catch (error) {
+        return error?.code === "ENOENT" ? -1 : undefined;
       }
+      const step = Number(text.trim() || NaN);
+      return Number.isInteger(step) ? step : undefined;
     },
     set(input, step) {
       try {
         mkdirSync(dir, { recursive: true });
-        writeFileSync(file(input), String(step));
-      } catch {}
+        const temp = `${file(input)}.${process.pid}`;
+        writeFileSync(temp, String(step));
+        renameSync(temp, file(input));
+        return true;
+      } catch {
+        return false;
+      }
     },
   };
 }
@@ -114,16 +125,18 @@ export function contextNote(input, env, read = readTail, memory = fileMemory()) 
   const path = own ?? delegateTranscript(input);
   const limit = own ? limitFrom(env.CONDUCTOR_SESSION_CONTEXT_LIMIT, DEFAULT_SESSION_LIMIT) : limitFrom(env.CONDUCTOR_CONTEXT_LIMIT, DEFAULT_LIMIT);
   if (!path || !limit || bypassed("", env, BYPASS_ENV)) return null;
-  let now;
+  let now, before;
   try {
-    [now] = lastTwoContexts(read(path));
+    [now, before] = lastTwoContexts(read(path));
   } catch {
     return null;
   }
   const step = band(now, limit);
   const told = memory.get(input);
-  if (step < 0 || (Number.isFinite(told) && step <= told)) return null;
-  memory.set(input, step);
+  // Storing every change, below the limit too, lets a context that shrank and regrew be told again.
+  const kept = step === told || memory.set(input, step);
+  const last = kept && Number.isInteger(told) ? told : band(before, limit);
+  if (step < 0 || step <= last) return null;
   const note =
     `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. Every turn re-reads all of it. ` +
     (own ? SESSION_ACTION : DELEGATE_ACTION);

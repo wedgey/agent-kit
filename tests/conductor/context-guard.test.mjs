@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +34,7 @@ const note = (out) => out?.hookSpecificOutput?.additionalContext;
 const memory = () => {
   const spoken = new Map();
   const key = (input) => `${input.session_id}/${input.agent_id ?? ""}`;
-  return { get: (input) => spoken.get(key(input)), set: (input, band) => spoken.set(key(input), band) };
+  return { get: (input) => spoken.get(key(input)) ?? -1, set: (input, band) => (spoken.set(key(input), band), true) };
 };
 const guard = (input, env, mem = memory()) => contextNote(input, env, undefined, mem);
 
@@ -81,13 +81,33 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
     expect(guard(ownSession([turn("m1", 153_000), result(), turn("m2", 154_000)]), {}, mem)).toBeNull();
   });
 
-  it("keeps what it said per transcript and agent in a state folder", () => {
+  it("speaks again when the context drops below the limit and grows back, as after a compaction", () => {
+    const mem = memory();
+    expect(note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}, mem))).toMatch(/151k/);
+    expect(guard(ownSession([turn("m1", 151_000), result(), turn("m2", 40_000)]), {}, mem)).toBeNull();
+    expect(note(guard(ownSession([turn("m1", 40_000), result(), turn("m2", 160_000)]), {}, mem))).toMatch(/160k/);
+  });
+
+  it("keeps what it said per session and agent in a state folder, and reads an empty or bad file as unknown", () => {
     const dir = mkdtempSync(join(tmpdir(), "context-guard-state-"));
-    const a = fileMemory(dir);
     const s = session([turn("m1", 251_000)]);
-    a.set(s, 0);
+    expect(fileMemory(dir).get(s)).toBe(-1);
+    expect(fileMemory(dir).set(s, 0)).toBe(true);
     expect(fileMemory(dir).get(s)).toBe(0);
-    expect(fileMemory(dir).get({ ...s, agent_id: "a2" })).toBeUndefined();
+    expect(fileMemory(dir).get({ ...s, agent_id: "a2" })).toBe(-1);
+    for (const bad of ["", "x"]) {
+      writeFileSync(join(dir, readdirSync(dir)[0]), bad);
+      expect(fileMemory(dir).get(s)).toBeUndefined();
+    }
+  });
+
+  it("falls back to speaking once per crossing when its state cannot be kept", () => {
+    const blocked = join(mkdtempSync(join(tmpdir(), "context-guard-state-")), "file");
+    writeFileSync(blocked, "");
+    const mem = fileMemory(join(blocked, "under-a-file"));
+    const s = ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]);
+    expect(note(contextNote(s, {}, undefined, mem))).toMatch(/151k/);
+    expect(contextNote(ownSession([turn("m1", 151_000), result(), turn("m2", 152_000)]), {}, undefined, mem)).toBeNull();
   });
 
   it("takes the limit from CONDUCTOR_CONTEXT_LIMIT, and ignores a blank or bad value", () => {
