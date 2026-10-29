@@ -2,7 +2,7 @@
 
 **You own what lands.** Verify each PR independently, land only the verified run from the bottom, then keep your hands off the stack.
 
-Only an explicit operator request to land, ship or merge starts this playbook. [Babysit](babysit.md) never does. The request authorises the merges below, and nothing beyond the PRs it names.
+Only an explicit operator request to land, ship or merge starts this playbook. In an epic, each lane runs it on its own PR under LAND, per roles.md "Lanes", and the orchestrator runs none of it. [Babysit](babysit.md) never does. The request authorises the merges below, and nothing beyond the PRs it names.
 
 1. **Get a verdict on every PR.** spawn one verifier per PR, per roles.md Diversity. Verifiers that run servers in parallel get isolate. Brief each to run the change on the real surface the way a user would, comparing the PR's base branch against its head, and to post `PASS`, `PASS+NOTES` or `FAIL` with evidence on the PR. Green CI and a bot approval are not verdicts, because neither runs the change as a user would. See [prove-it-works](../principles/prove-it-works.md). Record the head SHA each verdict covers as `<verdict-sha>`, and the tip of `origin/<baseRefName>` it ran on as `<verdict-base>`.
 2. **Find the run.** Walk up from the lowest unmerged PR and stop at the first one without `PASS` or `PASS+NOTES`. Everything below it is the run and the top PR is the ceiling. A verified PR above an unverified one waits, because it cannot land without the code beneath it. A PR that neither holds nor needs that code may move onto trunk and land alone, but it needs a fresh verdict first, because its old one ran with that code beneath it.

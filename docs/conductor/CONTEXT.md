@@ -41,7 +41,7 @@ One piece of an epic that ends in one PR, with the files it owns and acceptance 
 _Avoid_: Task, story, item, the queue's waiter file
 
 **Lane**:
-The one delegate that runs a whole playbook. It owns one ticket from branch to merge-ready PR, in its own worktree, as its own orchestrator with its own delegates. The epic's orchestrator dispatches it and steers it by messages.
+The one delegate that runs a whole playbook. It owns one ticket from branch to merge-ready PR, and to the merge when the operator asked to land it, in its own worktree, as its own orchestrator with its own delegates. The epic's orchestrator dispatches it and steers it by messages.
 _Avoid_: Worker, sub-orchestrator, slot (that is the queue's)
 
 ## Shipping
