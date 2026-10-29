@@ -1,10 +1,10 @@
-import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { lookAtLanes, turnState, watchLanes } from "../../skills/conductor/tools/watch-lanes.mjs";
+import { lastEntryState, lookAtLanes, turnState, watchLanes } from "../../skills/conductor/tools/watch-lanes.mjs";
 
 const said = (...blocks) => JSON.stringify({ type: "assistant", message: { content: blocks } });
 const got = (...blocks) => JSON.stringify({ type: "user", message: { content: blocks } });
@@ -24,33 +24,70 @@ describe("a lane's turn state, from the tail of its transcript", () => {
     expect(turnState([got(result), said(text)].join("\n"))).toBe("turn-ended");
   });
 
+  it("is mid-turn after thinking alone, which never ends a turn", () => {
+    expect(turnState([got(result), said({ type: "thinking", thinking: "hm" })].join("\n"))).toBe("owes-reply");
+  });
+
   it("skips entries with no message and lines that are not JSON", () => {
     expect(turnState([said(tool), got(result), noise, "{broken"].join("\n"))).toBe("owes-reply");
     expect(turnState("")).toBe("unknown");
   });
 });
 
-describe("looking at lanes", () => {
-  function lane(lines, minutesAgo) {
+describe("reading a lane's last entry", () => {
+  it("widens the read until an entry with a message fits, so one huge entry cannot hide the state", () => {
     const file = join(mkdtempSync(join(tmpdir(), "watch-lanes-")), "lane-a.output");
-    writeFileSync(file, lines.join("\n") + "\n");
-    const when = (Date.now() - minutesAgo * 60_000) / 1000;
-    utimesSync(file, when, when);
-    return file;
-  }
+    const huge = JSON.stringify({ type: "api-request-blob", body: "x".repeat(600_000) });
+    writeFileSync(file, [said(tool), got(result), huge].join("\n") + "\n");
+    expect(lastEntryState(file, 1024)).toBe("owes-reply");
+  });
+});
 
-  it("reports a lane quiet past the limit mid-turn, and names its state", () => {
-    const look = lookAtLanes([lane([said(tool), got(result)], 20)], 15);
-    expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "owes-reply", quietMinutes: 20 }]);
+describe("looking at lanes, on the watch's own clock", () => {
+  const file = (lines) => {
+    const path = join(mkdtempSync(join(tmpdir(), "watch-lanes-")), "lane-a.output");
+    writeFileSync(path, lines.join("\n") + "\n");
+    return path;
+  };
+  const clock = () => {
+    let t = 0;
+    return { now: () => t, advance: (minutes) => (t += minutes * 60_000) };
+  };
+  const minute = 60_000;
+
+  it("reports a lane mid-turn once the watch has seen it unchanged for the quiet limit", () => {
+    const c = clock();
+    const look = lookAtLanes([file([said(tool), got(result)])], { quietMinutes: 3, intervalMs: minute, now: c.now });
+    expect(look()).toEqual([]);
+    c.advance(1);
+    expect(look()).toEqual([]);
+    c.advance(1);
+    expect(look()).toEqual([]);
+    c.advance(1);
+    expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "owes-reply", quietMinutes: 3 }]);
   });
 
-  it("leaves a lane alone that is quiet because its turn ended, or that is quiet for less than the limit", () => {
-    expect(lookAtLanes([lane([got(result), said(text)], 300)], 15)()).toEqual([]);
-    expect(lookAtLanes([lane([said(tool), got(result)], 5)], 15)()).toEqual([]);
+  it("leaves a lane alone that ended its turn, however long it waits", () => {
+    const c = clock();
+    const look = lookAtLanes([file([got(result), said(text)])], { quietMinutes: 1, intervalMs: minute, now: c.now });
+    for (let i = 0; i < 5; i++) {
+      expect(look()).toEqual([]);
+      c.advance(1);
+    }
+  });
+
+  it("starts counting again after a long gap between looks, so a sleeping machine reports no lane on waking", () => {
+    const c = clock();
+    const look = lookAtLanes([file([said(tool), got(result)])], { quietMinutes: 3, intervalMs: minute, now: c.now });
+    look();
+    c.advance(120);
+    expect(look()).toEqual([]);
+    c.advance(1);
+    expect(look()).toEqual([]);
   });
 
   it("reports a lane whose transcript is gone", () => {
-    expect(lookAtLanes(["/nope/lane-b.output"], 15)()).toEqual([{ event: "gone", lane: "lane-b" }]);
+    expect(lookAtLanes(["/nope/lane-b.output"], { quietMinutes: 1, intervalMs: minute })()).toEqual([{ event: "gone", lane: "lane-b" }]);
   });
 });
 
