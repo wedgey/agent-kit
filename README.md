@@ -36,7 +36,7 @@ It also suggests a slot count. Set it once per machine in `~/.claude/settings.js
 
 A quarter of your cores is a good start for tests. Without a value each queue runs one command at a time. `CONDUCTOR_QUEUE_MIN_FREE_MB` (default 4096) is the free memory a second slot needs.
 
-`CONDUCTOR_CONTEXT_LIMIT` (default 250000) is the context, in tokens, at which a lane hands over to a fresh lane.
+`CONDUCTOR_CONTEXT_LIMIT` (default 250000) is the context, in tokens, at which a lane hands over to a fresh lane. `CONDUCTOR_SESSION_CONTEXT_LIMIT` (default 150000) is the same for the session's own agent, at which an epic's orchestrator hands the epic over to a fresh session.
 
 ### 3. Prepare the repo
 
@@ -51,7 +51,7 @@ Conductor reads the repo's own rules first, and they win over its own. It works 
 
 Ask for the work as you would any coding task. Conductor picks a playbook: investigation, bug fix, feature, refactoring, prototype, epic, opening a PR, babysitting one, or shipping. `/conductor:conductor` forces it on.
 
-For a larger body of work, describe all of it or point at an epic issue. Conductor decides from the work whether it needs one PR or several. For several, it cuts tickets, draws their dependency graph, and dispatches one lane per ready ticket. Each lane writes its ticket's code, has it reviewed and verified by fresh agents, and carries its PR to merge-ready. Lanes run on Sonnet at medium effort, and on Opus at high effort when a ticket needs design or a lane escalates. Nothing merges until you ask for it to ship.
+For a larger body of work, describe all of it or point at an epic issue. Conductor decides from the work whether it needs one PR or several. For several, it cuts tickets, draws their dependency graph, and dispatches one lane per ready ticket. Each lane writes its ticket's code, has it reviewed and verified by fresh agents, and carries its PR to merge-ready. Lanes run on Sonnet at medium effort, and on Opus at high effort when a ticket needs design or a lane escalates. Nothing merges until you ask for it to ship. Then each lane lands its own PR.
 
 For epics:
 

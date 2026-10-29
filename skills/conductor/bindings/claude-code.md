@@ -34,7 +34,7 @@ The plugin's mod queues a heavy `Bash` command as `node <plugin>/skills/conducto
 
 ## The context limit
 
-The plugin's `PostToolUse` hook, `tools/hooks/context-guard.mjs`, reads a delegate's own transcript after each tool call. When the last turn's input passes `CONDUCTOR_CONTEXT_LIMIT` tokens (default 250000), it adds a note that tells the delegate to hand over. It speaks again at each further 50000. It never speaks to the session's own agent, and `CONDUCTOR_HOOKS=off` turns it off. A hook that runs in a delegate gets `agent_id`, and the delegate's transcript is `<session dir>/<session id>/subagents/agent-<agent_id>.jsonl`. The note reaches the delegate as a system reminder. Observed on v2.1.310, 2026-10-24.
+The plugin's `PostToolUse` hook, `tools/hooks/context-guard.mjs`, reads a delegate's own transcript, or the session's, after each tool call. When the last turn's input passes `CONDUCTOR_CONTEXT_LIMIT` tokens (default 250000), it adds a note that tells the delegate to hand over. It speaks again at each further 50000. For the session's own agent, which has no `agent_id`, it reads the session's own `transcript_path` against `CONDUCTOR_SESSION_CONTEXT_LIMIT` (default 150000) and tells it to hand an epic over, or to suggest a fresh session. `CONDUCTOR_HOOKS=off` turns it off. A hook that runs in a delegate gets `agent_id`, and the delegate's transcript is `<session dir>/<session id>/subagents/agent-<agent_id>.jsonl`. The note reaches the delegate as a system reminder. Observed on v2.1.310, 2026-10-24.
 
 ## Repo instruction files
 
@@ -71,7 +71,7 @@ A lane is a background subagent in its own worktree, spawned under the ticket's 
 | dispatch | `Agent` with `subagent_type: "general-purpose"`, `isolation: "worktree"`, the lane brief as `prompt`, and the lane's tier as `model` and `effort`. That is `sonnet` and `medium`, or `opus` and `high` for a ticket that needs design or an escalated lane. Set `description` to the ticket, such as `#562 lane`. Not a role agent, because a lane must spawn its own delegates and the role agents cannot. Spawn it while the ticket's item is the one most recently marked in progress |
 | wait | A lane reports by ending its turn with the report as its text. Its completion notice carries it. A notice that says it is waiting on its own background work is interim, so keep waiting. A notice that carries one of the lane reports is the report, even while the lane's PR watcher still runs |
 | continue | `SendMessage` to the lane's agent id. It arrives between the lane's tool calls, or wakes it when idle |
-| stop | `TaskStop` with the lane's task id. Then `git worktree remove` its worktree once its branch is pushed |
+| stop | `TaskStop` with the lane's task id. A lane that is a subagent also stops when the session ends, so a handover stops every lane after its Context full report and the fresh session re-dispatches them. Then `git worktree remove` its worktree once its branch is pushed |
 | watch | `node <skill dir>/tools/watch-pr.mjs <pr>` through `Bash` with `run_in_background: true`. `<skill dir>` is the folder that holds conductor's `SKILL.md`. It asks `gh` about the PR, and about its base branch's own PR, every 60 seconds (`--interval`), and exits on the first change with one JSON line of events. It gives up after 12 hours (`--hours`). It costs no model turns while it waits, and its completion notice wakes the lane |
 | read state | `git -C <worktree> log --oneline -3`, `gh pr view <branch>`, and the lane's last interim notice. Never its transcript file |
 

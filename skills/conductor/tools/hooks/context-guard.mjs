@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // agent-kit's copy is canonical. A repo may vendor it and must keep the protocol version and state layout.
 /**
- * A PostToolUse command hook that tells a delegate when its context passes conductor's limit.
+ * A PostToolUse command hook that tells a delegate, or the session's own agent, when its context passes conductor's limit.
  * Every turn re-reads the whole context, so a long lane's late turns cost the most: across 25 lanes
  * measured on 2026-10-24, the second half of each lane's turns used 65% of its tokens.
- * It speaks once when the limit is crossed, then once per further step, and never to the session's own agent.
+ * The session's own agent steers an epic for days, so it gets a lower limit of its own.
+ * It speaks once when the limit is crossed, then once per further step.
  */
 
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
@@ -15,6 +16,7 @@ import { BYPASS_ENV } from "./classify.mjs";
 import { bypassed } from "./hook-io.mjs";
 
 export const DEFAULT_LIMIT = 250_000;
+export const DEFAULT_SESSION_LIMIT = 150_000;
 export const STEP = 50_000;
 const TAIL_BYTES = 1 << 20;
 
@@ -47,6 +49,12 @@ export function lastTwoContexts(text) {
   return [found[0]?.tokens ?? 0, found[1]?.tokens ?? 0];
 }
 
+/** The session's own agent reads its context from the session transcript. A delegate never does. */
+export function sessionTranscript(input) {
+  if (input?.agent_id || !input?.transcript_path) return null;
+  return input.transcript_path;
+}
+
 function readTail(path) {
   const size = statSync(path).size;
   const length = Math.min(size, TAIL_BYTES);
@@ -60,17 +68,26 @@ function readTail(path) {
   return buffer.toString("utf8");
 }
 
-function limitFrom(env) {
-  const value = Number(env.CONDUCTOR_CONTEXT_LIMIT?.trim() || DEFAULT_LIMIT);
+function limitFrom(raw, fallback) {
+  const value = Number(raw?.trim() || fallback);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 const band = (tokens, limit) => (tokens < limit ? -1 : Math.floor((tokens - limit) / STEP));
 const k = (tokens) => `${Math.round(tokens / 1000)}k`;
 
+const DELEGATE_ACTION =
+  `Finish the edit in hand and run its check. Start no new stage. ` +
+  `If you are a lane, push your branch and end your turn with a Context full report, per roles.md "Lanes". ` +
+  `Otherwise end your turn with your report, and put what remains under OPEN.`;
+const SESSION_ACTION =
+  `If you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
+  `Otherwise, when the stage in hand ends, tell the operator in one line that a fresh session would be cheaper.`;
+
 export function contextNote(input, env, read = readTail) {
-  const path = delegateTranscript(input);
-  const limit = limitFrom(env);
+  const own = sessionTranscript(input);
+  const path = own ?? delegateTranscript(input);
+  const limit = own ? limitFrom(env.CONDUCTOR_SESSION_CONTEXT_LIMIT, DEFAULT_SESSION_LIMIT) : limitFrom(env.CONDUCTOR_CONTEXT_LIMIT, DEFAULT_LIMIT);
   if (!path || !limit || bypassed("", env, BYPASS_ENV)) return null;
   let now, before;
   try {
@@ -81,9 +98,7 @@ export function contextNote(input, env, read = readTail) {
   if (band(now, limit) <= band(before, limit)) return null;
   const note =
     `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. Every turn re-reads all of it. ` +
-    `Finish the edit in hand and run its check. Start no new stage. ` +
-    `If you are a lane, push your branch and end your turn with a Context full report, per roles.md "Lanes". ` +
-    `Otherwise end your turn with your report, and put what remains under OPEN.`;
+    (own ? SESSION_ACTION : DELEGATE_ACTION);
   return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note } };
 }
 

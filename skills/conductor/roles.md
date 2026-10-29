@@ -62,7 +62,7 @@ A delegate that can prove a problem reports ISSUES and lists every problem it ca
 
 ## Lanes
 
-A lane is the one delegate that runs a whole playbook. It owns one ticket from branch to merge-ready PR, in its own worktree, as its own orchestrator with its own delegates. Only the [epic](playbooks/epic.md) playbook dispatches lanes. It keeps its own context, can be steered while it works, and reports at fixed points, which is why a ticket gets a lane and not an implementer.
+A lane is the one delegate that runs a whole playbook. It owns one ticket from branch to merge-ready PR, and to the merge when its brief sets LAND, in its own worktree, as its own orchestrator with its own delegates. Only the [epic](playbooks/epic.md) playbook dispatches lanes. It keeps its own context, can be steered while it works, and reports at fixed points, which is why a ticket gets a lane and not an implementer.
 
 The lane brief replaces SCOPE and REPORT, and adds what an agent needs to work alone. Its first line tells the agent it is a lane, because a lane starts like any other agent and would otherwise follow the ordinary start of a task.
 
@@ -74,6 +74,7 @@ BASE        current origin/<trunk>, or the branch of the one merge-ready PR it s
 BRANCH      the branch to work on. An escalated lane names the branch its first lane pushed
 SETUP       the repo's documented command that prepares a fresh worktree, if it has one
 DESIGN      "needs design" when the epic flagged it, with what is still open. Otherwise "specified"
+LAND        the operator's request to land that covers this ticket, quoted. Otherwise "no"
 REPORT TO   only for a lane run as a separate session: the orchestrator's session name, to message
 OWNS        paths it may write. Paths other lanes own, which it must not touch
 CONTEXT     the graph's neighbours: what it needs and who needs it. Decisions already made
@@ -88,7 +89,7 @@ A lane follows its playbook with these changes:
 - **One ticket, one PR.** It never dispatches lanes. Work that would need a second PR is a Blocked report, not an epic.
 - **Questions go up.** Every ask goes to the orchestrator as a Blocked report, after the lane has finished whatever the question does not touch. It never asks the operator directly.
 - **It carries the PR to merge-ready.** The brief is the operator's request to babysit, so after opening-a-pr it runs [babysit](playbooks/babysit.md) in `drive` mode on its own PR, even when the PR sits above another in a stack. For a lane, merge-ready means checks green, no unresolved thread, and only approval and the merge left.
-- **It never merges.** It owns its branch. A conflict or stale base found while babysitting is a Blocked report, not a rebase. A rebase the orchestrator asks for is the lane's to do, and that request allows a force-push with lease to its own branch, followed by a Head moved report.
+- **It merges only under LAND.** With LAND set, it lands its own PR once it is merge-ready and its base is trunk. It runs [shipping](playbooks/shipping.md) steps 3 and 4 on that one PR, with its own verifier's verdict as the verdict, then any post-merge check the repo requires, such as the deploy, and reports Merged. A head its verdict does not cover gets a fresh review and verdict first. Without LAND it never merges. It owns its branch. A conflict or stale base found while babysitting is a Blocked report, not a rebase. A rebase the orchestrator asks for is the lane's to do, and that request allows a force-push with lease to its own branch, followed by a Head moved report.
 - **It watches its own PR.** After each Merge-ready or Head moved report, it starts the PR watcher the binding names in the background and acts on the event that wakes it. It does not wait for the orchestrator to relay a merge or a red check.
   - **merged** or **closed**: it reports Merged and stops.
   - **base-merged**, **base-moved** or **base-changed**: it rebases its branch onto the new base, which is trunk when its base merged. This event allows a force-push with lease to its own branch. It reports Head moved and watches again. A rebase that conflicts is a Blocked report.
@@ -105,7 +106,7 @@ It reports by ending its turn with the report, or by messaging REPORT TO when th
 - **Head moved.** After merge-ready, any push to its branch, with the new head, so lanes stacked on it can rebase.
 - **Blocked.** The one question it cannot settle, with the options it sees.
 - **Failed.** What it tried, the evidence, and what it would try next.
-- **Merged.** The PR's full URL and its merge commit. The lane stops after it.
+- **Merged.** The PR's full URL and its merge commit, and the post-merge check's result when it landed the PR itself. The lane stops after it.
 - **Context full.** BRANCH and its pushed head, then its work state: what is done, each decision with its reason, what is open, the next step, and the files it touched. The next lane starts from this report alone, so write it for a stranger.
 
 ## Follow-ups

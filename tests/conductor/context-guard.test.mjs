@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { contextNote, contextTokens, delegateTranscript, lastTwoContexts } from "../../skills/conductor/tools/hooks/context-guard.mjs";
+import { contextNote, contextTokens, delegateTranscript, lastTwoContexts, sessionTranscript } from "../../skills/conductor/tools/hooks/context-guard.mjs";
 
 const turn = (id, cacheRead, extra = {}) =>
   JSON.stringify({
@@ -14,6 +14,13 @@ const turn = (id, cacheRead, extra = {}) =>
     message: { id, usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: cacheRead, output_tokens: 50, ...extra } },
   });
 const result = () => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "x" }] } });
+
+/** A session's own transcript holding the given turns, with no agent_id in the hook input. */
+function ownSession(lines) {
+  const dir = mkdtempSync(join(tmpdir(), "context-guard-"));
+  writeFileSync(join(dir, "s1.jsonl"), lines.join("\n") + "\n");
+  return { session_id: "s1", transcript_path: join(dir, "s1.jsonl"), hook_event_name: "PostToolUse" };
+}
 
 /** A session folder with one delegate transcript holding the given turns. */
 function session(lines) {
@@ -24,7 +31,7 @@ function session(lines) {
 }
 const note = (out) => out?.hookSpecificOutput?.additionalContext;
 
-describe("the context guard, a PostToolUse hook for delegates", () => {
+describe("the context guard, a PostToolUse hook for delegates and the session's own agent", () => {
   it("counts every input token the turn sent, and not its output", () => {
     expect(contextTokens({ input_tokens: 5, cache_creation_input_tokens: 7, cache_read_input_tokens: 100, output_tokens: 999 })).toBe(112);
   });
@@ -65,9 +72,30 @@ describe("the context guard, a PostToolUse hook for delegates", () => {
     expect(contextNote(s, { CONDUCTOR_CONTEXT_LIMIT: "lots" })).toBeNull();
   });
 
-  it("leaves the session's own agent alone, and every bypass", () => {
+  it("reads the session's own transcript when no agent_id comes in", () => {
+    expect(sessionTranscript({ transcript_path: "/p/s1.jsonl", session_id: "s1" })).toBe("/p/s1.jsonl");
+    expect(sessionTranscript({ transcript_path: "/p/s1.jsonl", session_id: "s1", agent_id: "a1" })).toBeNull();
+  });
+
+  it("tells the session's own agent at its lower limit to hand an epic over, not to send a Context full report", () => {
+    const out = note(contextNote(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}));
+    expect(out).toMatch(/151k tokens.*150k/);
+    expect(out).toMatch(/Hand over/);
+    expect(out).not.toMatch(/Context full report/);
+    expect(contextNote(ownSession([turn("m1", 151_000), result(), turn("m2", 160_000)]), {})).toBeNull();
+    expect(note(contextNote(ownSession([turn("m1", 199_000), result(), turn("m2", 201_000)]), {}))).toMatch(/201k/);
+  });
+
+  it("takes the session's limit from CONDUCTOR_SESSION_CONTEXT_LIMIT, apart from the delegates' limit", () => {
+    const s = ownSession([turn("m1", 90_000), result(), turn("m2", 110_000)]);
+    expect(note(contextNote(s, { CONDUCTOR_SESSION_CONTEXT_LIMIT: "100000" }))).toMatch(/100k/);
+    expect(contextNote(s, { CONDUCTOR_CONTEXT_LIMIT: "100000" })).toBeNull();
+    expect(contextNote(s, { CONDUCTOR_SESSION_CONTEXT_LIMIT: "" })).toBeNull();
+  });
+
+  it("honours every bypass", () => {
     const s = session([turn("m1", 240_000), result(), turn("m2", 251_000)]);
-    expect(contextNote({ ...s, agent_id: undefined }, {})).toBeNull();
+    expect(contextNote(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), { CONDUCTOR_HOOKS: "off" })).toBeNull();
     expect(contextNote(s, { CONDUCTOR_HOOKS: "off" })).toBeNull();
     expect(contextNote(s, { CI: "1" })).toBeNull();
     expect(contextNote({ ...s, agent_id: "missing" }, {})).toBeNull();
