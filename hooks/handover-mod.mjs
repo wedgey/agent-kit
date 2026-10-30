@@ -7,16 +7,16 @@ const TRIES = 30;
 
 const DESCRIPTION =
   "Hands this session over to itself: when your turn ends, the conversation is compacted to `keep` and `resume` is submitted as the next prompt. " +
-  "Call it only after the epic's state is written to its issue, as the last call of your turn. Running lanes and watches keep running.";
+  "Call it when a stage ends, after writing to the tracker issue anything that must outlive the summary, as the last call of your turn. Running lanes, delegates and watches keep running.";
 
 const SCHEMA = {
   type: "object",
   properties: {
     keep: {
       type: "string",
-      description: "What the compacted session must still know: the epic's issue, each running lane's ticket, agent id, task id, branch and state, its watches' task ids, and the operator's standing instructions quoted",
+      description: "What the compacted session must still know: the task and its issue, the playbook step, branch and PR, what is done and what is next, each running lane or delegate's ticket, agent id, task id and state, its watches' task ids, any question awaiting the operator, and the operator's standing instructions quoted",
     },
-    resume: { type: "string", description: "The prompt that continues the work after the compaction, such as: Continue the epic from #431's latest hand-over comment." },
+    resume: { type: "string", description: "The prompt that continues the work after the compaction, such as: Continue the epic from #431's latest hand-over comment. When you are waiting on the operator, it restates your question instead." },
   },
   required: ["keep", "resume"],
 };

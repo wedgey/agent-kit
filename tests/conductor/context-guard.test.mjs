@@ -142,6 +142,11 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
     expect(note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}))).toMatch(/If you are a lane.*Context full report.*Otherwise, if you steer an epic/);
   });
 
+  it("tells any other session to hand over in place when its stage ends, not to suggest a fresh session", () => {
+    const out = note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}));
+    expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place: call mcp__conductor__handover.*Without that tool, tell the operator/);
+  });
+
   it("honours every bypass", () => {
     const s = session([turn("m1", 240_000), result(), turn("m2", 251_000)]);
     expect(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), { CONDUCTOR_HOOKS: "off" })).toBeNull();
