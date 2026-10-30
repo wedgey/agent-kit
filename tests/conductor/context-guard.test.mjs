@@ -144,7 +144,7 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
 
   it("tells any other session to hand over in place when its stage ends, not to suggest a fresh session", () => {
     const out = note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}));
-    expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place.*Handing over in place.*waiting on the operator, wait for the answer first.*Where the binding cannot, tell the operator/);
+    expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place: call mcp__conductor__handover.*waiting on the operator, wait for the answer first.*Without that tool, tell the operator/);
   });
 
   it("reminds the session on every operator prompt while it is still past its limit", () => {
@@ -154,7 +154,7 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
     const prompt = { ...ownSession(lines), hook_event_name: "UserPromptSubmit" };
     const first = guard(prompt, {}, mem);
     expect(first.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
-    expect(note(first)).toMatch(/151k tokens.*hand over in place/);
+    expect(note(first)).toMatch(/151k tokens.*when the work this prompt asks for ends, call mcp__conductor__handover.*unless you end by asking the operator/);
     expect(note(guard(prompt, {}, mem))).toMatch(/151k/);
     expect(guard({ ...ownSession([turn("m1", 100_000)]), hook_event_name: "UserPromptSubmit" }, {}, mem)).toBeNull();
     expect(guard({ ...prompt, agent_id: "a1" }, {}, mem)).toBeNull();

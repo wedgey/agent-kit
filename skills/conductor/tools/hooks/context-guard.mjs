@@ -114,12 +114,20 @@ const DELEGATE_ACTION =
   `Finish the edit in hand and run its check. Start no new stage. ` +
   `If you are a lane, push your branch and end your turn with a Context full report, per roles.md "Lanes". ` +
   `Otherwise end your turn with your report, and put what remains under OPEN.`;
+// This package is Claude Code's, so it names the conductor mod's tool: a session that never loaded the skill
+// has not read the binding, and a note that only points there was ignored in live runs.
+const HANDOVER_TOOL = "mcp__conductor__handover";
 // A lane run as its own session has no agent_id either, so the session note must route it to its report.
 const SESSION_ACTION =
   `If you are a lane, push your branch and send a Context full report to REPORT TO, per roles.md "Lanes". ` +
   `Otherwise, if you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
-  `Otherwise, when the stage in hand ends, hand over in place as your turn's last call, per the binding's "Handing over in place". ` +
-  `If you are waiting on the operator, wait for the answer first. Where the binding cannot, tell the operator in one line that a fresh session would be cheaper.`;
+  `Otherwise, when the stage in hand ends, hand over in place: call ${HANDOVER_TOOL} as your turn's last call, per the binding's "Handing over in place". ` +
+  `If you are waiting on the operator, wait for the answer first. Without that tool, tell the operator in one line that a fresh session would be cheaper.`;
+// The operator's answer ends any wait, so this note says when to act rather than repeating every branch.
+const PROMPT_ACTION =
+  `If you are a lane, report Context full per roles.md "Lanes" instead. ` +
+  `Otherwise, when the work this prompt asks for ends, call ${HANDOVER_TOOL} as your turn's last call, unless you end by asking the operator something. ` +
+  `If you steer an epic, hand over per epic.md "Hand over the epic". Without that tool, tell the operator in one line that a fresh session would be cheaper.`;
 
 export function contextNote(input, env, read = readTail, memory = fileMemory()) {
   const own = sessionTranscript(input);
@@ -136,7 +144,7 @@ export function contextNote(input, env, read = readTail, memory = fileMemory()) 
   // A session that held its handover for the operator's answer has no fresh note to act on after it.
   if (input.hook_event_name === "UserPromptSubmit") {
     if (!own || step < 0) return null;
-    return { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. ${SESSION_ACTION}` } };
+    return { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. ${PROMPT_ACTION}` } };
   }
   const told = memory.get(input);
   // Storing every change, below the limit too, lets a context that shrank and regrew be told again.
