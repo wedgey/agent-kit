@@ -133,6 +133,11 @@ export function contextNote(input, env, read = readTail, memory = fileMemory()) 
     return null;
   }
   const step = band(now, limit);
+  // A session that held its handover for the operator's answer has no fresh note to act on after it.
+  if (input.hook_event_name === "UserPromptSubmit") {
+    if (!own || step < 0) return null;
+    return { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. ${SESSION_ACTION}` } };
+  }
   const told = memory.get(input);
   // Storing every change, below the limit too, lets a context that shrank and regrew be told again.
   const kept = step === told || memory.set(input, step);

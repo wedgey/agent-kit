@@ -147,6 +147,19 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
     expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place.*Handing over in place.*waiting on the operator, wait for the answer first.*Where the binding cannot, tell the operator/);
   });
 
+  it("reminds the session on every operator prompt while it is still past its limit", () => {
+    const mem = memory();
+    const lines = [turn("m1", 149_000), result(), turn("m2", 151_000)];
+    expect(note(guard(ownSession(lines), {}, mem))).toMatch(/151k/);
+    const prompt = { ...ownSession(lines), hook_event_name: "UserPromptSubmit" };
+    const first = guard(prompt, {}, mem);
+    expect(first.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(note(first)).toMatch(/151k tokens.*hand over in place/);
+    expect(note(guard(prompt, {}, mem))).toMatch(/151k/);
+    expect(guard({ ...ownSession([turn("m1", 100_000)]), hook_event_name: "UserPromptSubmit" }, {}, mem)).toBeNull();
+    expect(guard({ ...prompt, agent_id: "a1" }, {}, mem)).toBeNull();
+  });
+
   it("honours every bypass", () => {
     const s = session([turn("m1", 240_000), result(), turn("m2", 251_000)]);
     expect(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), { CONDUCTOR_HOOKS: "off" })).toBeNull();
