@@ -14,6 +14,7 @@ const turn = (id, cacheRead, extra = {}) =>
     type: "assistant",
     message: { id, usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: cacheRead, output_tokens: 50, ...extra } },
   });
+const boundary = () => JSON.stringify({ type: "system", subtype: "compact_boundary", compactMetadata: { preTokens: 160_000 } });
 const result = () => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "x" }] } });
 
 /** A session's own transcript holding the given turns, with no agent_id in the hook input. */
@@ -38,7 +39,7 @@ const memory = () => {
 };
 const guard = (input, env, mem = memory()) => contextNote(input, env, undefined, mem);
 
-describe("the context guard, a PostToolUse hook for delegates and the session's own agent", () => {
+describe("the context guard, a PostToolUse and UserPromptSubmit hook for delegates and the session's own agent", () => {
   it("counts every input token the turn sent, and not its output", () => {
     expect(contextTokens({ input_tokens: 5, cache_creation_input_tokens: 7, cache_read_input_tokens: 100, output_tokens: 999 })).toBe(112);
   });
@@ -140,6 +141,38 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
 
   it("tells a lane run as a separate session to report Context full, not to hand the epic over", () => {
     expect(note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}))).toMatch(/If you are a lane.*Context full report.*Otherwise, if you steer an epic/);
+  });
+
+  it("tells any other session to hand over in place when its stage ends, not to suggest a fresh session", () => {
+    const out = note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}));
+    expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place: call mcp__conductor__handover.*waiting on the operator, wait for the answer first.*Without that tool, tell the operator/);
+  });
+
+  it("reminds the session on every operator prompt while it is still past its limit", () => {
+    const mem = memory();
+    const lines = [turn("m1", 149_000), result(), turn("m2", 151_000)];
+    expect(note(guard(ownSession(lines), {}, mem))).toMatch(/151k/);
+    const prompt = { ...ownSession(lines), hook_event_name: "UserPromptSubmit" };
+    const first = guard(prompt, {}, mem);
+    expect(first.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(note(first)).toMatch(/151k tokens.*when the work this prompt asks for ends, call mcp__conductor__handover.*unless you end by asking the operator/);
+    expect(note(guard(prompt, {}, mem))).toMatch(/151k/);
+    expect(guard({ ...ownSession([turn("m1", 100_000)]), hook_event_name: "UserPromptSubmit" }, {}, mem)).toBeNull();
+    expect(guard({ ...prompt, agent_id: "a1" }, {}, mem)).toBeNull();
+  });
+
+  it("reads no turn from before a compaction, so the resume prompt after a handover gets no stale note", () => {
+    const compacted = { ...ownSession([turn("m1", 155_000), result(), turn("m2", 160_000), boundary()]), hook_event_name: "UserPromptSubmit" };
+    expect(guard(compacted, {})).toBeNull();
+    expect(lastTwoContexts([turn("m1", 155_000), boundary(), turn("m2", 40_000)].join("\n"))).toEqual([40_010, 0]);
+  });
+
+  it("tells a session past its limit again when it crosses the limit after a handover's compaction", () => {
+    const mem = memory();
+    const before = [turn("m1", 149_000), result(), turn("m2", 151_000)];
+    expect(note(guard(ownSession(before), {}, mem))).toMatch(/151k/);
+    expect(guard(ownSession([...before, boundary(), turn("m3", 40_000)]), {}, mem)).toBeNull();
+    expect(note(guard(ownSession([...before, boundary(), turn("m3", 40_000), result(), turn("m4", 152_000)]), {}, mem))).toMatch(/152k/);
   });
 
   it("honours every bypass", () => {

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // agent-kit's copy is canonical. A repo may vendor it and must keep the protocol version and state layout.
 /**
- * A PostToolUse command hook that tells a delegate, or the session's own agent, when its context passes conductor's limit.
+ * A PostToolUse and UserPromptSubmit command hook that tells a delegate, or the session's own agent, when its context passes conductor's limit.
  * Every turn re-reads the whole context, so a long lane's late turns cost the most: across 25 lanes
  * measured on 2026-10-24, the second half of each lane's turns used 65% of its tokens.
  * The session's own agent steers an epic for days, so it gets a lower limit of its own.
- * It speaks once per step past the limit, on the first hooked call in that step. Claude Code runs no
+ * After a tool call it speaks once per step past the limit, on the first hooked call in that step. Claude Code runs no
  * PostToolUse hook after a failed or refused call, so the call that crossed may never reach it.
+ * The session's own agent also hears it on every operator prompt while past the limit; that note ignores the stored step.
  */
 
 import { createHash } from "node:crypto";
@@ -34,7 +35,7 @@ export function delegateTranscript(input) {
   return join(dirname(input.transcript_path), input.session_id, "subagents", `agent-${input.agent_id}.jsonl`);
 }
 
-/** The context of the last two turns, newest first. One turn can span several lines with one message id. */
+/** The context of the last two turns since the last compaction, newest first. One turn can span several lines with one message id. */
 export function lastTwoContexts(text) {
   const found = [];
   const lines = text.split("\n");
@@ -45,6 +46,8 @@ export function lastTwoContexts(text) {
     } catch {
       continue;
     }
+    // A turn before the boundary reports the pre-compaction size, so the handover's own resume prompt would be told to hand over again.
+    if (entry?.type === "system" && entry.subtype === "compact_boundary") break;
     const message = entry?.type === "assistant" ? entry.message : null;
     if (!message?.usage || found.some((f) => f.id === message.id)) continue;
     found.push({ id: message.id, tokens: contextTokens(message.usage) });
@@ -114,11 +117,20 @@ const DELEGATE_ACTION =
   `Finish the edit in hand and run its check. Start no new stage. ` +
   `If you are a lane, push your branch and end your turn with a Context full report, per roles.md "Lanes". ` +
   `Otherwise end your turn with your report, and put what remains under OPEN.`;
+// Names the mod's tool despite ADR 0002; ADR 0015 says why.
+const HANDOVER_TOOL = "mcp__conductor__handover";
 // A lane run as its own session has no agent_id either, so the session note must route it to its report.
 const SESSION_ACTION =
   `If you are a lane, push your branch and send a Context full report to REPORT TO, per roles.md "Lanes". ` +
   `Otherwise, if you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
-  `Otherwise, when the stage in hand ends, tell the operator in one line that a fresh session would be cheaper.`;
+  `Otherwise, when the stage in hand ends, hand over in place: call ${HANDOVER_TOOL} as your turn's last call, per the binding's "Handing over in place". ` +
+  `If you are waiting on the operator, wait for the answer first. Without that tool, tell the operator in one line that a fresh session would be cheaper.`;
+// The operator's answer ends any wait, so this note says when to act rather than repeating every branch.
+const PROMPT_ACTION =
+  `If you are a lane, report Context full per roles.md "Lanes" instead. ` +
+  `Otherwise, if you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
+  `Otherwise, when the work this prompt asks for ends, call ${HANDOVER_TOOL} as your turn's last call, unless you end by asking the operator something. ` +
+  `Without that tool, tell the operator in one line that a fresh session would be cheaper.`;
 
 export function contextNote(input, env, read = readTail, memory = fileMemory()) {
   const own = sessionTranscript(input);
@@ -132,6 +144,11 @@ export function contextNote(input, env, read = readTail, memory = fileMemory()) 
     return null;
   }
   const step = band(now, limit);
+  // A session that held its handover for the operator's answer has no fresh note to act on after it.
+  if (input.hook_event_name === "UserPromptSubmit") {
+    if (!own || step < 0) return null;
+    return { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. ${PROMPT_ACTION}` } };
+  }
   const told = memory.get(input);
   // Storing every change, below the limit too, lets a context that shrank and regrew be told again.
   const kept = step === told || memory.set(input, step);
