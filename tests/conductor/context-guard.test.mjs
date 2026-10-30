@@ -144,7 +144,7 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
 
   it("tells any other session to hand over in place when its stage ends, not to suggest a fresh session", () => {
     const out = note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}));
-    expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place: call mcp__conductor__handover.*Without that tool, tell the operator/);
+    expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place.*Handing over in place.*waiting on the operator, wait for the answer first.*Where the binding cannot, tell the operator/);
   });
 
   it("honours every bypass", () => {
