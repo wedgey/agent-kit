@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // agent-kit's copy is canonical. A repo may vendor it and must keep the protocol version and state layout.
 /**
- * A PostToolUse command hook that tells a delegate, or the session's own agent, when its context passes conductor's limit.
+ * A PostToolUse and UserPromptSubmit command hook that tells a delegate, or the session's own agent, when its context passes conductor's limit.
  * Every turn re-reads the whole context, so a long lane's late turns cost the most: across 25 lanes
  * measured on 2026-10-24, the second half of each lane's turns used 65% of its tokens.
  * The session's own agent steers an epic for days, so it gets a lower limit of its own.
- * It speaks once per step past the limit, on the first hooked call in that step. Claude Code runs no
+ * After a tool call it speaks once per step past the limit, on the first hooked call in that step. Claude Code runs no
  * PostToolUse hook after a failed or refused call, so the call that crossed may never reach it.
+ * The session's own agent also hears it on every operator prompt while past the limit; that note ignores the stored step.
  */
 
 import { createHash } from "node:crypto";
@@ -116,8 +117,7 @@ const DELEGATE_ACTION =
   `Finish the edit in hand and run its check. Start no new stage. ` +
   `If you are a lane, push your branch and end your turn with a Context full report, per roles.md "Lanes". ` +
   `Otherwise end your turn with your report, and put what remains under OPEN.`;
-// This package is Claude Code's, so it names the conductor mod's tool: a session that never loaded the skill
-// has not read the binding, and a note that only points there was ignored in live runs.
+// Names the mod's tool despite ADR 0002; ADR 0015 says why.
 const HANDOVER_TOOL = "mcp__conductor__handover";
 // A lane run as its own session has no agent_id either, so the session note must route it to its report.
 const SESSION_ACTION =
@@ -128,8 +128,9 @@ const SESSION_ACTION =
 // The operator's answer ends any wait, so this note says when to act rather than repeating every branch.
 const PROMPT_ACTION =
   `If you are a lane, report Context full per roles.md "Lanes" instead. ` +
+  `Otherwise, if you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
   `Otherwise, when the work this prompt asks for ends, call ${HANDOVER_TOOL} as your turn's last call, unless you end by asking the operator something. ` +
-  `If you steer an epic, hand over per epic.md "Hand over the epic". Without that tool, tell the operator in one line that a fresh session would be cheaper.`;
+  `Without that tool, tell the operator in one line that a fresh session would be cheaper.`;
 
 export function contextNote(input, env, read = readTail, memory = fileMemory()) {
   const own = sessionTranscript(input);

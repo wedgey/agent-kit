@@ -39,7 +39,7 @@ const memory = () => {
 };
 const guard = (input, env, mem = memory()) => contextNote(input, env, undefined, mem);
 
-describe("the context guard, a PostToolUse hook for delegates and the session's own agent", () => {
+describe("the context guard, a PostToolUse and UserPromptSubmit hook for delegates and the session's own agent", () => {
   it("counts every input token the turn sent, and not its output", () => {
     expect(contextTokens({ input_tokens: 5, cache_creation_input_tokens: 7, cache_read_input_tokens: 100, output_tokens: 999 })).toBe(112);
   });
@@ -165,6 +165,14 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
     const compacted = { ...ownSession([turn("m1", 155_000), result(), turn("m2", 160_000), boundary()]), hook_event_name: "UserPromptSubmit" };
     expect(guard(compacted, {})).toBeNull();
     expect(lastTwoContexts([turn("m1", 155_000), boundary(), turn("m2", 40_000)].join("\n"))).toEqual([40_010, 0]);
+  });
+
+  it("tells a session past its limit again when it crosses the limit after a handover's compaction", () => {
+    const mem = memory();
+    const before = [turn("m1", 149_000), result(), turn("m2", 151_000)];
+    expect(note(guard(ownSession(before), {}, mem))).toMatch(/151k/);
+    expect(guard(ownSession([...before, boundary(), turn("m3", 40_000)]), {}, mem)).toBeNull();
+    expect(note(guard(ownSession([...before, boundary(), turn("m3", 40_000), result(), turn("m4", 152_000)]), {}, mem))).toMatch(/152k/);
   });
 
   it("honours every bypass", () => {
