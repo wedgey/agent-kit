@@ -34,7 +34,7 @@ export function delegateTranscript(input) {
   return join(dirname(input.transcript_path), input.session_id, "subagents", `agent-${input.agent_id}.jsonl`);
 }
 
-/** The context of the last two turns, newest first. One turn can span several lines with one message id. */
+/** The context of the last two turns since the last compaction, newest first. One turn can span several lines with one message id. */
 export function lastTwoContexts(text) {
   const found = [];
   const lines = text.split("\n");
@@ -45,6 +45,8 @@ export function lastTwoContexts(text) {
     } catch {
       continue;
     }
+    // A turn before the boundary reports the pre-compaction size, so the handover's own resume prompt would be told to hand over again.
+    if (entry?.type === "system" && entry.subtype === "compact_boundary") break;
     const message = entry?.type === "assistant" ? entry.message : null;
     if (!message?.usage || found.some((f) => f.id === message.id)) continue;
     found.push({ id: message.id, tokens: contextTokens(message.usage) });

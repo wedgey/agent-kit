@@ -14,6 +14,7 @@ const turn = (id, cacheRead, extra = {}) =>
     type: "assistant",
     message: { id, usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: cacheRead, output_tokens: 50, ...extra } },
   });
+const boundary = () => JSON.stringify({ type: "system", subtype: "compact_boundary", compactMetadata: { preTokens: 160_000 } });
 const result = () => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "x" }] } });
 
 /** A session's own transcript holding the given turns, with no agent_id in the hook input. */
@@ -158,6 +159,12 @@ describe("the context guard, a PostToolUse hook for delegates and the session's 
     expect(note(guard(prompt, {}, mem))).toMatch(/151k/);
     expect(guard({ ...ownSession([turn("m1", 100_000)]), hook_event_name: "UserPromptSubmit" }, {}, mem)).toBeNull();
     expect(guard({ ...prompt, agent_id: "a1" }, {}, mem)).toBeNull();
+  });
+
+  it("reads no turn from before a compaction, so the resume prompt after a handover gets no stale note", () => {
+    const compacted = { ...ownSession([turn("m1", 155_000), result(), turn("m2", 160_000), boundary()]), hook_event_name: "UserPromptSubmit" };
+    expect(guard(compacted, {})).toBeNull();
+    expect(lastTwoContexts([turn("m1", 155_000), boundary(), turn("m2", 40_000)].join("\n"))).toEqual([40_010, 0]);
   });
 
   it("honours every bypass", () => {
