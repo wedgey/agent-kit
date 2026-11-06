@@ -510,6 +510,19 @@ export const queueTotals = (status: QueueStatus) => ({
   waiting: status.queues.reduce((n, q) => n + q.waiters.length, 0),
 })
 
+// One `$.store` entry the box's sessions share, so one of them reads the queue for all.
+// `stdout` stays raw so a reading from another session passes the same parseQueueStatus check.
+export type SharedQueue = { readAt?: number; stdout?: string; claimedAt?: number }
+
+export const isQueueReadDue = (shared: SharedQueue | undefined, now: number, maxAgeMs: number, claimMs: number) =>
+  now - (shared?.readAt ?? -Infinity) >= maxAgeMs && now - (shared?.claimedAt ?? -Infinity) >= claimMs
+
+export const queuePids = (status: QueueStatus) =>
+  status.queues
+    .flatMap(q => [...q.holders, ...q.waiters].flatMap(r => (r.pid === null ? [] : [r.pid])))
+    .sort((a, b) => a - b)
+    .join()
+
 export function queueHeader(status: QueueStatus): string {
   const m = status.machine
   const free = m.memAvailKb === null ? [] : [`${shortMemory(m.memAvailKb)} free`]

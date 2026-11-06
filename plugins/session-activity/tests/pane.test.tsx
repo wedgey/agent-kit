@@ -314,6 +314,8 @@ type Host = {
   stats?: string[]
   claude?: (args: readonly string[]) => { exitCode: number; stdout: string; stderr?: string } | undefined
   panes?: () => { id: string; isShown: boolean }[]
+  ran?: string[]
+  isStoreDown?: boolean
 }
 
 function quietHost(
@@ -327,8 +329,12 @@ function quietHost(
 ) {
   const store = host.store ?? {}
   on('session.id', () => ({ value: host.sessionId ?? 's1' }))
-  on('store.get', (_$, e) => ({ value: store[e.key] }))
+  on('store.get', (_$, e) => {
+    if (host.isStoreDown) throw new Error('store locked')
+    return { value: store[e.key] }
+  })
   on('store.set', (_$, e) => {
+    if (host.isStoreDown) throw new Error('store locked')
     store[e.key] = e.value
     return { value: undefined }
   })
@@ -369,6 +375,7 @@ function quietHost(
     return { value: { kind, size: text?.length ?? 0, mtimeMs: 0, isLink: to !== e.path, ...(e.resolve ? { realPath: to } : {}) } }
   })
   on('process.run', async (_$, e) => {
+    host.ran?.push(e.argv[0]!)
     const ran = e.argv[0] === 'node' ? await host.node?.(e.argv.slice(1)) : e.argv[0] === 'claude' ? host.claude?.(e.argv.slice(1)) : undefined
     if (ran !== undefined) return { value: { stderr: '', isStdoutTruncated: false, isStderrTruncated: false, ...ran } }
     const isSelf = e.argv[0] === 'sh' && e.argv[2]?.startsWith('echo "self')
@@ -1074,7 +1081,7 @@ const QUEUE_PS = [
 function queueHost(
   on: On,
   answers: Record<string, QueueAnswer> = {},
-  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; installs?: Record<string, string>; hasTool?: boolean; stats?: string[] } = {},
+  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string> } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown'> = {},
 ) {
   const calls: string[][] = []
   const installs = opts.installs ?? { 'conductor@agent-kit': CONDUCTOR }
@@ -1085,9 +1092,13 @@ function queueHost(
           '/home/me/.claude/plugins/installed_plugins.json': installed(installs),
           ...(opts.hasTool === false ? {} : Object.fromEntries(Object.values(installs).map(root => [`${root}/skills/conductor/tools/queue.mjs`, '']))),
         }
-  quietHost(on, files, [''], undefined, undefined, {}, {
+  quietHost(on, files, [''], opts.env, undefined, {}, {
     statuses: opts.statuses,
     stats: opts.stats,
+    store: opts.store,
+    panes: opts.panes,
+    ran: opts.ran,
+    isStoreDown: opts.isStoreDown,
     ps: QUEUE_PS,
     node: args => {
       if (!args[0]?.endsWith('/skills/conductor/tools/queue.mjs')) return undefined
@@ -1483,7 +1494,7 @@ test("another session's names and texts are drawn with their control characters 
   expect(lines.some(l => /[\u0000-\u001f\u007f-\u009f]/.test(l))).toBe(false)
 })
 
-test('lanes are read every 5 s while the pane shows a lane item at work, else every 30 s; a tick inside the window skips the CLI', async ($, on) => {
+test('lanes are read every 15 s while the pane shows a lane item at work, else every 30 s; a tick inside the window skips the CLI', async ($, on) => {
   const clock = mock.clock(on, { now: 7_000_000 })
   let isShown = true
   const calls = laneHost(on, () => ({ exitCode: 0, stdout: JSON.stringify([laneEntry('rd-12', 'new-12', 6_000_000)]) }), {
@@ -1494,17 +1505,17 @@ test('lanes are read every 5 s while the pane shows a lane item at work, else ev
   await writeTodos($, { items: LANE_ITEMS.slice(0, 1) })
   const reads = async (steps: number) => {
     const before = calls.length
-    for (let i = 0; i < steps; i++) await clock.advance(5000)
+    for (let i = 0; i < steps; i++) await clock.advance(15_000)
     return calls.length - before
   }
   expect(await reads(1)).toBe(1)
   expect(await reads(2)).toBe(2)
   isShown = false
-  expect(await reads(5)).toBe(0)
+  expect(await reads(1)).toBe(0)
   expect(await reads(1)).toBe(1)
   isShown = true
   await writeTodos($, { items: [{ ...LANE_ITEMS[0]!, status: 'completed' }] })
-  expect(await reads(5)).toBe(0)
+  expect(await reads(1)).toBe(0)
   expect(await reads(1)).toBe(1)
 })
 
@@ -1541,4 +1552,142 @@ test('lanes named like object members read as any other name', async ($, on) => 
   expect(await ui.find({ type: 'Text', text: '◌ lane missing' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'lane __proto__ · working · 1s' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '◌ valueOf' })).toMatchObject({ props: { color: 'inactive' } })
+})
+
+const QUEUE_KEY = 'queueReading:'
+const START = 1_000_000
+const SHOWN = () => [{ id: 'session-activity', isShown: true }]
+const statusCalls = (calls: string[][]) => calls.filter(c => c[0] === 'status').length
+
+async function queueSession($: Engine, on: On, opts: Parameters<typeof queueHost>[2]) {
+  const clock = mock.clock(on, { now: START })
+  const calls = queueHost(on, {}, { panes: SHOWN, ...opts })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await startSession($)
+  return { clock, calls }
+}
+
+test('a reading another session took is drawn with no queue call, and the next one due is taken here and shared', async ($, on) => {
+  const stdout = JSON.stringify(QUEUE_FIXTURE)
+  const store: Record<string, unknown> = { [QUEUE_KEY]: { readAt: START - 1000, stdout } }
+  const { clock, calls } = await queueSession($, on, { store })
+  await clock.advance(3000)
+  expect(statusCalls(calls)).toBe(0)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /^QUEUE/ })).toBeDefined()
+  await clock.advance(3000)
+  expect(statusCalls(calls)).toBe(1)
+  expect(store[QUEUE_KEY]).toEqual({ readAt: START + 6000, stdout })
+})
+
+test('while another session is reading nobody else does; a claim 15 s old has died and the reading is taken over', async ($, on) => {
+  const stale = { readAt: START - 60_000, stdout: JSON.stringify(QUEUE_FIXTURE) }
+  const store: Record<string, unknown> = { [QUEUE_KEY]: { ...stale, claimedAt: START } }
+  const { clock, calls } = await queueSession($, on, { store })
+  await clock.advance(12_000)
+  expect(statusCalls(calls)).toBe(0)
+  await clock.advance(3000)
+  expect(statusCalls(calls)).toBe(1)
+  expect(store[QUEUE_KEY]).not.toHaveProperty('claimedAt')
+})
+
+test('the claim is in the store before the queue is read', async ($, on) => {
+  const store: Record<string, unknown> = {}
+  let seen: unknown
+  const { clock } = await queueSession($, on, { store, status: () => { seen = store[QUEUE_KEY]; return QUEUE_FIXTURE } })
+  await clock.advance(3000)
+  expect(seen).toMatchObject({ claimedAt: START + 3000 })
+})
+
+test('a failed read leaves its claim, so the others wait it out rather than all retrying', async ($, on) => {
+  const store: Record<string, unknown> = {}
+  const clock = mock.clock(on, { now: START })
+  let reads = 0
+  quietHost(on, { '/home/me/.claude/plugins/installed_plugins.json': installed({ 'conductor@agent-kit': CONDUCTOR }), [QUEUE_TOOL]: '' }, [''], undefined, undefined, {}, {
+    store,
+    panes: SHOWN,
+    node: () => {
+      reads++
+      return { exitCode: 1, stdout: '' }
+    },
+  })
+  on('agent.list', () => ({ value: [] }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await startSession($)
+  await clock.advance(3000)
+  expect(reads).toBe(1)
+  expect(store[QUEUE_KEY]).toMatchObject({ claimedAt: START + 3000 })
+})
+
+test('opening the pane reads the queue itself, past a fresh reading and a live claim, and shares what it read', async ($, on) => {
+  const store: Record<string, unknown> = { [QUEUE_KEY]: { readAt: START, stdout: '{}', claimedAt: START } }
+  const { calls } = await queueSession($, on, { store, panes: () => [] })
+  await openPane($)
+  expect(statusCalls(calls)).toBe(1)
+  expect(store[QUEUE_KEY]).toEqual({ readAt: START, stdout: JSON.stringify(QUEUE_FIXTURE) })
+})
+
+test('a shared reading that does not parse draws nothing, and the next read replaces it', async ($, on) => {
+  const store: Record<string, unknown> = { [QUEUE_KEY]: { readAt: START + 1000, stdout: 'not json' } }
+  const { clock, calls } = await queueSession($, on, { store })
+  await clock.advance(3000)
+  expect(statusCalls(calls)).toBe(0)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /^QUEUE/ })).toBeUndefined()
+  await clock.advance(30_000)
+  expect(statusCalls(calls)).toBe(1)
+})
+
+test('with the store unavailable a session reads the queue itself, as if alone', async ($, on) => {
+  const { clock, calls } = await queueSession($, on, { isStoreDown: true })
+  await clock.advance(3000)
+  expect(statusCalls(calls)).toBe(1)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /^QUEUE/ })).toBeDefined()
+})
+
+for (const [name, dir] of [['CONDUCTOR_QUEUE_DIR', '/q'], ['XDG_STATE_HOME', '/xdg']] as const) {
+  test(`a session with its own ${name} keeps to that queue's readings`, async ($, on) => {
+    const store: Record<string, unknown> = { [QUEUE_KEY]: { readAt: START, stdout: JSON.stringify(QUEUE_FIXTURE) } }
+    const { clock, calls } = await queueSession($, on, { store, env: { HOME: '/home/me', [name]: dir } })
+    await clock.advance(3000)
+    expect(statusCalls(calls)).toBe(1)
+    expect(store[`${QUEUE_KEY}${dir}`]).toBeDefined()
+  })
+}
+
+test('the process table is read once per set of runs, not on every queue read', async ($, on) => {
+  const ran: string[] = []
+  let status: unknown = QUEUE_FIXTURE
+  const { clock } = await queueSession($, on, { ran, status: () => status })
+  const psReads = async () => {
+    const before = ran.filter(c => c === 'ps').length
+    await clock.advance(3000)
+    return ran.filter(c => c === 'ps').length - before
+  }
+  expect(await psReads()).toBe(1)
+  expect(await psReads()).toBe(0)
+  const first = QUEUE_FIXTURE.queues[0]!
+  status = { ...QUEUE_FIXTURE, queues: [{ ...first, holders: first.holders.slice(1) }, ...QUEUE_FIXTURE.queues.slice(1)] }
+  expect(await psReads()).toBe(1)
+})
+
+test('listening ports are read every 10 s; the process table stays on every scan', async ($, on) => {
+  const clock = mock.clock(on, { now: START })
+  const ran: string[] = []
+  quietHost(on, {}, [''], undefined, undefined, {}, { ran, ps: '  100     1   100  0.0 90000 claude' })
+  on('agent.list', () => ({ value: [] }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { backgroundTaskId: 'b1' }, text: 'started' }))
+  await startSession($)
+  await $.tool.call({ tool: 'Bash', command: 'pnpm dev', run_in_background: true })
+  await clock.advance(400)
+  const count = (name: string) => ran.filter(c => c === name).length
+  const ss = count('ss')
+  const ps = count('ps')
+  await clock.advance(9600)
+  expect(count('ss')).toBe(ss)
+  expect(count('ps')).toBe(ps + 5)
+  await clock.advance(2000)
+  expect(count('ss')).toBe(ss + 1)
 })

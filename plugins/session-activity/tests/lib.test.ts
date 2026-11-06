@@ -3,6 +3,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { ShellTask } from '../types'
 
 import {
+  isQueueReadDue,
+  queuePids,
   shortenPaths,
   summarizeCommand,
   cpuSince,
@@ -641,5 +643,37 @@ describe('lanes', () => {
     }
     expect(laneProgress(list, 'o/r')).toEqual({ done: 2, total: 7, now: ['#12 Build', 'x#3 Test'], next: 'Open the PR' })
     expect(laneProgress({ items: [{ content: 'a', status: 'completed' }] })).toEqual({ done: 1, total: 1, now: [] })
+  })
+})
+
+describe('isQueueReadDue', () => {
+  const MAX_AGE = 3000
+  const CLAIM = 15_000
+  for (const [name, shared, now, isDue] of [
+    ['no reading yet', undefined, 10_000, true],
+    ['a reading inside the age', { readAt: 8000, stdout: '' }, 10_000, false],
+    ['a reading exactly at the age', { readAt: 7000, stdout: '' }, 10_000, true],
+    ['an old reading, a live claim', { readAt: 0, stdout: '', claimedAt: 9000 }, 10_000, false],
+    ['an old reading, a dead claim', { readAt: 0, stdout: '', claimedAt: 0 }, 15_000, true],
+    ['a first read under a live claim', { claimedAt: 9000 }, 10_000, false],
+  ] as const) {
+    test(name, () => expect(isQueueReadDue(shared, now, MAX_AGE, CLAIM)).toBe(isDue))
+  }
+
+  test('an age and claim of zero always read: what a forced read passes', () => {
+    expect(isQueueReadDue({ readAt: 10_000, stdout: '', claimedAt: 10_000 }, 10_000, 0, 0)).toBe(true)
+  })
+})
+
+describe('queuePids', () => {
+  const queue = (holders: (number | null)[], waiters: (number | null)[]) => ({ holders: holders.map(pid => ({ pid })), waiters: waiters.map(pid => ({ pid })) })
+  test('the same runs give the same key in any order, and unknown pids are left out', () => {
+    const a = { queues: [queue([30, null], [4])] } as never
+    const b = { queues: [queue([4], []), queue([30], [])] } as never
+    expect(queuePids(a)).toBe(queuePids(b))
+    expect(queuePids(a)).toBe('4,30')
+  })
+  test('no known pid is the empty key', () => {
+    expect(queuePids({ queues: [queue([null], [])] } as never)).toBe('')
   })
 })

@@ -53,10 +53,13 @@ import {
   holderUsage,
   queueOutcome,
   exclusive,
+  isQueueReadDue,
   parseQueueStatus,
   place,
   queueHeader,
+  queuePids,
   queueTotals,
+  type SharedQueue,
   laneProgress,
   matchLane,
   oneLine,
@@ -100,8 +103,9 @@ const KEEP_TODOS_MS = 7 * 86_400_000
 const QUEUE_EVERY_MS = 3000
 const QUEUE_IDLE_EVERY_MS = 30_000
 const QUEUE_TIMEOUT_MS = 15_000
-// Every 5 s only while the pane shows a lane still at work.
-const LANES_EVERY_MS = 5000
+const QUEUE_KEY = 'queueReading:'
+// Every 15 s only while the pane shows a lane still at work.
+const LANES_EVERY_MS = 15_000
 const LANES_IDLE_EVERY_MS = 30_000
 const LANES_TIMEOUT_MS = 10_000
 const LANE_ICON: Record<string, { glyph: string; color: string }> = {
@@ -118,6 +122,7 @@ const HANDBACK_TOOL = /(^|__)SubagentHandback$/
 const GH_TIMEOUT_MS = 3000
 const BRANCH_EVERY_MS = 30_000
 const PR_EVERY_MS = 300_000
+const PORTS_EVERY_MS = 10_000
 const TODO_ICON: Record<TodoStatus, { glyph: string; color: string }> = {
   completed: { glyph: '✓', color: 'success' },
   in_progress: { glyph: '◐', color: 'suggestion' },
@@ -172,6 +177,9 @@ const ranCommands = new Map<string, string>()
 const agentCalls = new Map<string, { effort?: string; isolation?: string }>()
 let branchAt = 0
 let queueAt = 0
+// The runs queueOwnA was worked out for.
+let ownPids = ''
+let portsRead = { at: 0, ports: new Map<number, number[]>() }
 // The conductor install whose queue.mjs was missing; a new install path is looked at again.
 let queueToolMissing: string | undefined
 let lanesAt = 0
@@ -216,6 +224,11 @@ async function listeningPorts($: $): Promise<Map<number, number[]>> {
   } catch {
     return new Map()
   }
+}
+
+async function recentPorts($: $, now: number) {
+  if (now - portsRead.at >= PORTS_EVERY_MS) portsRead = { at: now, ports: await listeningPorts($) }
+  return portsRead.ports
 }
 
 async function tailOf($: $, path: string) {
@@ -311,7 +324,7 @@ async function liveRoot($: $, rows: readonly ProcRow[]): Promise<number> {
 }
 
 async function scan($: $, now: number) {
-  const [rows, ports] = await Promise.all([processTable($), listeningPorts($)])
+  const [rows, ports] = await Promise.all([processTable($), recentPorts($, now)])
   const alive = new Set(rows.map(r => r.pid))
   const rootPid = await liveRoot($, rows)
   const shells = await read($, shellsA)
@@ -456,9 +469,28 @@ async function queueTool($: $): Promise<string | undefined> {
   return undefined
 }
 
-async function readQueue($: $, tool: string): Promise<QueueStatus | undefined> {
+async function readQueueText($: $, tool: string): Promise<string | undefined> {
   const out = await $.process.run(['node', tool, 'status', '--json'], { timeoutMs: QUEUE_TIMEOUT_MS }).catch(() => undefined)
-  return out?.exitCode === 0 ? parseQueueStatus(out.stdout) : undefined
+  return out?.exitCode === 0 ? out.stdout : undefined
+}
+
+async function readQueue($: $, tool: string): Promise<QueueStatus | undefined> {
+  const text = await readQueueText($, tool)
+  return text === undefined ? undefined : parseQueueStatus(text)
+}
+
+// Two sessions can claim in the same moment; that costs one extra read and nothing else.
+// A failed read keeps its claim, so a stalled box gets one retry per claim, not one per session.
+async function sharedQueue($: $, tool: string, now: number, maxAgeMs: number, claimMs: number): Promise<QueueStatus | undefined> {
+  const [dir, xdg] = await Promise.all([$.env.get('CONDUCTOR_QUEUE_DIR'), $.env.get('XDG_STATE_HOME')])
+  const key = `${QUEUE_KEY}${dir || xdg || ''}`
+  const shared = (await $.store.get(key).catch(() => undefined)) as SharedQueue | undefined
+  if (!isQueueReadDue(shared, now, maxAgeMs, claimMs)) return shared?.stdout === undefined ? undefined : parseQueueStatus(shared.stdout)
+  await $.store.set(key, { ...shared, claimedAt: now }).catch(() => undefined)
+  const stdout = await readQueueText($, tool)
+  if (stdout === undefined) return undefined
+  await $.store.set(key, { readAt: now, stdout }).catch(() => undefined)
+  return parseQueueStatus(stdout)
 }
 
 // The status call samples CPU for about a second, so two never run at once; nor do two button commands.
@@ -474,28 +506,32 @@ async function pollQueueOnce($: $, isForced: boolean) {
   const last = await read($, queueA)
   const isBusy = last?.queues.some(q => q.holders.length + q.waiters.length > 0) ?? false
   const isShown = isBusy && (await $.ui.panes()).some(p => p.id === PANE && p.isShown)
-  if (!isForced && now - queueAt < (isShown ? QUEUE_EVERY_MS : QUEUE_IDLE_EVERY_MS)) return
+  const everyMs = isShown ? QUEUE_EVERY_MS : QUEUE_IDLE_EVERY_MS
+  if (!isForced && now - queueAt < everyMs) return
   queueAt = now
   const tool = await queueTool($)
   if (!tool) {
     if (last) await update($, queueA, () => null)
     return
   }
-  const status = await readQueue($, tool)
+  const status = await sharedQueue($, tool, now, isForced ? 0 : everyMs, isForced ? 0 : QUEUE_TIMEOUT_MS)
   // A failed read keeps the last status rather than blinking the section away.
   if (status) {
-    const { busy, waiting } = queueTotals(status)
-    const own = busy + waiting > 0 ? await sessionPids($) : []
     await update($, queueA, () => status)
-    await update($, queueOwnA, () => own)
+    const pids = queuePids(status)
+    const own = pids === ownPids ? undefined : pids ? await sessionPids($) : []
+    if (own) {
+      ownPids = pids
+      await update($, queueOwnA, () => own)
+    }
   }
   await refreshStatus($)
 }
 
 // This session's process tree: everything under its root, whatever folder it runs in.
-async function sessionPids($: $): Promise<number[]> {
-  const rows = await processTable($).catch(() => [])
-  return treeOf(rows, await liveRoot($, rows)).map(r => r.pid)
+async function sessionPids($: $): Promise<number[] | undefined> {
+  const rows = await processTable($).catch(() => undefined)
+  return rows && treeOf(rows, await liveRoot($, rows)).map(r => r.pid)
 }
 
 const lanePoll = { isRunning: false }
