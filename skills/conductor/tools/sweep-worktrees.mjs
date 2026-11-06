@@ -2,7 +2,7 @@
 // agent-kit's copy is canonical. A repo may vendor it.
 /**
  * Removes the worktrees and branches that finished delegates leave behind. It only ever removes
- * what the remote already holds, so a lost worktree costs a reinstall, never work.
+ * what the remote already holds, so a lost worktree costs a reinstall and its gitignored files.
  *
  *   sweep-worktrees.mjs [--dry-run] [--background]
  *
@@ -12,7 +12,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,9 +30,12 @@ export function verdict({ lock, inUse, dirty, head, prs, onTrunk, ageMs }) {
   if (!prs) return keep("could not read its PRs");
   if (prs.some((pr) => pr.state === "OPEN")) return keep("open PR");
   if (prs.some((pr) => pr.state === "MERGED" && pr.headRefOid === head)) return { remove: true, why: "PR merged" };
-  if (prs.some((pr) => pr.state === "MERGED")) return keep("commits past its merged PR");
-  if (prs.length) return keep("PR closed without merging");
-  if (!onTrunk) return keep("no PR, and commits not on trunk");
+  if (!onTrunk) {
+    if (prs.some((pr) => pr.state === "MERGED")) return keep("commits past its merged PR");
+    return keep(prs.length ? "PR closed without merging" : "no PR, and commits not on trunk");
+  }
+  // A lock looks stale to a process in another PID namespace, so only a merged PR outweighs one.
+  if (lock === "stale") return keep("on trunk, with a lock that may be live elsewhere");
   // A brand-new worktree also sits on trunk, and it may not hold its lock yet.
   if (ageMs < HOUR) return keep("on trunk, but under an hour old");
   return { remove: true, why: "nothing beyond trunk" };
@@ -72,69 +75,85 @@ const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], {
 const quietly = (fn) => { try { return fn(); } catch { return null; } };
 const within = (file, dir) => file === dir || file.startsWith(`${dir}/`);
 
-function ghPrs(branch, root) {
-  const json = quietly(() => execFileSync("gh", ["pr", "list", "--head", branch, "--state", "all", "--json", "state,headRefOid"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 60_000 }));
-  return json === null ? null : JSON.parse(json);
+export function ghPrs(branch, root) {
+  return quietly(() => JSON.parse(execFileSync("gh", ["pr", "list", "--head", branch, "--state", "all", "--json", "state,headRefOid"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 60_000 })));
 }
 
-function linuxProcStart(pid) {
+export function linuxProcStart(pid) {
   if (!quietly(() => statSync("/proc/self"))) return undefined;
   const stat = quietly(() => readFileSync(`/proc/${pid}/stat`, "utf8"));
   // The name in field 2 may hold spaces, so count from the bracket that closes it. Start time is field 22.
   return stat ? stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] : null;
 }
 
+// shortcut: without /proc every worktree counts as in use, so nothing is removed off Linux. Read lsof there if that ever matters.
 function anyProcessIn(dir) {
-  return (quietly(() => readdirSync("/proc")) ?? []).some((pid) => /^\d+$/.test(pid) && within(quietly(() => readlinkSync(`/proc/${pid}/cwd`)) ?? "", dir));
+  const pids = quietly(() => readdirSync("/proc"));
+  if (!pids?.includes("self")) return true;
+  return pids.some((pid) => /^\d+$/.test(pid) && within(quietly(() => readlinkSync(`/proc/${pid}/cwd`)) ?? "", dir));
 }
 
+const runDocker = (...args) => execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+
 // A container bind-mounting a removed worktree comes back from its next restart with empty folders
-// in place of those files, and fails far from here.
-function dockerMounts() {
-  const ids = quietly(() => execFileSync("docker", ["ps", "-q"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 }))?.split("\n").filter(Boolean) ?? [];
-  if (!ids.length) return [];
-  const json = quietly(() => execFileSync("docker", ["inspect", ...ids], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 }));
-  return json ? JSON.parse(json).flatMap((c) => c.Mounts.map((m) => m.Source)) : [];
+// in place of those files, and fails far from here. So stopped containers count, and null, for
+// docker failing, keeps everything. Only a machine without docker has no mounts.
+export function dockerMounts(docker = runDocker) {
+  try {
+    const ids = docker("ps", "-aq").split("\n").filter(Boolean);
+    return ids.length ? JSON.parse(docker("inspect", ...ids)).flatMap((c) => c.Mounts.map((m) => m.Source)) : [];
+  } catch (error) {
+    return error.code === "ENOENT" ? [] : null;
+  }
 }
 
 const isAncestor = (root, commit, trunk) => trunk !== null && quietly(() => git(root, "merge-base", "--is-ancestor", commit, trunk)) !== null;
 
 export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProcStart, inUse = anyProcessIn, mounts = dockerMounts, out = console.log } = {}) {
-  quietly(() => git(root, "fetch", "--quiet", "origin"));
-  if (!dryRun) git(root, "worktree", "prune");
+  if (!existsSync(path.join(root, WORKTREES))) return;
+  if (!dryRun) quietly(() => git(root, "fetch", "--quiet", "origin"));
   const trunk = quietly(() => git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"));
   const trunkBranch = trunk?.replace("origin/", "");
   const mounted = mounts();
+  const list = () => parseWorktrees(git(root, "worktree", "list", "--porcelain"));
 
-  for (const w of parseWorktrees(git(root, "worktree", "list", "--porcelain"))) {
+  for (const w of list()) {
     if (!within(w.path, path.join(root, WORKTREES)) || w.path === path.join(root, WORKTREES)) continue;
-    const lock = lockState(w.lock, procStart);
-    const { remove, why } = verdict({
-      lock,
-      inUse: inUse(w.path) || mounted.some((m) => within(m, w.path)),
-      dirty: git(w.path, "status", "--porcelain") !== "",
-      head: w.head,
-      prs: w.branch ? prs(w.branch, root) : [],
-      onTrunk: isAncestor(root, w.head, trunk),
-      ageMs: Date.now() - statSync(w.path).mtimeMs,
-    });
-    if (!remove) {
-      out(`kept ${w.path}: ${why}`);
-      continue;
-    }
-    const line = `${w.path}, branch ${w.branch ?? "(detached)"} at ${w.head}: ${why}`;
-    if (dryRun) {
-      out(`would remove ${line}`);
-      continue;
-    }
     try {
+      const lockNow = () => lockState(list().find((other) => other.path === w.path)?.lock, procStart);
+      if (lockNow() === "live") {
+        out(`kept ${w.path}: locked by a live process`);
+        continue;
+      }
+      const found = w.branch ? prs(w.branch, root) : [];
+      // Read after the slow PR lookup, because a session can adopt the worktree and relock it meanwhile.
+      const lock = lockNow();
+      const { remove, why } = verdict({
+        lock,
+        inUse: mounted === null || inUse(w.path) || mounted.some((m) => within(m, w.path)),
+        // Explicit flags, because status.showUntrackedFiles=no blinds both this and `git worktree remove`.
+        dirty: git(w.path, "--no-optional-locks", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none") !== "",
+        head: w.head,
+        prs: found,
+        onTrunk: isAncestor(root, w.head, trunk),
+        ageMs: Date.now() - statSync(w.path).mtimeMs,
+      });
+      if (!remove) {
+        out(`kept ${w.path}: ${why}`);
+        continue;
+      }
+      const line = `${w.path}, branch ${w.branch ?? "(detached)"} at ${w.head}: ${why}`;
+      if (dryRun) {
+        out(`would remove ${line}`);
+        continue;
+      }
       if (lock === "stale") git(root, "worktree", "unlock", w.path);
       // Never --force. A refusal here means git saw something this check did not.
       git(root, "worktree", "remove", w.path);
-      if (w.branch && w.branch !== trunkBranch) git(root, "branch", "-D", w.branch);
       out(`removed ${line}`);
+      if (w.branch && w.branch !== trunkBranch) git(root, "branch", "-D", w.branch);
     } catch (error) {
-      out(`kept ${w.path}: ${String(error.stderr ?? error.message).trim()}`);
+      out(`kept ${w.path}: ${String(error.stderr || error.message).trim()}`);
     }
   }
 

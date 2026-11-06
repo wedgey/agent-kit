@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { lockState, parseWorktrees, sweep, verdict } from "../../skills/conductor/tools/sweep-worktrees.mjs";
+import { dockerMounts, ghPrs, linuxProcStart, lockState, parseWorktrees, sweep, verdict } from "../../skills/conductor/tools/sweep-worktrees.mjs";
 
 const HOUR = 3_600_000;
 const facts = (over = {}) => ({ lock: "none", inUse: false, dirty: false, head: "aaa", prs: [], onTrunk: false, ageMs: 2 * HOUR, ...over });
@@ -30,6 +30,7 @@ describe("the verdict on one worktree", () => {
     ["a PR closed without merging", { prs: [{ state: "CLOSED", headRefOid: "aaa" }] }],
     ["no PR and commits off trunk", {}],
     ["no answer from the PR lookup", { prs: null, onTrunk: true }],
+    ["a stale lock and no merged PR, even on trunk", { lock: "stale", onTrunk: true }],
     ["a head on trunk that is under an hour old, which may not be locked yet", { onTrunk: true, ageMs: HOUR - 1 }],
   ]) {
     it(`keeps one with ${name}`, () => {
@@ -38,6 +39,11 @@ describe("the verdict on one worktree", () => {
       expect(out.why.length).toBeGreaterThan(0);
     });
   }
+
+  it("removes one on trunk whose PR closed or merged elsewhere", () => {
+    expect(verdict(facts({ onTrunk: true, prs: [{ state: "CLOSED", headRefOid: "aaa" }] })).remove).toBe(true);
+    expect(verdict(facts({ onTrunk: true, prs: [{ state: "MERGED", headRefOid: "bbb" }] })).remove).toBe(true);
+  });
 
   it("removes one with no PR once its head is on trunk and it is over an hour old", () => {
     expect(verdict(facts({ onTrunk: true })).remove).toBe(true);
@@ -61,6 +67,50 @@ describe("a worktree's lock", () => {
   it("is live while the same process holds it, or where the process table cannot be read", () => {
     expect(lockState(reason, () => "500")).toBe("live");
     expect(lockState(reason, () => undefined)).toBe("live");
+  });
+});
+
+describe("the process table", () => {
+  it("reads the start time git's lock reason records, and null for a gone pid", () => {
+    const stat = execFileSync("cat", [`/proc/${process.pid}/stat`], { encoding: "utf8" });
+    expect(linuxProcStart(process.pid)).toBe(stat.split(") ")[1].split(" ")[19]);
+    expect(linuxProcStart(4_000_000_000)).toBeNull();
+    expect(lockState(`x (pid ${process.pid} start ${linuxProcStart(process.pid)})`, linuxProcStart)).toBe("live");
+  });
+});
+
+describe("the PR lookup", () => {
+  it("answers null, which keeps the worktree, when gh prints something that is not JSON", () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), "sweep-gh-"));
+    writeFileSync(path.join(bin, "gh"), "#!/bin/sh\necho 'rate limited'\n");
+    chmodSync(path.join(bin, "gh"), 0o755);
+    const before = process.env.PATH;
+    process.env.PATH = `${bin}:${before}`;
+    try {
+      expect(ghPrs("any", bin)).toBeNull();
+    } finally {
+      process.env.PATH = before;
+    }
+  });
+});
+
+describe("docker's mounts", () => {
+  const fail = (code) => () => { throw Object.assign(new Error("no"), { code }); };
+
+  it("lists every container's mount sources, stopped ones included", () => {
+    const calls = [];
+    const docker = (...args) => {
+      calls.push(args[0] === "ps" ? args.join(" ") : args[0]);
+      return args[0] === "ps" ? "c1\nc2\n" : JSON.stringify([{ Mounts: [{ Source: "/a" }] }, { Mounts: [{ Source: "/b" }] }]);
+    };
+    expect(dockerMounts(docker)).toEqual(["/a", "/b"]);
+    expect(calls).toEqual(["ps -aq", "inspect"]);
+  });
+
+  it("has no mounts without docker, and answers null when docker fails", () => {
+    expect(dockerMounts(fail("ENOENT"))).toEqual([]);
+    expect(dockerMounts(fail("ETIMEDOUT"))).toBeNull();
+    expect(dockerMounts(fail(1))).toBeNull();
   });
 });
 
@@ -160,6 +210,49 @@ describe("the sweep on a real repo", () => {
     expect(existsSync(wt)).toBe(true);
   });
 
+  it("keeps every worktree when docker cannot answer", () => {
+    const root = repo();
+    const { wt, head } = lane(root, "agent-done");
+    run(root, { "agent-done": [{ state: "MERGED", headRefOid: head }] }, { mounts: () => null });
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("sees an untracked file even with status.showUntrackedFiles=no", () => {
+    const root = repo();
+    git(root, "config", "status.showUntrackedFiles", "no");
+    const { wt, head } = lane(root, "agent-dirty");
+    writeFileSync(path.join(wt, "notes.txt"), "unsaved");
+    run(root, { "agent-dirty": [{ state: "MERGED", headRefOid: head }] });
+    expect(existsSync(path.join(wt, "notes.txt"))).toBe(true);
+  });
+
+  it("leaves the registration of a worktree whose folder is out of sight", () => {
+    const root = repo();
+    const { wt } = lane(root, "elsewhere", { at: ".worktrees" });
+    rmSync(wt, { recursive: true });
+    run(root, {});
+    expect(git(root, "worktree", "list", "--porcelain")).toContain(wt);
+  });
+
+  it("carries on past a locked worktree whose folder is gone", () => {
+    const root = repo();
+    const gone = lane(root, "agent-a-gone");
+    git(root, "worktree", "lock", "--reason", "claude agent x (pid 99 start 500)", gone.wt);
+    rmSync(gone.wt, { recursive: true });
+    const done = lane(root, "agent-b-done");
+    const lines = run(root, { "agent-b-done": [{ state: "MERGED", headRefOid: done.head }] });
+    expect(existsSync(done.wt)).toBe(false);
+    expect(lines.find((l) => l.includes("agent-a-gone"))).toContain("kept");
+  });
+
+  it("does nothing in a repo with no harness folder", () => {
+    const root = repo();
+    rmSync(path.join(root, ".claude"), { recursive: true });
+    git(root, "branch", "worktree-agent-spent", "origin/main");
+    expect(run(root, {})).toEqual([]);
+    expect(branches(root)).toContain("worktree-agent-spent");
+  });
+
   it("deletes a harness branch already on trunk, and keeps one with its own commits", () => {
     const root = repo();
     git(root, "branch", "worktree-agent-spent", "origin/main");
@@ -175,6 +268,17 @@ describe("the sweep on a real repo", () => {
     lane(root, "worktree-agent-busy", { commit: false, at: ".worktrees" });
     run(root, {});
     expect(branches(root)).toContain("worktree-agent-busy");
+  });
+
+  it("does not fetch under a dry run", () => {
+    const root = repo();
+    const before = git(root, "rev-parse", "origin/main");
+    const other = path.join(root, "..", "other");
+    git(path.dirname(root), "clone", "-q", "origin.git", "other");
+    git(other, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "moved");
+    git(other, "push", "-q", "origin", "main");
+    run(root, {}, { dryRun: true });
+    expect(git(root, "rev-parse", "origin/main")).toBe(before);
   });
 
   it("only reports under a dry run", () => {

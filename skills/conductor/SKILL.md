@@ -42,7 +42,7 @@ Playbooks use these. The binding says how each one works in your harness.
 - **track** the work in the todo list the operator watches.
 - **show** a visual: a diagram, a mockup, a screenshot.
 - **isolate** a delegate's writes in their own worktree or sandbox.
-- **clean worktrees**: remove the worktrees and branches of finished delegates, keeping anything the remote does not hold.
+- **clean worktrees**: remove the worktrees and branches of finished delegates, keeping anything the remote does not hold, except gitignored files.
 - **background** a command so the turn is free, then wait for its completion notice.
 - **hand over in place**: hand the session to itself: shrink its context to what you keep, then go on, without ending it.
 
