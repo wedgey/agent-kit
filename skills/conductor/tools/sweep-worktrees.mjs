@@ -127,10 +127,10 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
       const found = w.branch ? prs(w.branch, root) : [];
       // Explicit flags, because status.showUntrackedFiles=no blinds both this and `git worktree remove`.
       const status = quietly(() => git(w.path, "--no-optional-locks", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"));
-      // Judge what is there after the slow steps above. A session can commit, switch, relock or mount
-      // meanwhile, and `git worktree remove` would drop a late commit without complaint.
-      const now = current();
       const mounted = mounts();
+      // Read last, after every slow step. A session can commit, switch or relock meanwhile, and
+      // `git worktree remove` would drop a late commit without complaint.
+      const now = current();
       if (!now) {
         out(`kept ${w.path}: no longer registered`);
         continue;
@@ -160,7 +160,12 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
       }
       if (lock === "stale") git(root, "worktree", "unlock", w.path);
       // Never --force. A refusal here means git saw something this check did not.
-      git(root, "worktree", "remove", w.path);
+      try {
+        git(root, "worktree", "remove", w.path);
+      } catch (error) {
+        if (lock === "stale") git(root, "worktree", "lock", "--reason", now.lock, w.path);
+        throw error;
+      }
       out(`removed ${line}`);
       // Naming the head refuses a branch that moved during the remove, so a late commit keeps its ref.
       if (w.branch && w.branch !== trunkBranch && quietly(() => git(root, "update-ref", "-d", `refs/heads/${w.branch}`, now.head)) === null) out(`kept branch ${w.branch}: could not delete it`);

@@ -352,6 +352,36 @@ describe("the sweep on a real repo", () => {
     expect(lines.filter((l) => l.includes("agent-done")).map((l) => l.split(" ").slice(0, 2).join(" "))).toEqual([`removed ${wt},`, "kept branch"]);
   });
 
+  it("keeps a detached worktree that gets a commit during the docker check", () => {
+    const root = repo();
+    const { wt } = lane(root, "agent-detached", { commit: false });
+    git(wt, "switch", "-q", "--detach");
+    const old = new Date(Date.now() - 2 * HOUR);
+    utimesSync(wt, old, old);
+    run(root, {}, {
+      mounts: () => {
+        git(wt, "commit", "-q", "--allow-empty", "-m", "late");
+        return [];
+      },
+    });
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("puts a stale lock back when git refuses the remove", () => {
+    const root = repo();
+    const { wt, head } = lane(root, "agent-refused");
+    git(root, "worktree", "lock", "--reason", "claude agent x (pid 99 start 500)", wt);
+    const lines = run(root, { "agent-refused": [{ state: "MERGED", headRefOid: head }] }, {
+      inUse: () => {
+        writeFileSync(path.join(wt, "late.txt"), "written after the status check");
+        return false;
+      },
+    });
+    expect(existsSync(path.join(wt, "late.txt"))).toBe(true);
+    expect(git(root, "worktree", "list", "--porcelain")).toContain("locked claude agent x (pid 99 start 500)");
+    expect(lines.at(-1)).toContain("kept");
+  });
+
   it("keeps a branch that moves while its worktree is being removed", () => {
     const root = repo();
     const { wt, head } = lane(root, "agent-done");
