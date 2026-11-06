@@ -1081,7 +1081,7 @@ const QUEUE_PS = [
 function queueHost(
   on: On,
   answers: Record<string, QueueAnswer> = {},
-  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string> } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown'> = {},
+  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown'> = {},
 ) {
   const calls: string[][] = []
   const installs = opts.installs ?? { 'conductor@agent-kit': CONDUCTOR }
@@ -1099,7 +1099,9 @@ function queueHost(
     panes: opts.panes,
     ran: opts.ran,
     isStoreDown: opts.isStoreDown,
-    ps: QUEUE_PS,
+    get ps() {
+      return opts.ps?.() ?? QUEUE_PS
+    },
     node: args => {
       if (!args[0]?.endsWith('/skills/conductor/tools/queue.mjs')) return undefined
       calls.push(args.slice(1))
@@ -1581,7 +1583,7 @@ test('a reading another session took is drawn with no queue call, and the next o
 })
 
 test('while another session is reading nobody else does; a claim 15 s old has died and the reading is taken over', async ($, on) => {
-  const stale = { readAt: START - 60_000, stdout: JSON.stringify(QUEUE_FIXTURE) }
+  const stale = { readAt: START - 20_000, stdout: JSON.stringify(QUEUE_FIXTURE) }
   const store: Record<string, unknown> = { [QUEUE_KEY]: { ...stale, claimedAt: START } }
   const { clock, calls } = await queueSession($, on, { store })
   await clock.advance(12_000)
@@ -1625,6 +1627,58 @@ test('opening the pane reads the queue itself, past a fresh reading and a live c
   await openPane($)
   expect(statusCalls(calls)).toBe(1)
   expect(store[QUEUE_KEY]).toEqual({ readAt: START, stdout: JSON.stringify(QUEUE_FIXTURE) })
+})
+
+test('a forced read goes ahead of a claim stamped after its own clock reading', async ($, on) => {
+  const store: Record<string, unknown> = { [QUEUE_KEY]: { readAt: START + 500, stdout: '{}', claimedAt: START + 500 } }
+  const { calls } = await queueSession($, on, { store, panes: () => [] })
+  await openPane($)
+  expect(statusCalls(calls)).toBe(1)
+})
+
+test('a reading stamped ahead of the clock, as after a backward step, does not stop reads', async ($, on) => {
+  const store: Record<string, unknown> = { [QUEUE_KEY]: { readAt: START + 3_600_000, stdout: JSON.stringify(QUEUE_FIXTURE) } }
+  const { clock, calls } = await queueSession($, on, { store })
+  await clock.advance(3000)
+  expect(statusCalls(calls)).toBe(1)
+})
+
+test('under a live claim a reading far older than the interval is not drawn', async ($, on) => {
+  const store: Record<string, unknown> = { [QUEUE_KEY]: { readAt: START - 86_400_000, stdout: JSON.stringify(QUEUE_FIXTURE), claimedAt: START + 2000 } }
+  const { clock, calls } = await queueSession($, on, { store })
+  await clock.advance(3000)
+  expect(statusCalls(calls)).toBe(0)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /^QUEUE/ })).toBeUndefined()
+})
+
+test('a process table that came back empty is read again, so a run of this session is not left unmarked', async ($, on) => {
+  const ran: string[] = []
+  let ps = ''
+  const { clock } = await queueSession($, on, { ran, ps: () => ps })
+  const psReads = async () => {
+    const before = ran.filter(c => c === 'ps').length
+    await clock.advance(3000)
+    return ran.filter(c => c === 'ps').length - before
+  }
+  expect(await psReads()).toBe(1)
+  ps = QUEUE_PS
+  expect(await psReads()).toBe(1)
+  expect(await psReads()).toBe(0)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: 'you' })).toBeDefined()
+})
+
+test('a queue reading a week old is pruned at start, like a todo list', async ($, on) => {
+  const store: Record<string, unknown> = { [`${QUEUE_KEY}/old`]: { readAt: START - 8 * 86_400_000, stdout: '' }, [`${QUEUE_KEY}/new`]: { readAt: START - 1000, stdout: '' } }
+  await queueSession($, on, { store })
+  expect(Object.keys(store)).toEqual([`${QUEUE_KEY}/new`])
+})
+
+test('a first claim with no reading yet survives another session starting', async ($, on) => {
+  const store: Record<string, unknown> = { [QUEUE_KEY]: { claimedAt: START - 1000 } }
+  await queueSession($, on, { store })
+  expect(store[QUEUE_KEY]).toEqual({ claimedAt: START - 1000 })
 })
 
 test('a shared reading that does not parse draws nothing, and the next read replaces it', async ($, on) => {

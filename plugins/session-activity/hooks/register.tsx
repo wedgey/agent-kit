@@ -60,6 +60,7 @@ import {
   queuePids,
   queueTotals,
   type SharedQueue,
+  usableQueueText,
   laneProgress,
   matchLane,
   oneLine,
@@ -92,7 +93,7 @@ const branchA = atom({ plugin: 'session-activity', key: 'branch' } as const, { b
 const spendA = atom({ plugin: 'session-activity', key: 'spend' } as const, {})
 const queueA = atom({ plugin: 'session-activity', key: 'queue' } as const, null)
 const queueNoteA = atom({ plugin: 'session-activity', key: 'queueNote' } as const, '')
-// Pids in this session's process tree when the queue was last read: what marks a run "you".
+// Pids in this session's process tree when the set of runs last changed: what marks a run "you".
 const queueOwnA = atom({ plugin: 'session-activity', key: 'queueOwn' } as const, [])
 const lanesA = atom({ plugin: 'session-activity', key: 'lanes' } as const, {})
 
@@ -447,9 +448,9 @@ async function saveTodos($: $, todos: TodoList) {
 async function restoreTodos($: $) {
   try {
     const [id, now, keys] = await Promise.all([$.session.id(), $.clock.now(), $.store.keys()])
-    for (const key of keys.filter(k => k.startsWith(TODOS_KEY))) {
-      const saved = (await $.store.get(key)) as { savedAt?: number } | undefined
-      if (now - (saved?.savedAt ?? 0) > KEEP_TODOS_MS) await $.store.delete(key)
+    for (const key of keys.filter(k => k.startsWith(TODOS_KEY) || k.startsWith(QUEUE_KEY))) {
+      const saved = (await $.store.get(key)) as { savedAt?: number; readAt?: number; claimedAt?: number } | undefined
+      if (now - (saved?.savedAt ?? saved?.readAt ?? saved?.claimedAt ?? 0) > KEEP_TODOS_MS) await $.store.delete(key)
     }
     const saved = (await $.store.get(`${TODOS_KEY}${id}`)) as { todos?: TodoList } | undefined
     if (Array.isArray(saved?.todos?.items) && (await read($, todosA)).items.length === 0) await update($, todosA, () => saved.todos!)
@@ -481,11 +482,14 @@ async function readQueue($: $, tool: string): Promise<QueueStatus | undefined> {
 
 // Two sessions can claim in the same moment; that costs one extra read and nothing else.
 // A failed read keeps its claim, so a stalled box gets one retry per claim, not one per session.
-async function sharedQueue($: $, tool: string, now: number, maxAgeMs: number, claimMs: number): Promise<QueueStatus | undefined> {
+async function sharedQueue($: $, tool: string, now: number, maxAgeMs: number, isForced: boolean): Promise<QueueStatus | undefined> {
   const [dir, xdg] = await Promise.all([$.env.get('CONDUCTOR_QUEUE_DIR'), $.env.get('XDG_STATE_HOME')])
   const key = `${QUEUE_KEY}${dir || xdg || ''}`
   const shared = (await $.store.get(key).catch(() => undefined)) as SharedQueue | undefined
-  if (!isQueueReadDue(shared, now, maxAgeMs, claimMs)) return shared?.stdout === undefined ? undefined : parseQueueStatus(shared.stdout)
+  if (!isForced && !isQueueReadDue(shared, now, maxAgeMs, QUEUE_TIMEOUT_MS)) {
+    const text = usableQueueText(shared, now, maxAgeMs, QUEUE_TIMEOUT_MS)
+    return text === undefined ? undefined : parseQueueStatus(text)
+  }
   await $.store.set(key, { ...shared, claimedAt: now }).catch(() => undefined)
   const stdout = await readQueueText($, tool)
   if (stdout === undefined) return undefined
@@ -514,12 +518,12 @@ async function pollQueueOnce($: $, isForced: boolean) {
     if (last) await update($, queueA, () => null)
     return
   }
-  const status = await sharedQueue($, tool, now, isForced ? 0 : everyMs, isForced ? 0 : QUEUE_TIMEOUT_MS)
+  const status = await sharedQueue($, tool, now, everyMs, isForced)
   // A failed read keeps the last status rather than blinking the section away.
   if (status) {
-    await update($, queueA, () => status)
     const pids = queuePids(status)
     const own = pids === ownPids ? undefined : pids ? await sessionPids($) : []
+    await update($, queueA, () => status)
     if (own) {
       ownPids = pids
       await update($, queueOwnA, () => own)
@@ -530,8 +534,9 @@ async function pollQueueOnce($: $, isForced: boolean) {
 
 // This session's process tree: everything under its root, whatever folder it runs in.
 async function sessionPids($: $): Promise<number[] | undefined> {
-  const rows = await processTable($).catch(() => undefined)
-  return rows && treeOf(rows, await liveRoot($, rows)).map(r => r.pid)
+  const rows = await processTable($).catch(() => [])
+  const root = rows.length > 0 ? await liveRoot($, rows) : 0
+  return root ? treeOf(rows, root).map(r => r.pid) : undefined
 }
 
 const lanePoll = { isRunning: false }

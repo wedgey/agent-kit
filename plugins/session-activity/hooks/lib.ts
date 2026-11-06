@@ -514,8 +514,15 @@ export const queueTotals = (status: QueueStatus) => ({
 // `stdout` stays raw so a reading from another session passes the same parseQueueStatus check.
 export type SharedQueue = { readAt?: number; stdout?: string; claimedAt?: number }
 
+// A stamp ahead of the clock counts as old, so a backward clock step leaves no entry blocking a new session.
+const isWithin = (at: number | undefined, now: number, ms: number) => at !== undefined && at <= now && now - at < ms
+
 export const isQueueReadDue = (shared: SharedQueue | undefined, now: number, maxAgeMs: number, claimMs: number) =>
-  now - (shared?.readAt ?? -Infinity) >= maxAgeMs && now - (shared?.claimedAt ?? -Infinity) >= claimMs
+  !isWithin(shared?.readAt, now, maxAgeMs) && !isWithin(shared?.claimedAt, now, claimMs)
+
+// Under another session's claim a reading may be late, but never much older than the interval.
+export const usableQueueText = (shared: SharedQueue | undefined, now: number, maxAgeMs: number, claimMs: number) =>
+  isWithin(shared?.readAt, now, maxAgeMs + claimMs) ? shared?.stdout : undefined
 
 export const queuePids = (status: QueueStatus) =>
   status.queues

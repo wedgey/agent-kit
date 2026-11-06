@@ -660,8 +660,8 @@ describe('isQueueReadDue', () => {
     test(name, () => expect(isQueueReadDue(shared, now, MAX_AGE, CLAIM)).toBe(isDue))
   }
 
-  test('an age and claim of zero always read: what a forced read passes', () => {
-    expect(isQueueReadDue({ readAt: 10_000, stdout: '', claimedAt: 10_000 }, 10_000, 0, 0)).toBe(true)
+  test('a stamp ahead of the clock counts as neither fresh nor claimed', () => {
+    expect(isQueueReadDue({ readAt: 20_000, stdout: '', claimedAt: 20_000 }, 10_000, MAX_AGE, CLAIM)).toBe(true)
   })
 })
 
