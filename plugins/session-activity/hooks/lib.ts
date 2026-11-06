@@ -510,6 +510,26 @@ export const queueTotals = (status: QueueStatus) => ({
   waiting: status.queues.reduce((n, q) => n + q.waiters.length, 0),
 })
 
+// One `$.store` entry the box's sessions share, so one of them reads the queue for all.
+// `stdout` stays raw so a reading from another session passes the same parseQueueStatus check.
+export type SharedQueue = { readAt?: number; stdout?: string; claimedAt?: number }
+
+// A stamp ahead of the clock counts as old, so a backward clock step leaves no entry blocking a new session.
+const isWithin = (at: number | undefined, now: number, ms: number) => at !== undefined && at <= now && now - at < ms
+
+export const isQueueReadDue = (shared: SharedQueue | undefined, now: number, maxAgeMs: number, claimMs: number) =>
+  !isWithin(shared?.readAt, now, maxAgeMs) && !isWithin(shared?.claimedAt, now, claimMs)
+
+// Under another session's claim a reading may be late, but never much older than the interval.
+export const usableQueueText = (shared: SharedQueue | undefined, now: number, maxAgeMs: number, claimMs: number) =>
+  isWithin(shared?.readAt, now, maxAgeMs + claimMs) ? shared?.stdout : undefined
+
+export const queuePids = (status: QueueStatus) =>
+  status.queues
+    .flatMap(q => [...q.holders, ...q.waiters].flatMap(r => (r.pid === null ? [] : [r.pid])))
+    .sort((a, b) => a - b)
+    .join()
+
 export function queueHeader(status: QueueStatus): string {
   const m = status.machine
   const free = m.memAvailKb === null ? [] : [`${shortMemory(m.memAvailKb)} free`]
