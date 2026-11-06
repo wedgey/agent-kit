@@ -114,7 +114,6 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
   if (!dryRun) quietly(() => git(root, "fetch", "--quiet", "origin"));
   const trunk = quietly(() => git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"));
   const trunkBranch = trunk?.replace("origin/", "");
-  const mounted = mounts();
   const list = () => parseWorktrees(git(root, "worktree", "list", "--porcelain"));
 
   for (const w of list()) {
@@ -126,9 +125,12 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
         continue;
       }
       const found = w.branch ? prs(w.branch, root) : [];
-      // Judge what is there after the slow PR lookup. A session can commit, switch or relock meanwhile,
-      // and git's remove and branch -D would drop a late commit without complaint.
+      // Explicit flags, because status.showUntrackedFiles=no blinds both this and `git worktree remove`.
+      const status = quietly(() => git(w.path, "--no-optional-locks", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"));
+      // Judge what is there after the slow steps above. A session can commit, switch, relock or mount
+      // meanwhile, and `git worktree remove` would drop a late commit without complaint.
       const now = current();
+      const mounted = mounts();
       if (!now) {
         out(`kept ${w.path}: no longer registered`);
         continue;
@@ -141,8 +143,7 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
       const { remove, why } = verdict({
         lock,
         inUse: mounted === null || inUse(w.path) || mounted.some((m) => within(m, w.path)),
-        // Explicit flags, because status.showUntrackedFiles=no blinds both this and `git worktree remove`.
-        dirty: git(w.path, "--no-optional-locks", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none") !== "",
+        dirty: status !== "",
         head: now.head,
         prs: found,
         onTrunk: isAncestor(root, now.head, trunk),
@@ -161,7 +162,8 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
       // Never --force. A refusal here means git saw something this check did not.
       git(root, "worktree", "remove", w.path);
       out(`removed ${line}`);
-      if (w.branch && w.branch !== trunkBranch && quietly(() => git(root, "branch", "-D", w.branch)) === null) out(`kept branch ${w.branch}: could not delete it`);
+      // Naming the head refuses a branch that moved during the remove, so a late commit keeps its ref.
+      if (w.branch && w.branch !== trunkBranch && quietly(() => git(root, "update-ref", "-d", `refs/heads/${w.branch}`, now.head)) === null) out(`kept branch ${w.branch}: could not delete it`);
     } catch (error) {
       out(`kept ${w.path}: ${String(error.stderr || error.message).trim()}`);
     }

@@ -285,10 +285,53 @@ describe("the sweep on a real repo", () => {
       expect(lines.join("\n")).toContain("changed branch");
     });
 
-    it("keeps a worktree that a session locks then", () => {
+    it("keeps a worktree still on trunk that gets a commit then", () => {
+      const root = repo();
+      const { wt, head } = lane(root, "agent-fresh", { commit: false });
+      during(root, head, () => git(wt, "commit", "-q", "--allow-empty", "-m", "late"));
+      expect(existsSync(wt)).toBe(true);
+      expect(branches(root)).toContain("agent-fresh");
+    });
+
+    it("logs the head it removed, not the one it first listed", () => {
+      const root = repo();
+      const { wt } = lane(root, "agent-late");
+      let late;
+      const lines = run(root, {}, {
+        prs: () => {
+          git(wt, "commit", "-q", "--allow-empty", "-m", "late");
+          late = git(wt, "rev-parse", "HEAD");
+          return [{ state: "MERGED", headRefOid: late }];
+        },
+      });
+      expect(existsSync(wt)).toBe(false);
+      expect(lines.join("\n")).toContain(late);
+    });
+
+    it("keeps a worktree whose stale lock a live session replaces then", () => {
       const root = repo();
       const { wt, head } = lane(root, "agent-adopted");
-      during(root, head, () => git(root, "worktree", "lock", "--reason", "taken by a session", wt));
+      git(root, "worktree", "lock", "--reason", "claude agent x (pid 99 start 500)", wt);
+      const lines = during(root, head, () => {
+        git(root, "worktree", "unlock", wt);
+        git(root, "worktree", "lock", "--reason", "taken by a session", wt);
+      });
+      expect(existsSync(wt)).toBe(true);
+      expect(git(root, "worktree", "list", "--porcelain")).toContain("locked taken by a session");
+      expect(lines.join("\n")).toContain("locked by a live process");
+    });
+
+    it("keeps a worktree that a container mounts by then", () => {
+      const root = repo();
+      const { wt, head } = lane(root, "agent-mounted");
+      let up = false;
+      run(root, {}, {
+        prs: () => {
+          up = true;
+          return [{ state: "MERGED", headRefOid: head }];
+        },
+        mounts: () => (up ? [wt] : []),
+      });
       expect(existsSync(wt)).toBe(true);
     });
 
@@ -307,6 +350,22 @@ describe("the sweep on a real repo", () => {
     const lines = run(root, { "agent-done": [{ state: "MERGED", headRefOid: head }] });
     expect(existsSync(wt)).toBe(false);
     expect(lines.filter((l) => l.includes("agent-done")).map((l) => l.split(" ").slice(0, 2).join(" "))).toEqual([`removed ${wt},`, "kept branch"]);
+  });
+
+  it("keeps a branch that moves while its worktree is being removed", () => {
+    const root = repo();
+    const { wt, head } = lane(root, "agent-done");
+    const late = git(root, "commit-tree", "-m", "late", "-p", head, `${head}^{tree}`);
+    const lines = [];
+    run(root, { "agent-done": [{ state: "MERGED", headRefOid: head }] }, {
+      out: (line) => {
+        lines.push(line);
+        if (line.startsWith("removed")) git(root, "update-ref", "refs/heads/agent-done", late);
+      },
+    });
+    expect(existsSync(wt)).toBe(false);
+    expect(git(root, "rev-parse", "agent-done")).toBe(late);
+    expect(lines.at(-1)).toContain("kept branch agent-done");
   });
 
   it("does nothing in a repo with no harness folder", () => {
