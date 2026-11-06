@@ -1,0 +1,11 @@
+# Finished worktrees are swept at session start
+
+A lane's worktree outlives its lane. Claude Code removes a delegate's worktree only when the delegate changed nothing, and a lane always changes something. Its own sweep waits for `cleanupPeriodDays`. The epic playbook said to remove the worktree when a ticket merged, but that rule fires only in a session still alive at the merge, and a PR can merge days later or by hand. On 2026-11-06 this box held 7 agent worktrees, four of them over 3 GB, two locked by a session that had died, and 34 `worktree-agent-*` branches, 33 of them already on trunk.
+
+A rule cannot fix this, because the session that should act is often gone. No hook fires on a merge, and `WorktreeRemove` does not fire for subagent worktrees. Session start is the one event that always comes later, so the session-start hook starts `tools/sweep-worktrees.mjs` detached, at most once per repo per hour. The playbooks still clean up at the merge, because that is sooner, but nothing depends on it.
+
+The sweep removes only what the remote holds: a PR merged at the worktree's own head, or a head on trunk. The head check matters because a squash merge leaves the branch off trunk, so ancestry alone would keep every merged lane, and a merged PR alone would lose commits added after it. A brand-new worktree also sits on trunk, so that rule waits an hour. A PR closed without merging stays, because it may be work someone means to reopen.
+
+It never forces, so `git worktree remove` is a second check on the first. It stays out of worktrees outside `.claude/worktrees/`, which are the operator's. A process inside a worktree or a container mounting one keeps it, because on 2026-11-04 a Supabase stack bind-mounted from a removed worktree died on its next restart and took every e2e run with it.
+
+A lock counts as dead only when its reason names a pid and start time that no longer match a running process. That reads the local process table, so a worktree shared with another PID namespace, such as a host and a container, can look unlocked while its owner runs. The merged-PR rule still has to hold, so the cost is a merged worktree removed under a session that had finished with it.

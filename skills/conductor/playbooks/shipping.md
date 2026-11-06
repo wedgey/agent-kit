@@ -24,5 +24,6 @@ Only an explicit operator request to land, ship or merge starts this playbook. I
 5. **Retarget the next PR.** After each merge, run `gh pr edit <next-pr> --base <trunk>`. Reapplying the next patch onto the merge result is a rebase, so the owner of that branch does it. If the retarget leaves the child conflicted or carrying the parent's commits, stop and report. Otherwise repeat step 3 for that PR before you merge it.
 6. **Leave the stack alone.** The retarget in step 5 is the only change you make to a branch or base. A merge lands whatever its branch and base hold at that moment, verdict or not. If a merge stalls, find out why before you change anything.
 7. **Stop at the ceiling.** Stop at the first unverified PR. Extending the run takes new verdicts, which is a new pass through step 1.
+8. **Clean up.** clean worktrees, once, after the last merge. The worktrees of the PRs that landed go, and everything else stays.
 
 **Reply:** the verified run and its ceiling, each PR as a full URL with its verdict and which delegate gave it, what landed and how you confirmed it, and what the next gap needs before it can land, in the order and form of SKILL.md "Writing the reply".
