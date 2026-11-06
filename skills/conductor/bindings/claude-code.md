@@ -94,8 +94,8 @@ Claude Code removes a delegate's worktree only when the delegate changed nothing
 
 `node <skill dir>/tools/sweep-worktrees.mjs` closes that gap for everything under `.claude/worktrees/`. Worktrees elsewhere are the operator's and it never touches them. It does not run `git worktree prune`, because that reaches every registration in the repo, and a host and a container that share a checkout see each other's paths as missing.
 
-- **It removes** a worktree whose PR merged at the worktree's own head, or one with no PR, a head on trunk and an hour of age. It deletes that worktree's local branch, and any `worktree-agent-*` branch already on trunk.
-- **It keeps** a worktree with a live lock, a process in it, any container mounting it, uncommitted or untracked files, an open PR, commits past its merged PR, a closed PR with commits off trunk, or a stale lock with no merged PR. When docker fails it keeps everything. It never forces, and it never touches a remote. Gitignored files go with the worktree, unlogged.
+- **It removes** a worktree whose PR merged at the worktree's own head, or one with no open PR, a head on trunk and an hour of age. It deletes that worktree's local branch, and any `worktree-agent-*` branch already on trunk.
+- **It keeps** a worktree with a live lock, a process in it, any container mounting it, uncommitted or untracked files, an open PR, commits past its merged PR, a closed PR with commits off trunk, or a stale lock with no merged PR. When docker fails it keeps every worktree. It never forces, and it never touches a remote. Gitignored files go with the worktree, unlogged.
 - **It releases a dead lock.** Claude Code locks a worktree with `(pid <n> start <t>)`, and a session that dies leaves the lock. A lock whose process is gone counts as stale, and only a merged PR outweighs it, because another PID namespace looks the same. Any other lock counts as live.
 - **It needs Linux.** It reads `/proc`. Without it every worktree counts as in use, so only spent branches go, and Claude Code's other lock format counts as live.
 

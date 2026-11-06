@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { dockerMounts, ghPrs, linuxProcStart, lockState, parseWorktrees, sweep, verdict } from "../../skills/conductor/tools/sweep-worktrees.mjs";
+import { anyProcessIn, dockerMounts, ghPrs, linuxProcStart, lockState, parseWorktrees, sweep, verdict } from "../../skills/conductor/tools/sweep-worktrees.mjs";
 
 const HOUR = 3_600_000;
 const facts = (over = {}) => ({ lock: "none", inUse: false, dirty: false, head: "aaa", prs: [], onTrunk: false, ageMs: 2 * HOUR, ...over });
@@ -76,6 +76,20 @@ describe("the process table", () => {
     expect(linuxProcStart(process.pid)).toBe(stat.split(") ")[1].split(" ")[19]);
     expect(linuxProcStart(4_000_000_000)).toBeNull();
     expect(lockState(`x (pid ${process.pid} start ${linuxProcStart(process.pid)})`, linuxProcStart)).toBe("live");
+  });
+});
+
+describe("the process check", () => {
+  it("finds a process working under a folder, and none in an unused one", () => {
+    const unused = mkdtempSync(path.join(os.tmpdir(), "sweep-idle-"));
+    expect(anyProcessIn(process.cwd())).toBe(true);
+    expect(anyProcessIn(unused)).toBe(false);
+  });
+
+  it("counts every folder as in use where there is no process table", () => {
+    const empty = mkdtempSync(path.join(os.tmpdir(), "sweep-noproc-"));
+    expect(anyProcessIn("/nowhere", empty)).toBe(true);
+    expect(anyProcessIn("/nowhere", path.join(empty, "missing"))).toBe(true);
   });
 });
 
@@ -243,6 +257,56 @@ describe("the sweep on a real repo", () => {
     const lines = run(root, { "agent-b-done": [{ state: "MERGED", headRefOid: done.head }] });
     expect(existsSync(done.wt)).toBe(false);
     expect(lines.find((l) => l.includes("agent-a-gone"))).toContain("kept");
+  });
+
+  describe("when a session acts during the slow PR lookup", () => {
+    const during = (root, head, act) => run(root, {}, {
+      prs: () => {
+        act();
+        return [{ state: "MERGED", headRefOid: head }];
+      },
+    });
+
+    it("keeps a commit that lands then, and judges the new head", () => {
+      const root = repo();
+      const { wt, head } = lane(root, "agent-late");
+      const lines = during(root, head, () => git(wt, "commit", "-q", "--allow-empty", "-m", "late"));
+      expect(existsSync(wt)).toBe(true);
+      expect(branches(root)).toContain("agent-late");
+      expect(lines.join("\n")).toContain("commits past its merged PR");
+    });
+
+    it("keeps a worktree that switches branch then", () => {
+      const root = repo();
+      const { wt, head } = lane(root, "agent-moved");
+      const lines = during(root, head, () => git(wt, "switch", "-q", "-c", "agent-new"));
+      expect(existsSync(wt)).toBe(true);
+      expect(branches(root)).toEqual(["agent-moved", "agent-new", "main"]);
+      expect(lines.join("\n")).toContain("changed branch");
+    });
+
+    it("keeps a worktree that a session locks then", () => {
+      const root = repo();
+      const { wt, head } = lane(root, "agent-adopted");
+      during(root, head, () => git(root, "worktree", "lock", "--reason", "taken by a session", wt));
+      expect(existsSync(wt)).toBe(true);
+    });
+
+    it("says so when the worktree goes then", () => {
+      const root = repo();
+      const { wt, head } = lane(root, "agent-gone");
+      const lines = during(root, head, () => git(root, "worktree", "remove", wt));
+      expect(lines.join("\n")).toContain("no longer registered");
+    });
+  });
+
+  it("logs a removal before the branch delete, and reports a delete that fails", () => {
+    const root = repo();
+    const { wt, head } = lane(root, "agent-done");
+    writeFileSync(path.join(root, ".git/refs/heads/agent-done.lock"), "");
+    const lines = run(root, { "agent-done": [{ state: "MERGED", headRefOid: head }] });
+    expect(existsSync(wt)).toBe(false);
+    expect(lines.filter((l) => l.includes("agent-done")).map((l) => l.split(" ").slice(0, 2).join(" "))).toEqual([`removed ${wt},`, "kept branch"]);
   });
 
   it("does nothing in a repo with no harness folder", () => {

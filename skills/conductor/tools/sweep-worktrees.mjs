@@ -86,18 +86,18 @@ export function linuxProcStart(pid) {
   return stat ? stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] : null;
 }
 
-// shortcut: without /proc every worktree counts as in use, so nothing is removed off Linux. Read lsof there if that ever matters.
-function anyProcessIn(dir) {
-  const pids = quietly(() => readdirSync("/proc"));
+// shortcut: without /proc every worktree counts as in use, so no worktree is removed off Linux. Read lsof there if that ever matters.
+export function anyProcessIn(dir, proc = "/proc") {
+  const pids = quietly(() => readdirSync(proc));
   if (!pids?.includes("self")) return true;
-  return pids.some((pid) => /^\d+$/.test(pid) && within(quietly(() => readlinkSync(`/proc/${pid}/cwd`)) ?? "", dir));
+  return pids.some((pid) => /^\d+$/.test(pid) && within(quietly(() => readlinkSync(`${proc}/${pid}/cwd`)) ?? "", dir));
 }
 
 const runDocker = (...args) => execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
 
 // A container bind-mounting a removed worktree comes back from its next restart with empty folders
 // in place of those files, and fails far from here. So stopped containers count, and null, for
-// docker failing, keeps everything. Only a machine without docker has no mounts.
+// docker failing, keeps every worktree. Only a machine without docker has no mounts.
 export function dockerMounts(docker = runDocker) {
   try {
     const ids = docker("ps", "-aq").split("\n").filter(Boolean);
@@ -120,29 +120,39 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
   for (const w of list()) {
     if (!within(w.path, path.join(root, WORKTREES)) || w.path === path.join(root, WORKTREES)) continue;
     try {
-      const lockNow = () => lockState(list().find((other) => other.path === w.path)?.lock, procStart);
-      if (lockNow() === "live") {
+      const current = () => list().find((other) => other.path === w.path);
+      if (lockState(current()?.lock, procStart) === "live") {
         out(`kept ${w.path}: locked by a live process`);
         continue;
       }
       const found = w.branch ? prs(w.branch, root) : [];
-      // Read after the slow PR lookup, because a session can adopt the worktree and relock it meanwhile.
-      const lock = lockNow();
+      // Judge what is there after the slow PR lookup. A session can commit, switch or relock meanwhile,
+      // and git's remove and branch -D would drop a late commit without complaint.
+      const now = current();
+      if (!now) {
+        out(`kept ${w.path}: no longer registered`);
+        continue;
+      }
+      if (now.branch !== w.branch) {
+        out(`kept ${w.path}: changed branch during the sweep`);
+        continue;
+      }
+      const lock = lockState(now.lock, procStart);
       const { remove, why } = verdict({
         lock,
         inUse: mounted === null || inUse(w.path) || mounted.some((m) => within(m, w.path)),
         // Explicit flags, because status.showUntrackedFiles=no blinds both this and `git worktree remove`.
         dirty: git(w.path, "--no-optional-locks", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none") !== "",
-        head: w.head,
+        head: now.head,
         prs: found,
-        onTrunk: isAncestor(root, w.head, trunk),
+        onTrunk: isAncestor(root, now.head, trunk),
         ageMs: Date.now() - statSync(w.path).mtimeMs,
       });
       if (!remove) {
         out(`kept ${w.path}: ${why}`);
         continue;
       }
-      const line = `${w.path}, branch ${w.branch ?? "(detached)"} at ${w.head}: ${why}`;
+      const line = `${w.path}, branch ${w.branch ?? "(detached)"} at ${now.head}: ${why}`;
       if (dryRun) {
         out(`would remove ${line}`);
         continue;
@@ -151,7 +161,7 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
       // Never --force. A refusal here means git saw something this check did not.
       git(root, "worktree", "remove", w.path);
       out(`removed ${line}`);
-      if (w.branch && w.branch !== trunkBranch) git(root, "branch", "-D", w.branch);
+      if (w.branch && w.branch !== trunkBranch && quietly(() => git(root, "branch", "-D", w.branch)) === null) out(`kept branch ${w.branch}: could not delete it`);
     } catch (error) {
       out(`kept ${w.path}: ${String(error.stderr || error.message).trim()}`);
     }
