@@ -42,6 +42,7 @@ Playbooks use these. The binding says how each one works in your harness.
 - **track** the work in the todo list the operator watches.
 - **show** a visual: a diagram, a mockup, a screenshot.
 - **isolate** a delegate's writes in their own worktree or sandbox.
+- **clean worktrees**: remove the worktrees and branches of finished delegates, keeping anything the remote does not hold, except gitignored files.
 - **background** a command so the turn is free, then wait for its completion notice.
 - **hand over in place**: hand the session to itself: shrink its context to what you keep, then go on, without ending it.
 
@@ -96,7 +97,7 @@ Read `roles.md` before the first spawn of a session.
 
 **Fresh by default.** spawn with a brief. fork only when the work needs what this conversation established and the binding allows it. A fork runs on your model, so it saves context, not cost.
 
-**You own their work.** Read the diff or the report yourself. Write your own summary. A delegate saying "done" is a claim, not evidence.
+**You own their work.** Read the diff or the report yourself. Write your own summary. A delegate saying "done" is a claim, not evidence. Once you have taken an isolated delegate's work, remove its worktree as the binding says.
 
 **Never downgrade yourself.** The orchestrator stays on the session's model. Conductor never switches it.
 

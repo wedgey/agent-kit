@@ -44,8 +44,9 @@ Conductor reads the repo's own rules first, and they win over its own. It works 
 
 - **Agent instructions.** An `AGENTS.md` or `CLAUDE.md` with the commands to build, test, lint and typecheck, and the rules a change must meet.
 - **An issue tracker it can reach.** Say which one in those instructions, for example GitHub Issues through `gh`. An epic keeps its tickets and graph there. Without one it keeps them in a file outside the repo.
+- **Worktrees that clean themselves up.** Each session start sweeps `.claude/worktrees/` in the background. A worktree goes once its PR has merged, unless something still uses it. This needs Linux. Elsewhere worktrees stay. `CONDUCTOR_HOOKS=off` stops this.
 - **A worktree setup command.** Lanes work in fresh git worktrees, and a fresh worktree has no dependencies installed. Document the one command that prepares one, such as `pnpm install` or a provisioning script, so each lane runs it first.
-- **Its own queue, if it has one.** If the repo already gates heavy commands its own way, add `"env": { "CONDUCTOR_QUEUE_MANAGED": "1" }` to the repo's `.claude/settings.json`. Conductor's hooks then only stop wait loops there.
+- **Its own queue, if it has one.** If the repo already gates heavy commands its own way, add `"env": { "CONDUCTOR_QUEUE_MANAGED": "1" }` to the repo's `.claude/settings.json`. Conductor's queue hooks then only stop wait loops there.
 
 ### 4. Use it
 
