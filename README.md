@@ -22,7 +22,7 @@ In Claude Code:
 /reload-plugins
 ```
 
-Installing `conductor` gives the machine its skill, its five role agents (explorer, editor, implementer, reviewer, verifier), the queue and its hooks, and a start-of-task pointer that every session loads. `session-activity` adds the pane. Open it with `/activity`.
+Installing `conductor` gives the machine its skill, its six role agents (explorer, editor, implementer, reviewer, verifier, lane), the queue and its hooks, and a start-of-task pointer that every session loads. `session-activity` adds the pane. Open it with `/activity`.
 
 ### 2. Check the install
 
@@ -36,7 +36,7 @@ It also suggests a slot count. Set it once per machine in `~/.claude/settings.js
 
 A quarter of your cores is a good start for tests. Without a value each queue runs one command at a time. `CONDUCTOR_QUEUE_MIN_FREE_MB` (default 4096) is the free memory a second slot needs.
 
-`CONDUCTOR_CONTEXT_LIMIT` (default 250000) is the context, in tokens, at which a lane hands over to a fresh lane. `CONDUCTOR_SESSION_CONTEXT_LIMIT` (default 150000) is the same for the session's own agent, at which the session's own agent hands over in place: it compacts its own session and carries on (an epic's orchestrator writes the epic's state to its issue first). Its lanes keep running and you do nothing.
+`CONDUCTOR_CONTEXT_LIMIT` (default 120000) is the context, in tokens, at which a delegate hands over: a lane to a fresh lane, any other delegate by ending with its report. `CONDUCTOR_SESSION_CONTEXT_LIMIT` (default 150000) is the same for the session's own agent, at which the session's own agent hands over in place: it compacts its own session and carries on (an epic's orchestrator writes the epic's state to its issue first). Its lanes keep running and you do nothing.
 
 ### 3. Prepare the repo
 
@@ -52,7 +52,7 @@ Conductor reads the repo's own rules first, and they win over its own. It works 
 
 Ask for the work as you would any coding task. Conductor picks a playbook: investigation, bug fix, feature, refactoring, prototype, epic, opening a PR, babysitting one, or shipping. `/conductor:conductor` forces it on.
 
-For a larger body of work, describe all of it or point at an epic issue. Conductor decides from the work whether it needs one PR or several. For several, it cuts tickets, draws their dependency graph, and dispatches one lane per ready ticket. Each lane writes its ticket's code, has it reviewed and verified by fresh agents, and carries its PR to merge-ready. Lanes run on Sonnet at medium effort, and on Opus at high effort when a ticket needs design or a lane escalates. Nothing merges until you ask for it to ship. Then each lane lands its own PR.
+For a larger body of work, describe all of it or point at an epic issue. Conductor decides from the work whether it needs one PR or several. For several, it cuts tickets, draws their dependency graph, and dispatches one lane per ready ticket. Each lane writes its ticket's code, has it reviewed and verified by fresh agents, and carries its PR to merge-ready. Lanes run on Sonnet at medium effort, and on Opus at high effort when a ticket needs design or a lane escalates. Each lane starts when the heavy-check queue has no one waiting, so lanes never pile up parked on a full queue. Nothing merges until you ask for it to ship. Then each lane lands its own PR.
 
 For epics:
 

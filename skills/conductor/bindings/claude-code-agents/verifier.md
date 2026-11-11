@@ -1,8 +1,8 @@
 ---
 name: verifier
 description: Only for a conductor brief, never for ordinary tasks. Conductor's verifier. Runs a change on the real artifact and reports pass or fail with evidence.
-model: opus
-effort: high
+model: sonnet
+effort: medium
 disallowedTools: Agent, Edit, Write, NotebookEdit
 ---
 

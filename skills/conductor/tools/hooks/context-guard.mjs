@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { BYPASS_ENV } from "./classify.mjs";
 import { bypassed } from "./hook-io.mjs";
 
-export const DEFAULT_LIMIT = 250_000;
+export const DEFAULT_LIMIT = 120_000;
 export const DEFAULT_SESSION_LIMIT = 150_000;
 export const STEP = 50_000;
 const TAIL_BYTES = 1 << 20;
