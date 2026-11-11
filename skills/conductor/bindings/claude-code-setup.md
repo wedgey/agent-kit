@@ -41,7 +41,7 @@ Output this table.
 Then check the hook, the mod and the pointer, and report each on its own line below the table, `Hook:`, `Mod:` and `Pointer:`, not as rows in it.
 
 - **Hook.** Run `until true; do sleep 1; done` with the `Bash` tool. The registered hook must deny it with a reason that starts `Do not block the turn by sleeping or polling.` It cannot hang, because `until true` ends at once when nothing denies it. A leftover settings hook alone also passes this check, so the leftover check below is what tells the two apart.
-- **Mod.** Run `: conductor-mod-probe` with the `Bash` tool. Only the loaded mod answers it, with a deny that reads `conductor's Bash mod is loaded.` If the command just runs, say plainly that the mod did not load: heavy commands are not queued in this session, though wait loops are still denied. The likely causes are a Claude Code build without mods or mods turned off for this account. Report it on its own `Mod:` line beside `Hook:` and `Pointer:`.
+- **Mod.** Run `: conductor-mod-probe` with the `Bash` tool. Only the loaded mod answers it, with a deny that reads `conductor's Bash mod is loaded.` If the command just runs, say plainly that the mod did not load: heavy commands are not queued in this session, and lanes compact without their keep and resume note, though wait loops are still denied. The likely causes are a Claude Code build without mods or mods turned off for this account. Report it on its own `Mod:` line beside `Hook:` and `Pointer:`.
 - **Pointer.** This session's context must hold the pointer from the `SessionStart` hook. It begins `Conductor governs how you work in every repo.` and names `/conductor:conductor`.
 
 ## Leftovers of the old install

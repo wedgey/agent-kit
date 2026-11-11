@@ -43,6 +43,16 @@ describe('a lane compacting in place', () => {
     expect(w.instructions).toEqual(['theirs', 'theirs', 'theirs'])
   })
 
+  test('adds the resume note once when the engine hands back a summary that already has it', async ($, on) => {
+    on('agent.list', () => ({ value: [{ id: 'a1', type: 'conductor:lane' }] }) as never)
+    let kept: { role: string; text: string; toolUses: never[] }[] | undefined
+    on('session.compact', () => ({ messages: kept ?? [SUMMARY] }) as never)
+    const first = await compact($, { agentId: 'a1', trigger: 'precompute' })
+    kept = first.messages as never
+    const second = await compact($, { agentId: 'a1' })
+    expect(second.messages?.map(m => m.text)).toEqual(['summary', expect.stringContaining('compacted in place')])
+  })
+
   test('falls back to the engine when the agent list fails', async ($, on) => {
     const w = harness(on, new Error('no list'))
     const r = await compact($, { agentId: 'a1' })

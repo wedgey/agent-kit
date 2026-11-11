@@ -1,5 +1,5 @@
 ---
-status: a lane cut off at its context limit compacts in place instead of being replaced, per ADR 0018
+status: the 120k delegate limit no longer reaches a lane agent, which compacts in place below it, per ADR 0018
 ---
 
 # Lanes are a role agent, paced by the queue

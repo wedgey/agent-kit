@@ -30,7 +30,8 @@ export const register = (on) => {
   on("session.compact", async ($, e, next) => {
     if (!e.agentId || !(await isLane($, e.agentId))) return next(e);
     const done = await next({ ...e, instructions: e.instructions ? `${KEEP}\n\n${e.instructions}` : KEEP });
-    if (!Array.isArray(done?.messages)) return done;
+    // A precompute result is kept and reused by the next compaction, so the note must not go on twice.
+    if (!Array.isArray(done?.messages) || done.messages.at(-1)?.text === RESUME) return done;
     return { ...done, messages: [...done.messages, { role: "user", text: RESUME, toolUses: [] }] };
   });
 };
