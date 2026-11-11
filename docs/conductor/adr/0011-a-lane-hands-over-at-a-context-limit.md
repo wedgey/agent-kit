@@ -1,3 +1,7 @@
+---
+status: limit amended to 120k by ADR 0017
+---
+
 # A lane hands over at a context limit
 
 Every turn of an agent re-reads its whole context, so a turn costs more as the context grows. On 2026-10-24 we measured 25 lanes from three epics, which used 2,072M tokens. About 95% of those tokens were cache reads. The second half of each lane's turns used 65% of its tokens, and lanes ended with 300k to 875k tokens of context. None of them compacted. The lanes' own edit loop (an edit, then a read of the same code again) used 56% of the tokens, and a first look at the code used 4%. A replay of the same turns with a 250k limit, a 60k handover and no other change used 46% of the tokens. The replay is optimistic, because a fresh lane reads some code again. A turn above 400k also took a median of 5.8 s, against 4.5 s between 100k and 250k.

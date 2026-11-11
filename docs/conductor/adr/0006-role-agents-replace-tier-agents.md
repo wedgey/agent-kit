@@ -1,3 +1,7 @@
+---
+status: lane agent may spawn delegates, per ADR 0017
+---
+
 # Each delegate role is a defined agent
 
 Where a harness supports agent definition files, its binding ships one agent per delegate role, not one per tier. Each carries its role's default model and effort, the tools that role may not use, its rules and the report shape. The harness's package ships them (ADR 0008) and the doctor probes them. This applies to every such harness, including ones that can also pick a model per spawn.

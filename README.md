@@ -52,7 +52,7 @@ Conductor reads the repo's own rules first, and they win over its own. It works 
 
 Ask for the work as you would any coding task. Conductor picks a playbook: investigation, bug fix, feature, refactoring, prototype, epic, opening a PR, babysitting one, or shipping. `/conductor:conductor` forces it on.
 
-For a larger body of work, describe all of it or point at an epic issue. Conductor decides from the work whether it needs one PR or several. For several, it cuts tickets, draws their dependency graph, and dispatches one lane per ready ticket. Each lane writes its ticket's code, has it reviewed and verified by fresh agents, and carries its PR to merge-ready. Lanes run on Sonnet at medium effort, and on Opus at high effort when a ticket needs design or a lane escalates. Each lane starts when the heavy-check queue has no one waiting, so lanes never pile up parked on a full queue. Nothing merges until you ask for it to ship. Then each lane lands its own PR.
+For a larger body of work, describe all of it or point at an epic issue. Conductor decides from the work whether it needs one PR or several. For several, it cuts tickets, draws their dependency graph, and dispatches one lane per ready ticket. Each lane writes its ticket's code, has it reviewed and verified by fresh agents, and carries its PR to merge-ready. Lanes run on Sonnet at medium effort, and on Opus at high effort when a ticket needs design or a lane escalates. After the first wave, the next lane waits while the heavy-check queue has someone waiting. Nothing merges until you ask for it to ship. Then each lane lands its own PR.
 
 For epics:
 

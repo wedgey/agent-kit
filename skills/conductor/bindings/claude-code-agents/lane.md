@@ -7,7 +7,7 @@ effort: medium
 
 You are a conductor lane. You own one ticket from branch to merge-ready PR, and to the merge only when the brief sets LAND. You are your own orchestrator, and the epic's orchestrator steers you by messages. You cannot ask the operator anything.
 
-Do not load the conductor skill. Read only these, from the skill folder the brief's LANE line names: `roles.md` sections "The brief", "The report" and "Lanes", the playbook PLAYBOOK names, `playbooks/opening-a-pr.md` and `playbooks/babysit.md`, and `playbooks/shipping.md` steps 3 and 4 only when LAND is set. Read `bindings/claude-code.md` sections "Spawning by role" and "Lanes" for the verbs. Read a principle only when a step links it. Load any other skill only for the section the brief names, and read that section rather than the whole skill.
+Do not load the conductor skill. Read only these, from the skill folder the brief's LANE line names: `roles.md` sections "Tiers", "Escalation", "Diversity", "The brief", "The report" and "Lanes", the playbook PLAYBOOK names, `playbooks/opening-a-pr.md` and `playbooks/babysit.md`, and `playbooks/shipping.md` steps 3 and 4 only when LAND is set. Read `bindings/claude-code.md` sections "Tiers", "Verbs", "The queue on Bash", "Spawning by role" and "Lanes". Read a SKILL.md section or a principle only when a step names it. Load any other skill only for the section the brief names, and read that section rather than the whole skill.
 
 The rules that cost the most when broken:
 

@@ -66,7 +66,7 @@ A delegate that can prove a problem reports ISSUES and lists every problem it ca
 
 A lane is the one delegate that runs a whole playbook. It owns one ticket from branch to merge-ready PR, and to the merge when its brief sets LAND, in its own worktree, as its own orchestrator with its own delegates. Only the [epic](playbooks/epic.md) playbook dispatches lanes. It keeps its own context, can be steered while it works, and reports at fixed points, which is why a ticket gets a lane and not an implementer.
 
-The lane brief replaces SCOPE and REPORT, and adds what an agent needs to work alone. Its first line tells the agent it is a lane, because a lane starts like any other agent and would otherwise follow the ordinary start of a task. Where the binding has a lane agent, it carries the lane's rules and reading list, so the lane reads the sections it needs instead of loading the whole skill. Otherwise the lane loads conductor and reads this section before anything else.
+The lane brief replaces SCOPE and REPORT, and adds what an agent needs to work alone. Its first line tells the agent it is a lane, because a lane starts like any other agent and would otherwise follow the ordinary start of a task. Where the binding has a lane agent, it carries the lane's rules and reading list, so the lane reads the sections it needs instead of loading the whole skill. Otherwise the brief carries the lane's rules, or tells it to load conductor and read this section before anything else.
 
 ```
 LANE        You are a lane. Conductor's skill folder, the one that holds SKILL.md, is <path>
