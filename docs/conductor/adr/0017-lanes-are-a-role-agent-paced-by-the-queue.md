@@ -1,3 +1,7 @@
+---
+status: a lane cut off at its context limit compacts in place instead of being replaced, per ADR 0018
+---
+
 # Lanes are a role agent, paced by the queue
 
 On 2026-11-10 one epic used about 75% of two five-hour usage windows in a row, and both windows hit the limit. A lane was a general-purpose agent with its tier passed on each dispatch, and the orchestrator passed the frontier model to 11 of 27 lanes, 9 of them with no effort. Those lanes were 29% of the first window. Lanes loaded the whole conductor skill 43 times and a design skill 32 times, and spawned 96 implementers, though a lane is meant to write its ticket itself. Verifiers ran at frontier, about three per PR, and were the largest cost of the second window at 22%. Up to 11 lanes and 16 role agents ran at once against an e2e queue with one slot, so lanes sat parked for up to 12 minutes and each idle agent paid to write its whole cached context again on its next turn: 68 such writes cost about 20% of a window. When the usage limit cut 24 agents off mid-turn, the orchestrator dispatched fresh lanes for them after the reset, which redid their work instead of continuing it. Delegates ran to 230k to 323k tokens of context under the 250k limit of ADR 0011.
