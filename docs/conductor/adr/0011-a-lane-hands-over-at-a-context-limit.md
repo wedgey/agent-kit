@@ -1,5 +1,5 @@
 ---
-status: limit amended to 120k by ADR 0017
+status: limit amended to 120k by ADR 0017; a lane agent compacts in place instead, per ADR 0018
 ---
 
 # A lane hands over at a context limit
