@@ -9,8 +9,8 @@ Playbooks name roles. This table gives each role its tier. Your binding gives ea
 | implementer | strong-code | Writes code from a brief that leaves design choices open. Failing test first where the repo has a test harness | Tests and typecheck, then a reviewer |
 | editor | mechanical | Applies a brief with nothing left to decide, or runs a command and reports the result | Lint, typecheck, tests, or a diff limited to the named files |
 | reviewer | frontier | Reads a diff against the intent and the repo's standards, without running it | None. Judgment |
-| verifier | frontier | Runs the change on the real artifact and reports pass or fail with evidence | None. Judgment |
-| lane | strong-code, or frontier for a ticket that needs design | Runs one ticket's whole playbook, writing its code itself, to a merge-ready PR | Its own checks, then its reviewer and verifier, which run at their own tier |
+| verifier | strong-code when its check is mechanical, frontier when it judges | Runs the change on the real artifact and reports pass or fail with evidence | None. Judgment |
+| lane | strong-code, or frontier for a ticket that needs design | Runs one ticket's whole playbook, writing its main chain itself, to a merge-ready PR | Its own checks, then its reviewer and verifier, which run at their own tier |
 
 ## Tiers
 
@@ -18,6 +18,8 @@ Playbooks name roles. This table gives each role its tier. Your binding gives ea
 - **strong-code**: code across function boundaries from a loose brief.
 - **mechanical**: work the brief fully specifies.
 - **bulk-read**: reading and condensing.
+
+A verifier's check is mechanical when the ticket names it: a named end-to-end spec passes on the real artifact and its screenshots show what the acceptance lists. That verifier runs at strong-code. A verifier that judges, such as the epic's own verifier, one on a ticket that needs design, or one with no named check, runs at frontier. One verifier runs per PR, at merge-ready, not one per iteration.
 
 A role may run on mechanical or bulk-read only behind its gate, and the orchestrator reruns that gate before accepting the result. If a task has no gate, give it to a role on strong-code or above.
 
@@ -64,10 +66,10 @@ A delegate that can prove a problem reports ISSUES and lists every problem it ca
 
 A lane is the one delegate that runs a whole playbook. It owns one ticket from branch to merge-ready PR, and to the merge when its brief sets LAND, in its own worktree, as its own orchestrator with its own delegates. Only the [epic](playbooks/epic.md) playbook dispatches lanes. It keeps its own context, can be steered while it works, and reports at fixed points, which is why a ticket gets a lane and not an implementer.
 
-The lane brief replaces SCOPE and REPORT, and adds what an agent needs to work alone. Its first line tells the agent it is a lane, because a lane starts like any other agent and would otherwise follow the ordinary start of a task.
+The lane brief replaces SCOPE and REPORT, and adds what an agent needs to work alone. Its first line tells the agent it is a lane, because a lane starts like any other agent and would otherwise follow the ordinary start of a task. Where the binding has a lane agent, it carries the lane's rules and reading list, so the lane reads the sections it needs instead of loading the whole skill. Otherwise the brief carries the lane's rules, or tells it to load conductor and read this section before anything else.
 
 ```
-LANE        You are a lane. Load conductor, then read roles.md "Lanes" before anything else
+LANE        You are a lane. Conductor's skill folder, the one that holds SKILL.md, is <path>
 TICKET      the ticket's URL, or the whole ticket when there is no tracker
 PLAYBOOK    the playbook it runs: feature, bug-fix or refactoring
 BASE        current origin/<trunk>, or the branch of the one merge-ready PR it stacks on
@@ -77,14 +79,16 @@ DESIGN      "needs design" when the epic flagged it, with what is still open. Ot
 LAND        the operator's request to land that covers this ticket, quoted. Otherwise "no"
 REPORT TO   only for a lane run as a separate session: the orchestrator's session name, to message
 OWNS        paths it may write. Paths other lanes own, which it must not touch
-CONTEXT     the graph's neighbours: what it needs and who needs it. Decisions already made
+CONTEXT     the graph's neighbours: what it needs and who needs it. Decisions already made. The sections of other skills the ticket needs, named or pasted, never a whole skill
 ACCEPTANCE  the ticket's acceptance, ending in its end-to-end check
 ```
 
 A lane follows its playbook with these changes:
 
 - **BASE wins.** It creates BRANCH from BASE, not from trunk, whatever the start of a task and opening-a-pr say. It fetches BASE from `origin` rather than checking out a branch another worktree holds. An escalated lane whose BRANCH already exists fetches it and continues from `origin/<BRANCH>`. It runs SETUP before its first check.
-- **It writes the code.** A ticket is one dependent chain, so the lane implements it itself, per Delegation in SKILL.md. It spawns explorers for large reads, implementers only for parallel workstreams inside the ticket, and always a fresh reviewer and verifier.
+- **It writes the main chain.** A ticket is one dependent chain, so the lane implements it itself, per Delegation in SKILL.md, and never hands the next piece of that chain to an implementer. It spawns explorers for large reads, implementers only for side workstreams that run in parallel with its own work on files it is not touching, and always a fresh reviewer and verifier.
+- **One verdict per PR.** It spawns its verifier once the reviewer's findings are fixed, so the verdict covers the head that goes up, at the tier from [Tiers](#tiers). A later push needs a new verdict only when it changes the behaviour the last one covered.
+- **It pushes at every stage's end.** After the first passing check, after the PR opens and after each round of fixes. A usage limit or a stall can end its turn at any point, and only a pushed branch survives that.
 - **Needs design means settle it.** With DESIGN set to needs design, it settles the open points itself and records them under the PR's Tradeoffs. It reports Blocked only for a product or preference call.
 - **One ticket, one PR.** It never dispatches lanes. Work that would need a second PR is a Blocked report, not an epic.
 - **Questions go up.** Every ask goes to the orchestrator as a Blocked report, after the lane has finished whatever the question does not touch. It never asks the operator directly.
@@ -96,7 +100,7 @@ A lane follows its playbook with these changes:
   - **check-failed**, **conflict** or **new-review**: it runs babysit in `drive` mode again, then reports Merge-ready and watches again.
   - **head-moved**: someone else pushed to its branch. It reports Blocked.
   - **timeout** or **watch-error**: it starts the watcher again. A second watch-error in a row is a Blocked report.
-- **It hands over when its context is full.** When the binding tells it that its context passed the limit, it finishes the edit in hand and that edit's check, pushes its branch and reports Context full. It starts no new stage first. A fresh lane continues from the report, so the next turns re-read a small context instead of a large one.
+- **It hands over when its context is full.** When the binding tells it that its context passed the limit, it finishes the edit in hand and that edit's check, pushes its branch and reports Context full. It starts no new stage first. A fresh lane continues from the report, so the next turns re-read a small context instead of a large one. The same limit holds for every delegate it spawns, which ends its turn with its report and puts what remains under OPEN.
 - **It keeps its turns cheap.** It follows [guard-the-context-window](principles/guard-the-context-window.md): one edit per file per change, the diff instead of the file after an edit, and no turn that only narrates.
 - **It fails out loud.** A second FAIL from its verifier, or a second ISSUES from its reviewer on the same premise, is a Failed report.
 

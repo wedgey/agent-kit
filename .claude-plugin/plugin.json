@@ -9,6 +9,7 @@
     "./skills/conductor/bindings/claude-code-agents/editor.md",
     "./skills/conductor/bindings/claude-code-agents/explorer.md",
     "./skills/conductor/bindings/claude-code-agents/implementer.md",
+    "./skills/conductor/bindings/claude-code-agents/lane.md",
     "./skills/conductor/bindings/claude-code-agents/reviewer.md",
     "./skills/conductor/bindings/claude-code-agents/verifier.md"
   ]

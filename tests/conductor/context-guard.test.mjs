@@ -57,23 +57,23 @@ describe("the context guard, a PostToolUse and UserPromptSubmit hook for delegat
   });
 
   it("says nothing below the limit", () => {
-    expect(guard(session([turn("m1", 100_000), result(), turn("m2", 200_000)]), {})).toBeNull();
+    expect(guard(session([turn("m1", 50_000), result(), turn("m2", 110_000)]), {})).toBeNull();
   });
 
   it("speaks once, on the turn that crosses the limit, and names the size and the limit", () => {
     const mem = memory();
-    const out = guard(session([turn("m1", 240_000), result(), turn("m2", 251_000)]), {}, mem);
+    const out = guard(session([turn("m1", 110_000), result(), turn("m2", 121_000)]), {}, mem);
     expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
-    expect(note(out)).toMatch(/251k tokens.*250k/);
+    expect(note(out)).toMatch(/121k tokens.*120k/);
     expect(note(out)).toMatch(/Context full/);
-    expect(guard(session([turn("m1", 251_000), result(), turn("m2", 260_000)]), {}, mem)).toBeNull();
+    expect(guard(session([turn("m1", 121_000), result(), turn("m2", 130_000)]), {}, mem)).toBeNull();
   });
 
   it("speaks again at each further step past the limit", () => {
     const mem = memory();
-    expect(note(guard(session([turn("m1", 240_000), result(), turn("m2", 251_000)]), {}, mem))).toMatch(/251k/);
-    expect(note(guard(session([turn("m1", 299_000), result(), turn("m2", 301_000)]), {}, mem))).toMatch(/301k/);
-    expect(guard(session([turn("m1", 301_000), result(), turn("m2", 340_000)]), {}, mem)).toBeNull();
+    expect(note(guard(session([turn("m1", 110_000), result(), turn("m2", 121_000)]), {}, mem))).toMatch(/121k/);
+    expect(note(guard(session([turn("m1", 169_000), result(), turn("m2", 171_000)]), {}, mem))).toMatch(/171k/);
+    expect(guard(session([turn("m1", 171_000), result(), turn("m2", 210_000)]), {}, mem)).toBeNull();
   });
 
   it("speaks on a later call when the call that crossed the limit got no hook, such as a failed one", () => {
@@ -112,8 +112,8 @@ describe("the context guard, a PostToolUse and UserPromptSubmit hook for delegat
   });
 
   it("takes the limit from CONDUCTOR_CONTEXT_LIMIT, and ignores a blank or bad value", () => {
-    const s = session([turn("m1", 140_000), result(), turn("m2", 160_000)]);
-    expect(note(guard(s, { CONDUCTOR_CONTEXT_LIMIT: "150000" }))).toMatch(/150k/);
+    const s = session([turn("m1", 90_000), result(), turn("m2", 110_000)]);
+    expect(note(guard(s, { CONDUCTOR_CONTEXT_LIMIT: "100000" }))).toMatch(/100k/);
     expect(guard(s, { CONDUCTOR_CONTEXT_LIMIT: "" })).toBeNull();
     expect(guard(s, { CONDUCTOR_CONTEXT_LIMIT: "lots" })).toBeNull();
   });
