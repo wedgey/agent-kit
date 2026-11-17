@@ -12,6 +12,10 @@
     {
       "name": "session-activity",
       "source": "./plugins/session-activity"
+    },
+    {
+      "name": "design-process",
+      "source": "./plugins/design-process"
     }
   ]
 }

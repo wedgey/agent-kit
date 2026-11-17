@@ -1,0 +1,18 @@
+{
+  "name": "design-process",
+  "description": "Runs design work from a question to build-ready GitHub issues: rounds of three directions on a Design canvas, two senior reviewers scoring every board, then one detailed issue per screen. Ships its role agents, each on its own model and effort",
+  "author": {
+    "name": "Desmond Poon"
+  },
+  "repository": "https://github.com/wedgey/agent-kit",
+  "agents": [
+    "./skills/design-process/bindings/claude-code-agents/explorer.md",
+    "./skills/design-process/bindings/claude-code-agents/researcher.md",
+    "./skills/design-process/bindings/claude-code-agents/drafter.md",
+    "./skills/design-process/bindings/claude-code-agents/fixer.md",
+    "./skills/design-process/bindings/claude-code-agents/screenshot-capturer.md",
+    "./skills/design-process/bindings/claude-code-agents/reviewer.md",
+    "./skills/design-process/bindings/claude-code-agents/second-reviewer.md",
+    "./skills/design-process/bindings/claude-code-agents/ticket-drafter.md"
+  ]
+}
