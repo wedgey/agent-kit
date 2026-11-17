@@ -10,6 +10,7 @@
     "./skills/design-process/bindings/claude-code-agents/researcher.md",
     "./skills/design-process/bindings/claude-code-agents/drafter.md",
     "./skills/design-process/bindings/claude-code-agents/fixer.md",
+    "./skills/design-process/bindings/claude-code-agents/screenshot-capturer.md",
     "./skills/design-process/bindings/claude-code-agents/reviewer.md",
     "./skills/design-process/bindings/claude-code-agents/second-reviewer.md",
     "./skills/design-process/bindings/claude-code-agents/ticket-drafter.md"

@@ -7,7 +7,7 @@ Design docs per entry: see [CONTEXT-MAP.md](./CONTEXT-MAP.md).
 ## Entries
 
 - [`skills/conductor`](./skills/conductor/SKILL.md): the agent mode that sets how a coding agent plans, delegates and verifies, packaged as the `conductor` plugin. Work that needs one PR runs as a feature. Work that needs several PRs runs as an epic, with one lane per ticket. It also ships a box-wide queue for heavy checks, and Bash hooks that queue heavy commands and keep agents from waiting in loops.
-- [`plugins/design-process`](./plugins/design-process/skills/design-process/SKILL.md): design work from a question to build-ready GitHub issues. Rounds of three directions on a claude.ai Design canvas, two senior reviewers scoring every board out of 7, then one detailed issue per screen. Packaged as the `design-process` plugin with seven role agents, each on its own model and effort.
+- [`plugins/design-process`](./plugins/design-process/skills/design-process/SKILL.md): design work from a question to build-ready GitHub issues. Rounds of three directions on a claude.ai Design canvas, two senior reviewers scoring every board out of 7, then one detailed issue per screen. Packaged as the `design-process` plugin with eight role agents, each on its own model and effort.
 - [`plugins/session-activity`](./plugins/session-activity/README.md): a Claude Code pane of the session's todo list, its subagents and lanes, background servers and the heavy-check queue.
 
 ## Add conductor to your codebase
@@ -24,7 +24,7 @@ In Claude Code:
 /reload-plugins
 ```
 
-Installing `conductor` gives the machine its skill, its six role agents (explorer, editor, implementer, reviewer, verifier, lane), the queue and its hooks, and a start-of-task pointer that every session loads. `session-activity` adds the pane. Open it with `/activity`. `design-process` adds its skill and its seven role agents (explorer, researcher, drafter, fixer, reviewer, second reviewer, ticket drafter). Its binding, `plugins/design-process/skills/design-process/bindings/claude-code.md`, says how to check that each one runs on its own model and effort.
+Installing `conductor` gives the machine its skill, its six role agents (explorer, editor, implementer, reviewer, verifier, lane), the queue and its hooks, and a start-of-task pointer that every session loads. `session-activity` adds the pane. Open it with `/activity`. `design-process` adds its skill and its eight role agents (explorer, researcher, drafter, fixer, screenshot capturer, reviewer, second reviewer, ticket drafter). Its binding, `plugins/design-process/skills/design-process/bindings/claude-code.md`, says how to check that each one runs on its own model and effort.
 
 ### 2. Check the install
 

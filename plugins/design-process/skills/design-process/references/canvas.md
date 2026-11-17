@@ -63,6 +63,7 @@ scaled live copy of another board, for decision-board column heads), and `board(
 
 ```bash
 # from the repo root (Playwright resolves from there or apps/*), or set PLAYWRIGHT_PATH
+# the screenshot capturer agent runs this for you; a drafter runs it on its own boards
 node <skill dir>/scripts/render.cjs <work>/canvas/project <work>/shots \
   R3-Choose.dc.html P1-Concept.dc.html … --blobs <work>/blobs.json --shots <work>/refshots
 ```

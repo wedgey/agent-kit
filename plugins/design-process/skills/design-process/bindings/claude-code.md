@@ -12,7 +12,8 @@ The plugin ships one agent per role from `claude-code-agents/`. Claude Code scop
 | Researcher | `design-process:researcher` | `sonnet` | `medium` | screenshots and its own picks file | `opus`, `medium` |
 | Board drafter | `design-process:drafter` | `opus` | `medium` | its own `gen/<Prefix>.cjs` and boards | `opus`, `high` |
 | Fixer | `design-process:fixer` | `sonnet` | `low` | the named boards | a fresh `design-process:drafter` with the canon |
-| Senior reviewer | `design-process:reviewer` | `opus` | `high` | no | `fable`, `low`, only when the owner asks |
+| Screenshot capturer | `design-process:screenshot-capturer` | `haiku` | `low` | shots, tiles, sheets and crops | `sonnet`, `low` |
+| Senior reviewer | `design-process:reviewer` | `fable` | `low` | no | `fable`, `medium` |
 | Second reviewer | `design-process:second-reviewer` | `sonnet` | `medium` | no | `sonnet`, `high` |
 | Ticket drafter | `design-process:ticket-drafter` | `sonnet` | `medium` | its issue files and crops | `opus`, `medium` |
 
@@ -41,7 +42,11 @@ The explorer and both reviewers cannot edit or write files, but they still have 
 
 Pass both `model` and `effort` from the table and keep the spawn's `description`, so the retry reads as the same piece of work. A per-spawn `model` replaces the agent's model, but the agent's `effort` stays unless you pass one.
 
-The senior reviewer moves to `fable` only when the owner asks for it. Per Anthropic's plan pages and Artificial Analysis's index, read 2026-11-17: on a Max plan `fable` draws on the weekly limit faster than `opus` and is capped at half of it, a Pro plan needs paid credits for it, and at `low` effort it scores about the same as `opus` at `high`, at a similar output cost.
+## Why the senior reviewer runs on `fable`
+
+Per Artificial Analysis's index and Anthropic's pricing, read 2026-11-17: `fable` at `low` scores 54, above `opus` at `high` (52), for about the same output cost. A review reads a few dozen tiles and writes a short report, so its higher input price matters little there. `fable` is kept off every role that writes boards or tickets. Those roles write about 100k tokens each and build large caches, which would cost about twice as much on `fable`.
+
+On a Max plan, `fable` draws on the weekly limit faster than `opus` and is capped at half of it. A Pro plan needs paid credits for it. When `fable` is unavailable or its cap is reached, spawn the senior reviewer with `model: opus` and `effort: high`, and tell the owner in one line. The second reviewer stays on `sonnet`, so the two still differ.
 
 ## Without the plugin
 

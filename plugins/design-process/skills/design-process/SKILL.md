@@ -90,6 +90,7 @@ inherits your model.
 | Explorer | Ground | Read the repo or brief. Return the screen list with purpose, objects and current files |
 | Researcher (2–4) | Before a look, pattern or colour round | One slice of sources each. Return 10+ picks with URL, screenshot and one line. Brief in `references/rounds.md` |
 | Board drafter (one per direction or family) | Every round | The canon, the generator helpers and its screens. Return boards that pass the colour asserts. It stays alive and applies its own fix passes |
+| Screenshot capturer | Every render, reference capture and callout crop | Board files, URLs or crop coordinates. Return the files, overflow lines and broken renders. Judges nothing about the design |
 | Fixer | A fix pass when the board's drafter is gone | A numbered fix list and the boards it names. Decides nothing else |
 | Senior reviewer and second reviewer (different models) | Every round, until every board is 6/7+ | The reviewer brief in `references/rounds.md`. Read-only. Return scores and exact fixes |
 | Ticket drafter (one per 2–5 tickets) | Handoff | The precedence brief and its tickets. Return issue files, callout crops and open questions |
@@ -146,7 +147,7 @@ they like parts of several, the next round blends those parts and adds new ones.
    captures live-site screenshots with Playwright. Some sites block screenshot bots, so note them and move on.
 3. **Build the boards with the generator.** Write the shared skeleton once, then one generator file
    and theme object per direction, so every direction redraws the same screens. Run the colour asserts. See `references/canvas.md`.
-4. **Render and look.** Render the changed boards, then read the contact sheets and each changed
+4. **Render and look.** Have the screenshot capturer render the changed boards, then read the contact sheets and each changed
    board's review tiles yourself. Check for overflow, clipped text, wrong data and stray process words.
 5. **Review loop.** Give the review tiles and sheets to the two reviewer agents with the brief in
    `references/rounds.md`. Fix what they find and rescore until both score every board 6/7 or more.

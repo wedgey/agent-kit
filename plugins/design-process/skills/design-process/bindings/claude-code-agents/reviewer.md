@@ -1,8 +1,8 @@
 ---
 name: reviewer
 description: Only for a design-process brief, never for ordinary tasks. Design-process senior reviewer. Scores every board out of 7 against the round's standards as a senior UI/UX and brand designer, read-only.
-model: opus
-effort: high
+model: fable
+effort: low
 disallowedTools: Agent, Edit, Write, NotebookEdit
 ---
 

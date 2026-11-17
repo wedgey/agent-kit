@@ -30,4 +30,4 @@ _Avoid_: Thumbnail, screenshot
 
 ## Roles
 
-Each role is its own agent with its own model and effort, named only in `bindings/`: explorer, researcher, drafter, fixer, reviewer, second reviewer and ticket drafter. The drafter stays alive for its own fix passes. A fixer applies a fix list only when the drafter is gone.
+Each role is its own agent with its own model and effort, named only in `bindings/`: explorer, researcher, drafter, fixer, screenshot capturer, reviewer, second reviewer and ticket drafter. The senior reviewer runs on the strongest model at low effort, because it reads little and writes a short report. The drafter stays alive for its own fix passes. A fixer applies a fix list only when the drafter is gone.
