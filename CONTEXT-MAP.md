@@ -8,4 +8,4 @@
 ## Relationships
 
 - **Conductor → other catalog entries**: none. Conductor never references another entry (ADR conductor/0001).
-- **Design process → other catalog entries**: none. It ships its own role agents and never needs conductor installed.
+- **Design process → other catalog entries**: none. It ships its own role agents and never needs conductor installed (ADR design-process/0001).

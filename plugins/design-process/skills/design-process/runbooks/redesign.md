@@ -24,7 +24,7 @@ navigation. Every phase runs. The handoff is large: an epic, milestones and a pr
 | 4 | Details, one visual question at a time | the same 3 |
 | 4b | Workspace layer: navigation, home and record lists | home and the main lists |
 | 5 | Every screen: each remaining route once, in the winner. 3 options only where a real choice is open | one board per screen |
-| 6 | Walk and edits, with tablet and phone for rules, home, a list, a detail, the editor, sign-in and a dialog | the edited screens |
+| 6 | Walk and edits, with tablet and phone for home, the main object's list, a detail, the editor, sign-in and a dialog | the edited screens |
 | 7 | Handoff | none |
 
 ## Handoff

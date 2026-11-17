@@ -144,8 +144,8 @@ they like parts of several, the next round blends those parts and adds new ones.
 2. **Research when the round is about look, colour or pattern.** Spawn researchers in parallel. Each
    one covers a slice of sources (Awwwards, Dribbble, Mobbin, product sites, design-system docs) and
    captures live-site screenshots with Playwright. Some sites block screenshot bots, so note them and move on.
-3. **Build the boards with the generator.** Use one node script and a theme object per direction, so
-   every direction redraws the same screens. Run the colour asserts. See `references/canvas.md`.
+3. **Build the boards with the generator.** Write the shared skeleton once, then one generator file
+   and theme object per direction, so every direction redraws the same screens. Run the colour asserts. See `references/canvas.md`.
 4. **Render and look.** Render the changed boards, then read the contact sheets and each changed
    board's review tiles yourself. Check for overflow, clipped text, wrong data and stray process words.
 5. **Review loop.** Give the review tiles and sheets to the two reviewer agents with the brief in

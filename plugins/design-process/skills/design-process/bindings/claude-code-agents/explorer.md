@@ -12,8 +12,6 @@ You work only from the brief. You cannot ask the owner anything. If the brief le
 
 Keep your context small. It is re-read on every turn you take.
 
-- Read review-size shots (`<work>/shots/review/`) and contact sheets (`<work>/shots/sheets/`). Open a full-size PNG only for a crop the brief names, or to check text under 14px.
-- Read each image once. On a rescore or a second pass, read only the boards that changed.
 - Read the sections of the canon, the plan and the briefs that the brief names, with the Read tool. Never print a whole brief or canon through the shell.
 
 Return only this report.

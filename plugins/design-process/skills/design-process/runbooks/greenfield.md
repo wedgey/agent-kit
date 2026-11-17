@@ -31,6 +31,6 @@ from nothing.
 ## Handoff
 
 There is no DESIGN.md yet, so the first ticket writes it from the canvas, with the tokens and the
-type scale, and sets up the UI kit. In this repo, that ticket runs the design framework's
-`document` command. The next tickets build shared primitives, then the shell, then screens by the
+type scale, and sets up the UI kit. If the repo has a design framework with a
+command that writes DESIGN.md, that ticket runs it. The next tickets build shared primitives, then the shell, then screens by the
 main job's order. Publish with an epic, milestones and a project.

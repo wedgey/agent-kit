@@ -29,7 +29,7 @@ AI and category colours, each with its contrast ratio.
 
 The goal and the owner's words. What the round decides. The sources to cover, split between the
 researchers. For each pick, the URL, a screenshot of the live page saved as `<name>.jpg` in the
-round's shots folder, and one line on what it would give us. At least 10 picks per researcher.
+round's shots folder, and one line on what it would give us, written to that researcher's own picks file. At least 10 picks per researcher.
 Report the sites that block bots. Ask for no opinions on the owner's choice.
 
 Merge the researchers' picks into the round's reference log, `<work>/refs/<round>.md`, one row per

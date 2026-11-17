@@ -2,7 +2,7 @@
 
 ## Create the canvas once
 
-1. Call `mcp__claude-artifacts__guide` with the `pages` topic, then with `design`.
+1. Call the artifact server's `guide` tool with the `pages` topic, then with `design`.
 2. Call `list_types` and pick the **Design** type ("Design canvas for websites … screens, UI mockups …: live
    artboards laid out on a canvas"). Its slug differs per org, so never hardcode it. Run
    `describe_type` once to see the file layout it expects.
@@ -24,7 +24,7 @@
   ```
   Put each new page first in `pages` and point `launch` at it. Lay out one row per direction or
   family: boards 1440 wide at `x = j * 1520`, rows `max(h) + 480` apart, and a `title1` note 240
-  above each row. When you rebuild a page, delete its old boards and notes first so renamed
+  above each row. When you rebuild a page, delete its old boards, their shots and their notes first so renamed
   boards don't linger.
 - `project/<Prefix><n>-<Name>.dc.html` is one board. Start from the starter's skeleton:
   `<script src="./support.js">`, `<x-dc>`, then a `<helmet>` with fonts and a reset, then one root
@@ -37,15 +37,18 @@
 
 ## The generator
 
-Write one node script per round, kept in the working folder. A small helper set does most of the work:
+Write the generator as files in the working folder, one set per round. You write `gen/skel.cjs`
+(the helpers and the skeleton) and the round's own boards (`R<n>-Choose`, `canvas.json`). Each
+drafter owns `gen/<Prefix>.cjs` (its theme and its boards) and runs only that file, so parallel
+drafters never write the same file. A small helper set does most of the work:
 `t(text, size, colour, css)`, `P()`, `h2()`, `pill()`, `icon(name)` (Lucide paths), `tbl()`, `mini(html, {scale})` (a
 scaled live copy of another board, for decision-board column heads), and `board(file, title, body, height, railColour)`.
 `board()` writes the file, records its height and pushes it onto the round's list.
 
 - **Directions are theme objects.** Write a shared skeleton (`skel`) that draws each chosen screen
   from a theme `{ k, name, colours, type, rail, …slots }`. Each direction is then a theme object, so
-  "redraw the same screens in a new look" costs one object. Later rounds copy the previous script
-  and replace only the round's part. Keep old scripts so earlier pages can be rebuilt.
+  "redraw the same screens in a new look" costs one object. Later rounds copy the previous files
+  and replace only the round's part. Keep old files so earlier pages can be rebuilt.
 - **Colour comes through `colour.cjs`.** Define colours with `OKC(L, C, h)`, which throws when a
   colour is outside sRGB, or `fit()`, which clamps chroma into it. Call `need(fg, bg, 4.5, what)` for
   every text pair you draw and `need(…, 3, …)` for marks. Assert the round's banned colours too,
@@ -64,12 +67,12 @@ node <skill dir>/scripts/render.cjs <work>/canvas/project <work>/shots \
   R3-Choose.dc.html P1-Concept.dc.html … --blobs <work>/blobs.json --shots <work>/refshots
 ```
 
-- If a PNG is taller than the height passed to `board()`, the content overflows the board. Fail
-  the build on that.
+- A board taller than its height in `canvas.json` overflows. `render.cjs` prints
+  `overflow <Board> <rendered> > <height>` for each one and exits 1. Fix every one before review.
 - It writes three things. `<shots>/<Board>.png` is the full board, for overflow checks, callout
   crops and publishing. `<shots>/review/<Board>-<n>.png` are 864x720 tiles of the board at 0.6
-  scale, readable and about 830 image tokens each. `<shots>/sheets/<Prefix>.png` is one contact
-  sheet per board prefix, with every board of that prefix on disk.
+  scale, readable and about 830 image tokens each. `<shots>/sheets/<Prefix>-<k>.png` are contact
+  sheets of up to 8 boards of a prefix, each cropped to its top 2400px.
 - Read the sheets to scan a direction, and the tiles of each changed board before review. Never
   read a full-size board whole: anything over about 1568px on its long edge is shrunk on read, so a
   tall board's text becomes unreadable. Crop a full-size PNG only for a region you need at 1:1.

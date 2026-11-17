@@ -91,8 +91,7 @@ The canvas is private; ask the repo owner for access.
 - [ ] Tablet and phone match their boards
 - [ ] Meets the standards: WCAG 2.2 AA (contrast, focus, targets, labels), every state drawn or named
 - [ ] Only foundation tokens and primitives; no one-off colour, radius or type size
-- [ ] Copy in the i18n catalogue
-- [ ] e2e spec covers the flow; the PR embeds its video and screenshots
+- [ ] …the repo's own done rules from the brief's Repo rules list (for example i18n, e2e, PR media)…
 
 Blocked by: {{T:01}}, {{T:03}}
 ```
@@ -120,9 +119,8 @@ If the repo has a past epic, read it and follow its format.
 2. Write `<work>/tickets/config.json`:
    `{ "repo", "owner", "project", "milestones": {"M1": ["Title", ["01","02"]]}, "upload" }`.
    `upload` is a command that hosts one image and prints its URL as the last line. The script
-   fills in `{path}` and `{repo}`, e.g. `"upload": "node tools/gh/attach-media.mjs {path} {repo}"`
-   (the repo's attach-media tool, also behind the `attach-pr-media` skill). For a private repo, use GitHub
-   user-attachments, which stay private.
+   fills in `{path}` and `{repo}`. Use the repo's own upload command if it has one. For a private
+   repo, use one that posts to GitHub user-attachments, which stay private.
 3. From the repo root, run `node <skill dir>/scripts/publish-issues.mjs <work>/tickets check` until it
    reports 0 problems. Creating the project needs the `project` token scope, so run
    `gh auth refresh -s project` first. Then run the same command with `run`. Progress is kept in
