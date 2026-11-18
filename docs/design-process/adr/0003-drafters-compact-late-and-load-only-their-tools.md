@@ -1,0 +1,9 @@
+# Drafters compact late, and every role loads only its tools
+
+The drafter and the fixer set `autoCompactWindow: 200000`, and every role agent names its tools with a `tools:` allowlist instead of a `disallowedTools` list. Drafters read their generator once in full, then by `grep -n` and line ranges, and check fix passes on crops.
+
+A window of 120k came from the conductor lane, whose context is mostly text it keeps. A drafter starts at about 42k (instructions, memory, tool schemas, the skill list) and compacts at about 88k, so it has about 46k to work in. A generator is 13k to 18k tokens and a fix pass reads several images, so in November 2026 drafters compacted 20 to 55 times each, about 55 seconds per compaction. After each one they re-read their generator and the same boards. Full generator reads and `sed`/`grep` over them made up 70% to 85% of a drafter's text tool output, and cache rewrites after compactions about 28% of the costliest drafter's spend.
+
+With an allowlist, the claude.ai canvas tools, Skill, ToolSearch and the deferred-tool list no longer load. A probe agent started at 19.7k tokens with an allowlist and 34.8k with a denylist, in the same session. No role had called any of the dropped tools. `SubagentHandback` is listed so a drafter can still report and stay alive. If a harness drops it, fix passes still reach the drafter through `SendMessage`.
+
+The cost is that each call carries more context before the drafter compacts. Cache reads are a tenth of the input price, so this costs less than rewriting the cache and re-reading files after each compaction. Compare the next round's drafter cost with these numbers before changing either value again.

@@ -3,7 +3,7 @@ name: ticket-drafter
 description: Only for a design-process brief, never for ordinary tasks. Design-process ticket drafter. Turns 2 to 5 final boards into build-ready issue files with numbered callout crops, following the precedence brief.
 model: sonnet
 effort: medium
-disallowedTools: Agent
+tools: Bash, Read, Edit, Write, Glob, Grep, Monitor, SubagentHandback
 autoCompactWindow: 120000
 ---
 

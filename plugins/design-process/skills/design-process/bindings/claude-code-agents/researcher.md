@@ -3,7 +3,7 @@ name: researcher
 description: Only for a design-process brief, never for ordinary tasks. Design-process researcher. Covers one slice of sources and returns 10 or more real product references with URL, screenshot and what each one gives.
 model: sonnet
 effort: medium
-disallowedTools: Agent, Edit, NotebookEdit
+tools: Bash, Read, Write, Glob, Grep, WebSearch, WebFetch, SubagentHandback
 autoCompactWindow: 120000
 ---
 

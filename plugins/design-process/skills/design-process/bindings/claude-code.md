@@ -4,7 +4,7 @@ The only file in this skill that names models and tools. Read it once per sessio
 
 ## Roles
 
-The plugin ships one agent per role from `claude-code-agents/`. Claude Code scopes each name to the plugin. Each agent carries its model, effort, the tools it may not use, its context rules and its report shape, so a brief needs only the goal, the paths to read, what to return and the gate.
+The plugin ships one agent per role from `claude-code-agents/`. Claude Code scopes each name to the plugin. Each agent carries its model, effort, the only tools it may use, its context rules and its report shape, so a brief needs only the goal, the paths to read, what to return and the gate.
 
 | Role in SKILL.md | `subagent_type` | Model | Effort | Writes | Escalates to |
 |---|---|---|---|---|---|
@@ -34,7 +34,7 @@ The orchestrator stays on the session's model. Run the session on `opus`, not `o
 | canvas | The claude.ai artifact server's tools: `mcp__claude-artifacts__guide`, `list_types`, `describe_type`, `create_from_type`, `list_files`, `read_file`, `upload_asset`, `get_artifact`, `edit_version`, and `publish_files` with `mode: "patch"` to publish. See `references/canvas.md` |
 | ask | `AskUserQuestion` with options. In `-p` mode, ask in plain text, list the options, and stop |
 
-A drafter's id stays valid for the session. It compacts itself near 120k tokens and then re-reads its brief and canon. When the drafter is gone (a new session, or its fix passes show it lost the canon), spawn `design-process:fixer` with the fix list and the boards it names.
+A drafter's id stays valid for the session. It compacts itself near 165k tokens (a 200k window) and then re-reads its brief and canon, and greps its generator rather than reading it whole. When the drafter is gone (a new session, or its fix passes show it lost the canon), spawn `design-process:fixer` with the fix list and the boards it names.
 
 The explorer and both reviewers cannot edit or write files, but they still have a shell. After one returns, run `git status` in any repo it could reach, and check the working folder for new files, and treat a change as a failed gate.
 
