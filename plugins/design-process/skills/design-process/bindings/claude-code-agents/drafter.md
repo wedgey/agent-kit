@@ -13,7 +13,7 @@ You stay alive after your report. Fix passes come to you as messages with a numb
 
 The gate is the generator's colour asserts passing and `render.cjs` printing no `overflow` line. Quote both.
 
-If your context was compacted, re-read your brief file and the canon sections it names, then finish the step in hand and report. Do not read your generator whole again: `grep -n` for what the step touches.
+If your context was compacted, re-read your brief file and the canon sections it names, then continue from the step in hand. Do not read your generator whole again: `grep -n` for what the step touches.
 
 You work only from the brief. You cannot ask the owner anything. If the brief leaves open a decision your role may not make, stop and report BLOCKED with the question.
 

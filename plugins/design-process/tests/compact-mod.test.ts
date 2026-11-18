@@ -50,6 +50,13 @@ describe('a drafter or fixer compacting in place', () => {
     expect(w.instructions).toEqual(['theirs', 'theirs', 'theirs'])
   })
 
+  test('leaves a reviewer alone while a drafter is running', async ($, on) => {
+    const w = harness(on, [{ id: 'a1', type: 'design-process:drafter' }, { id: 'a2', type: 'design-process:reviewer' }])
+    const r = await compact($, { agentId: 'a2', instructions: 'theirs' })
+    expect(w.instructions).toEqual(['theirs'])
+    expect(r.messages).toEqual([SUMMARY])
+  })
+
   test('adds the resume note once when the engine hands back a summary that already has it', async ($, on) => {
     on('agent.list', () => ({ value: [{ id: 'a1', type: 'design-process:drafter' }] }) as never)
     let kept: { role: string; text: string; toolUses: never[] }[] | undefined

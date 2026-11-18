@@ -7,13 +7,13 @@ export const KEEP =
   "This is a design-process board drafter or fixer compacting in place. It goes on working after the summary, so keep what it needs to continue, word for word where it names paths, prefixes, board names, line numbers or commands: " +
   "its brief file's path and every instruction from the brief or the orchestrator still in force; its prefix, its generator file's path, and the line ranges of each board or helper it has written or edited; " +
   "the boards drawn and the boards still to draw; each fix pass's numbered list, with which items are applied and which are not; " +
-  "the last gate result quoted (the colour asserts and render.cjs's overflow lines); every board image it has looked at, with its verdict (fine, or what is wrong); " +
+  "the last gate result, every part of it quoted; every board image it has looked at, with its verdict (fine, or what is wrong); " +
   "the step in hand and the next step; each decision with its reason; and what is open. " +
   "Drop file contents, image contents and tool output.";
 
 export const RESUME =
   "Your context was compacted in place. You are the same drafter or fixer, and the summary above holds your brief's path and your state. " +
-  "Re-read only the brief sections the next step needs. Do not read your generator whole: grep -n for what the next step touches and Read that range. " +
+  "Re-read only your brief's sections and the canon sections the next step needs. Do not read your generator whole: grep -n for what the next step touches and Read that range. " +
   "Do not look again at a board the summary marks fine unless you changed it since. Then continue from the next step.";
 
 /** Whether the loop compacting is a drafter or fixer. A failed lookup is neither, so the engine's own compaction runs. */
