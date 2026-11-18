@@ -23,6 +23,7 @@ Each runbook says what Ground covers, which phases run, and how big the handoff 
 | Rethink an existing app's structure, look, colours or navigation | `runbooks/redesign.md` |
 | Add a feature, flow or screen to an existing product, inside its design system | `runbooks/new-feature.md` |
 | A new product or app with no design system yet | `runbooks/greenfield.md` |
+| Improve a flow that already ships, screen by screen: findings, then three fixes per stretch | `runbooks/audit-a-workflow.md` |
 
 Nothing fits? Use the closest runbook, and tell the owner which phases you changed and why.
 
