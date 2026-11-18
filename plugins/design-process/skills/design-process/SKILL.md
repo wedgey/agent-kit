@@ -107,7 +107,7 @@ you and for every brief you write.
 - **Read tiles and sheets, not full boards.** `render.cjs` writes each board as review tiles
   (`<shots>/review/`) and each direction as a contact sheet (`<shots>/sheets/`). A full-size board
   is shrunk on read until its text is unreadable, so it costs tokens and shows nothing. Open a
-  full-size PNG only to crop a region the brief names.
+  full-size PNG only to crop a region the brief names, or the region a fix changed.
 - **Read each image once.** On a rescore or a fix pass, read only the boards that changed.
 - **Fix passes go back to the drafter**, who still holds the canon and the generator. Spawn a fixer
   only when the drafter is gone.
