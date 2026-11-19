@@ -52,8 +52,8 @@ the flow at a time.
    frame (cut out regions behind a scrim), nothing under 12px, banned words, colour asserts.
 6. **Drafters** (one per direction) write their own State line to the round plan and stay on for
    fix passes, reached with the continue verb.
-7. **Read every PNG and check PNG height = board h.** render.cjs does not catch overflow; the height
-   check does.
+7. **Read every PNG and check PNG height = board h.** `render.cjs --round` prints `overflow ...` and exits 1 for a
+   board taller than its height.
 8. **Reviewers**: the two design-process reviewers, given the PNG folder **and the board HTML path**
    for exact values. Review 1 scores freely; from review 2 the convergence rule applies (score only
    the last fix brief's items, regressions and hard standards failures; polish goes under
@@ -73,8 +73,8 @@ the flow at a time.
 ## Edit rounds and the narrow round
 
 - **A single-board edit** (the owner tweaks one approved screen) needs no drafter: the orchestrator
-  reuses the direction's generator through a harness flag that writes only the `E-<board>` copy as
-  a new board, then runs the same two reviewers.
+  reuses the direction's generator through a harness flag that writes only the edit's copy as
+  a new board (key `E`, the round's one direction, screens numbered 1 to N), then runs the same two reviewers.
 - **Tablet and phone come last, as their own round**: three ways the multi-pane screens fold
   (e.g. stack, pane tabs, main pane + sheets) on the anchor screens at 834 and 390, with a 320
   reflow check. The winner then draws every other screen once (a phase-5 round with an approval
@@ -91,5 +91,5 @@ never reopened. The owner may approve some screens of a round and send others ba
 Usually one ticket per screen or per stretch, with an epic once there are 4 or more. Add a ticket
 for any cross-cutting rule the owner set during the audit (e.g. "the AI name is one constant"),
 and list the findings each ticket closes. The precedence brief names, per screen, the chain of
-edit boards newest first (`E-*` > the edit rounds > the round that picked it), the narrow boards
+edit boards newest first (`E*` boards > the edit rounds > the round that picked it), the narrow boards
 that win at 834 and 390, and every unpicked direction under "Never build".

@@ -6,20 +6,14 @@
 // --page <dir> also writes what the answer page shows: <dir>/full/<Board>.jpg (the whole board) and
 // <dir>/thumbs/<Board>.jpg (its top 1440x900 at half size).
 // Image readers shrink anything over ~1568px on its long edge, so a tall board read whole is unreadable: read tiles.
-// node render.cjs <boards dir> <out dir> <Board.html ...> [--round round.json] [--page dir] [--blobs blobs.json --shots dir1,dir2]
+// node render.cjs <boards dir> <out dir> <Board.html ...> [--round round.json] [--page dir]
 // Playwright is resolved from the current repo (run from its root), or from PLAYWRIGHT_PATH.
 const fs = require('fs'), path = require('path'), { createRequire } = require('module');
 const args = process.argv.slice(2), opt = (k) => { const i = args.indexOf(k); return i < 0 ? null : args.splice(i, 2)[1]; };
-const roundFile = opt('--round'), pageDir = opt('--page'), blobsFile = opt('--blobs'), shotDirs = (opt('--shots') || '').split(',').filter(Boolean);
+const roundFile = opt('--round'), pageDir = opt('--page');
 const [dir, out, ...files] = args;
 const roots = [process.cwd(), ...(fs.existsSync('apps') ? fs.readdirSync('apps').map((d) => path.resolve('apps', d)) : [])];
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || createRequire(__filename).resolve('@playwright/test', { paths: roots }));
-// /_blob/<hash> only exists on the artifact server: serve the local copy named in blobs.json ({name: "/_blob/<hash>"})
-const blob = {};
-if (blobsFile) for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(blobsFile, 'utf8')))) {
-  const hit = shotDirs.flatMap((d) => ['.jpg', '.png'].map((x) => path.join(d, k + x))).find(fs.existsSync);
-  if (hit) blob[v.split('/').pop()] = hit;
-}
 const name = (f) => path.basename(f).replace(/\.html$/, '');
 const prefix = (n) => (n.match(/^[A-Za-z]+/) || ['Board'])[0];
 const heights = roundFile ? JSON.parse(fs.readFileSync(roundFile, 'utf8')).heights || {} : {};
@@ -33,11 +27,9 @@ let overflow = 0;
   const half = await b.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 0.5 });
   const TILE = 1200;
   for (const f of files) {
-    let miss = 0;
     for (const f2 of fs.readdirSync(review).filter((x) => x.startsWith(name(f) + '-') && /^-\d+\.png$/.test(x.slice(name(f).length)))) fs.unlinkSync(path.join(review, f2));
     for (const ctx of [full, small, ...(pageDir ? [half] : [])]) {
       const p = await ctx.newPage();
-      await p.route(/\/_blob\//, (r) => { const h = r.request().url().split('/').pop(); return blob[h] ? r.fulfill({ path: blob[h] }) : (miss++, r.abort()); });
       await p.goto('file://' + path.resolve(dir, f), { waitUntil: 'networkidle', timeout: 60000 }).catch((e) => console.log('warn', f, e.message.split('\n')[0]));
       await p.waitForTimeout(600);
       if (ctx === full) {
@@ -53,7 +45,6 @@ let overflow = 0;
       }
       await p.close();
     }
-    if (miss) console.log('missing blobs', f, miss / 2);
   }
   // A sheet holds every full-size board of its prefix on disk, not only this run's, so it stays whole after a partial re-render.
   const groups = {};

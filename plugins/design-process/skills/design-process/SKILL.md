@@ -55,7 +55,7 @@ Read these when you reach the step that needs them:
 7. **One sample data set and one vocabulary across all boards.** Write them in a canon file. Mark
    invented copy "(placeholder)".
 8. **Never overwrite an earlier round.** Each round gets new board prefixes and its own
-   `rounds/<id>.json`. A redraw is a new board (`<P><n>v2`, or `E<board>` in the walk), never an edit
+   `rounds/<id>.json`. A redraw is a new board (`<P><n>v2`; the walk's key is `E`, so `E3v2`), never an edit
    of one the owner has seen.
 9. **No board reaches the owner below 6/7.** Two independent reviewers on different models score
    every board out of 7. Fix and rescore until both give 6 or more.

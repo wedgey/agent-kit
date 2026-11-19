@@ -18,7 +18,7 @@ You write it into `round.json` (`references/answer-page.md`); the page draws it.
 - A round with several sub-choices (colour, navigation, edits to confirm) makes each one a screen
   of the round, so each gets its own pick.
 
-## A concept board (`<P>0-Concept`)
+## A concept board (`<P>0`)
 
 The idea in a sentence, then why it fits this product and these users. Then 3 or more reference
 screenshots, each with the product's name and what it gave this direction. Then palette swatches
@@ -99,8 +99,8 @@ board 6 or more. Tell the owner the final scores. Three passes is normal.
 
 ## Walk and edits
 
-Walk the owner through each family, or each screen when there are few. Quote their edits verbatim in the plan. Draw them as `E<board>`
-in a new round with the old boards untouched, one screen per edit, so the owner confirms or
+Walk the owner through each family, or each screen when there are few. Quote their edits verbatim in the plan. Draw them as boards of the round's one direction, key `E`, numbered 1 to N one per edit
+(`E1`, `E2`, ...), in a new round with the old boards untouched, one screen per edit, so the owner confirms or
 changes each one. Draw tablet (834) and phone (390) for each layout pattern the work touches; the
 runbook lists them. A navigation or colour question raised in the walk
 becomes its own round of three.

@@ -368,7 +368,6 @@
 <script>
 /* round.json: everything the page draws. Board files: boards/<board>.html, thumbs/<board>.jpg, full/<board>.jpg,
    where a direction's board for screen n is <key><n> (stop 0 is the concept board <key>0, stop N+1 the states board).
-   Stops are single digits, so at most 8 screens.
    id        round id, the database path rounds/<id>
    n, of     this round's number and the number of rounds, for "Round n of of"
    steps     the labels in the header trail, shown as written ("R1 Start"); step n is the current one
@@ -378,7 +377,7 @@
    dirs      {<key>:{name, ovr, line, feels, pickIf, rec?}} ; keys are board prefixes of any length ("A", "PB")
    order     the keys in display order
    scores    {criteria:[str], rows:{<key>:[number per criterion]}, overall:{<key>:number}, note, max?=7}
-   screens   [{n, title, rev, opts:{<key>:str}, fixes:{<key>:number}}] ; rev is the reviewers' pick, as text
+   screens   [{n, title, rev?, opts:{<key>:str}, fixes?:{<key>:number}}] ; rev is the reviewers' pick, as text
    recommend {text, label?, picks:{"<n>":"<key>"}} ; text is shown under "Pick per screen", picks fill the button
    heights   {<board>:px} board heights; a revision falls back to its base board's height
    revisions {"<n>":[{key, board, desc?}]} ; extra options for screen n. board is the explicit board id (e.g. "B3v2");
@@ -408,9 +407,13 @@ const list = a => `<ul>${(a || []).map(x => `<li>${esc(x)}</li>`).join("")}</ul>
 
 // An option key is a direction key, or the board id of a revision. Board ids are <direction key><n><suffix>.
 const isDir = p => ORDER.includes(p);
+// The stop number is all the digits after the key, so a revision suffix must start with a letter ("A10", "A1v2").
 function parseId(id){
-  const k = [...ORDER].sort((a, b) => b.length - a.length).find(k => id.startsWith(k) && /\d/.test(id[k.length] || ""));
-  return k ? { dir: k, n: +id[k.length], suffix: id.slice(k.length + 1) } : null;
+  for (const k of [...ORDER].sort((a, b) => b.length - a.length)) {
+    const m = id.startsWith(k) && id.slice(k.length).match(/^(\d+)([A-Za-z]\w*)?$/);
+    if (m) return { dir: k, n: +m[1], suffix: m[2] || "" };
+  }
+  return null;
 }
 const revOf = p => Object.values(revs).flat().find(r => r.board === p);
 const baseOf = p => isDir(p) ? p : revOf(p)?.base ?? parseId(p)?.dir ?? p;
@@ -486,7 +489,7 @@ function setup(r){
     + (r.helpExtra ? r.helpExtra + " " : "") + `Switch ${ORDER.join(", ")} to compare: your place and typing are kept. Keyboard: ← → switch direction, Esc closes (in a text field, the first Esc leaves the field).`;
   $("screens").innerHTML = SCREENS.map(s => `
   <div class="screen">
-    <div class="shead"><span class="snum">Screen ${s.n} of ${N}</span><h2 id="h${s.n}">${esc(s.title)}</h2><span class="chip">Reviewers pick ${esc(s.rev)}</span><button class="linkbtn clear" data-s="${s.n}" hidden>Clear pick</button></div>
+    <div class="shead"><span class="snum">Screen ${s.n} of ${N}</span><h2 id="h${s.n}">${esc(s.title)}</h2>${s.rev ? `<span class="chip">Reviewers pick ${esc(s.rev)}</span>` : ""}<button class="linkbtn clear" data-s="${s.n}" hidden>Clear pick</button></div>
     <div class="picks" role="radiogroup" aria-labelledby="h${s.n}" data-s="${s.n}">${picksHTML(s)}
     </div>
     ${(r.clashes || []).map((c, i) => c.screens[0] === s.n ? `<div class="clash" role="status" data-c="${i}" hidden></div>` : "").join("")}
@@ -507,7 +510,7 @@ const optCard = (s, d, name, desc, extra) => `
           <button class="shot" data-open="${esc(bid(d, s.n))}" aria-label="Open ${esc(disp(d, s.n))} full size to try it"><img src="thumbs/${esc(bid(d, s.n))}.jpg" data-fb="thumbs/${baseOf(d)}${s.n}.jpg" alt="" loading="lazy">${isDir(d) ? "" : `<span class="v2">${esc(suffixOf(d))}</span>`}<span class="zoom">Try it ⤢</span></button>
           <label class="cap"><input type="radio" name="s${s.n}" value="${esc(d)}"><div><div class="t">${badge(d, s.n)} · ${name}</div><div class="d">${esc(desc)}</div>${extra ? `<div class="d">${extra}</div>` : ""}</div></label>
         </div>`;
-const picksHTML = s => ORDER.map(k => optCard(s, k, esc(DIRS[k].name), s.opts[k], `Fixes ${esc(s.fixes[k])} findings`)).join("")
+const picksHTML = s => ORDER.map(k => optCard(s, k, esc(DIRS[k].name), s.opts[k], s.fixes?.[k] == null ? "" : `Fixes ${esc(s.fixes[k])} findings`)).join("")
   + (revs[s.n] || []).map(r => optCard(s, r.board, "Claude's redraw", r.desc, "From your chat")).join("") + `
         <div class="pick alt">
           <label class="cap"><input type="radio" name="s${s.n}" value="X"><div><div class="t">Something else…</div><div class="d">Say what you want instead, or what to mix.</div></div></label>
@@ -527,8 +530,9 @@ function clashTexts(){
   });
 }
 function syncForms(){
-  document.querySelectorAll(".tform textarea,.tform button,.redraw").forEach(e => e.disabled = !live());
-  document.querySelectorAll(".tform .hint").forEach(h => h.textContent = live() ? `${MAC ? "⌘↩" : "Ctrl+↩"} sends` : reason());
+  const open = live() && !handled;
+  document.querySelectorAll(".tform textarea,.tform button,.redraw").forEach(e => e.disabled = !open);
+  document.querySelectorAll(".tform .hint").forEach(h => h.textContent = handled ? "This round is closed." : live() ? `${MAC ? "⌘↩" : "Ctrl+↩"} sends` : reason());
 }
 function render(){
   document.querySelectorAll(".pick input").forEach(r => { r.checked = picks[r.name.slice(1)] === r.value; r.disabled = sent; });
@@ -541,7 +545,7 @@ function render(){
   const clashes = clashTexts(), clashAt = clashes.findIndex(Boolean);
   document.querySelectorAll(".clash").forEach(c => { const t = clashes[+c.dataset.c]; c.hidden = !t; c.textContent = t; });
   $("dot").classList.toggle("off", !live());
-  $("watchtxt").textContent = live() ? "Claude is watching this round" : conn === "connecting" ? "Connecting…" : "Not connected";
+  $("watchtxt").textContent = live() ? "Connected" : conn === "connecting" ? "Connecting…" : "Not connected";
   $("sum").innerHTML = SCREENS.map(s => {
     const k = picks[s.n];
     const cl = (R.clashes || []).findIndex((c, i) => clashes[i] && c.screens.includes(s.n));
@@ -843,7 +847,7 @@ function drawThread(n){
     for (let i = +(ol.dataset.n || 0); i < t.length; i++) ol.insertAdjacentHTML("beforeend", msgHTML({ ...t[i], n }));
     ol.dataset.n = t.length; ol.dataset.sig = sig(t.length);
     ol.insertAdjacentHTML("beforeend", reading ? `<li class="msg claude typing">Claude is reading…</li>`
-      : stale ? `<li class="stale">The boards don't show this chat yet. <button type="button" class="redraw" data-s="${n}"${live() ? "" : " disabled"}>Redraw as a new option</button></li>`
+      : stale ? `<li class="stale">The boards don't show this chat yet. <button type="button" class="redraw" data-s="${n}"${live() && !handled ? "" : " disabled"}>Redraw as a new option</button></li>`
       : t.length ? "" : `<li class="empty">No messages yet. Ask about this screen or say what to change. Claude redraws a board when a change is clear; press Redraw any time to ask for one.</li>`);
     ol.scrollTop = ol.scrollHeight;
   });

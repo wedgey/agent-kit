@@ -9,18 +9,21 @@ const HOUR = 3_600_000
 type Row = Record<string, unknown>
 /** The artifact beneath the mod: `db` maps a collection or document path to its rows, `fail` makes every call error. */
 function harness(on: On, entries: Record<string, unknown> = {}) {
-  const w = { db: {} as Record<string, Row[]>, round: {} as Record<string, Row>, registered: [] as string[], submitted: [] as string[], toasts: [] as string[], statuses: [] as unknown[], calls: 0, fail: false, submitFails: false }
+  const w = { db: {} as Record<string, Row[]>, round: {} as Record<string, Row>, registered: [] as string[], submitted: [] as string[], toasts: [] as string[], statuses: [] as unknown[], calls: 0, fail: false, submitFails: false, limits: [] as unknown[], gate: null as null | Promise<void>, inSubmit: false }
   mock.store(on, entries)
   on('mcp.call', (_$, e) => {
     w.calls++
     if (w.fail) throw new Error('mcp down')
-    const a = e.args as { collection?: string; path?: string }
+    const a = e.args as { collection?: string; path?: string; limit?: number }
+    if (e.tool === 'db_list') w.limits.push(a.limit)
     const text = e.tool === 'db_list'
       ? [JSON.stringify({ count: 1 }), '<untrusted-document-x>', ...(w.db[a.collection!] ?? []).map(r => JSON.stringify({ id: r.id, data: r.data, version: 1 })), '</untrusted-document-x>'].join('\n')
       : w.round[a.path!] ? [JSON.stringify({ exists: true }), JSON.stringify(w.round[a.path!])].join('\n') : JSON.stringify({ exists: false })
     return { value: { content: [{ type: 'text', text }], isError: false } } as never
   })
-  on('prompt.submit', (_$, e) => {
+  on('prompt.submit', async (_$, e) => {
+    w.inSubmit = true
+    if (w.gate) await w.gate
     if (w.submitFails) throw new Error('no prompt box')
     w.submitted.push(e.text)
     return { text: e.text } as never
@@ -60,13 +63,60 @@ describe('the answer watch', () => {
     expect(w.submitted).toEqual([])
   })
 
-  test('a count of screens watches threads 0 to N+1', async ($, on) => {
+  test('a count of screens watches threads 1 to N, not 0 or N+1', async ($, on) => {
     const clock = mock.clock(on)
     const w = harness(on)
-    w.db['rounds/r1/threads/3/msgs'] = [answer('m1', { from: 'owner', text: 'hi', sentAt: 1 })]
+    w.db['rounds/r1/threads/2/msgs'] = [answer('m1', { from: 'owner', text: 'hi', sentAt: 1 })]
+    w.db['rounds/r1/threads/0/msgs'] = [answer('m0', { from: 'owner', text: 'hi', sentAt: 1 })]
+    w.db['rounds/r1/threads/3/msgs'] = [answer('m3', { from: 'owner', text: 'hi', sentAt: 1 })]
     await watch($, { screens: 2 })
     await clock.advance(10_000)
-    expect(w.submitted[0]).toContain('rounds/r1/threads/3/msgs/m1')
+    expect(w.submitted[0]).toContain('rounds/r1/threads/2/msgs/m1')
+    expect(w.submitted[0]).not.toContain('threads/0')
+    expect(w.submitted[0]).not.toContain('threads/3')
+  })
+
+  test('lists with a limit of 1000', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    await watch($)
+    await clock.advance(10_000)
+    expect(w.limits.length).toBeGreaterThan(0)
+    expect(w.limits.every(l => l === 1000)).toBe(true)
+  })
+
+  test('arming the same round again keeps what was seen', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    await watch($)
+    w.db['rounds/r1/answers'] = [answer('u1', { sentAt: 1 })]
+    await clock.advance(10_000)
+    await watch($)
+    await clock.advance(20_000)
+    expect(w.submitted).toHaveLength(1)
+  })
+
+  test('a stop during an in-flight submit is not undone when the submit fails', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    let release!: () => void
+    w.gate = new Promise<void>(r => (release = r))
+    w.submitFails = true
+    await watch($)
+    w.db['rounds/r1/answers'] = [answer('u1', { sentAt: 1 })]
+    const tick = clock.advance(10_000)
+    for (let i = 0; i < 200 && !w.inSubmit; i++) await new Promise(r => setTimeout(r, 5))
+    expect(w.inSubmit).toBe(true)
+    await watch($, { stop: true })
+    release()
+    await tick
+    await clock.advance(10_000)
+    const calls = w.calls
+    await clock.advance(30_000)
+    expect(w.calls).toBe(calls)
+    await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
+    await clock.advance(30_000)
+    expect(w.calls).toBe(calls)
   })
 
   test('refuses a call without a slug and round', async ($, on) => {
@@ -169,6 +219,7 @@ describe('the answer watch', () => {
     expect(w.submitted).toEqual([])
     expect(w.statuses.at(-1)).toBeUndefined()
     expect(w.toasts.join()).toContain('handled')
+    expect(w.submitted).toEqual([])
     const calls = w.calls
     await clock.advance(60_000)
     expect(w.calls).toBe(calls)
@@ -180,6 +231,9 @@ describe('the answer watch', () => {
     await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
     await clock.advance(10_000)
     expect(w.toasts.join()).toContain('6 hours')
+    expect(w.submitted).toHaveLength(1)
+    expect(w.submitted[0]).toContain('stopped: 6 hours passed')
+    expect(w.submitted[0]).toContain('r1')
     const calls = w.calls
     await clock.advance(HOUR)
     expect(w.calls).toBe(calls)
@@ -191,6 +245,7 @@ describe('the answer watch', () => {
     await watch($)
     await watch($, { stop: true })
     expect(w.statuses.at(-1)).toBeUndefined()
+    expect(w.submitted).toEqual([])
     await clock.advance(60_000)
     expect(w.calls).toBe(0)
     await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
@@ -198,18 +253,20 @@ describe('the answer watch', () => {
     expect(w.calls).toBe(0)
   })
 
-  test('MCP errors never throw, are retried, and 30 in a row stop the watch', async ($, on) => {
+  test('MCP errors never throw, are retried, and 90 in a row stop the watch and tell the session', async ($, on) => {
     const clock = mock.clock(on)
     const w = harness(on)
     await watch($)
     w.fail = true
-    await clock.advance(10_000 * 29)
+    await clock.advance(10_000 * 89)
     expect(w.toasts).toEqual([])
     w.fail = false
     await clock.advance(10_000)
     w.fail = true
-    await clock.advance(10_000 * 30)
-    expect(w.toasts.join()).toContain('30 failed checks')
+    await clock.advance(10_000 * 90)
+    expect(w.toasts.join()).toContain('90 failed checks')
+    expect(w.submitted).toHaveLength(1)
+    expect(w.submitted[0]).toContain('90 failed checks in a row')
     const calls = w.calls
     await clock.advance(60_000)
     expect(w.calls).toBe(calls)
