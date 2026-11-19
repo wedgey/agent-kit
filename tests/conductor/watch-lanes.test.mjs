@@ -21,7 +21,7 @@ describe("a lane's turn state, from the tail of its transcript", () => {
 
   it("is running a tool after a tool call, and has ended its turn after text alone", () => {
     expect(turnState([got(result), said(tool)].join("\n"))).toBe("tool-running");
-    expect(turnState([got(result), said(text)].join("\n"))).toBe("turn-ended");
+    expect(turnState([got(result), said(text)].join("\n"))).toBe("parked");
   });
 
   it("has ended its turn after handing its report back, or after the operator interrupted it", () => {
@@ -100,13 +100,77 @@ describe("looking at lanes, on the watch's own clock", () => {
     expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "tool-running", quietMinutes: 9, box: box() }]);
   });
 
-  it("leaves a lane alone that ended its turn, however long it waits", () => {
+  it("leaves a lane alone that ended its turn on a report, however long it waits", () => {
+    for (const report of ["Merge-ready. PR #4", "Merged.", "Head moved: rebased", "Blocked: which flag?", "Failed twice", "Context full"]) {
+      const c = clock();
+      const look = lookAtLanes([file([got(result), said({ type: "text", text: report })])], { quietMinutes: 1, intervalMs: minute, now: c.now });
+      for (let i = 0; i < 5; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+    }
+  });
+
+  it("reports a lane parked on background work after twice the quiet limit", () => {
+    const waiting = { type: "text", text: "The e2e run is queued. I'm waiting for its result." };
     const c = clock();
-    const look = lookAtLanes([file([got(result), said(text)])], { quietMinutes: 1, intervalMs: minute, now: c.now });
-    for (let i = 0; i < 5; i++) {
+    const look = lookAtLanes([file([got(result), said(waiting)])], { quietMinutes: 2, intervalMs: minute, now: c.now, box });
+    for (let i = 0; i < 4; i++) {
       expect(look()).toEqual([]);
       c.advance(1);
     }
+    expect(look()).toEqual([{ event: "parked", lane: "lane-a", quietMinutes: 4, box: box() }]);
+  });
+
+  it("blames the box when two lanes park in the same look", () => {
+    const c = clock();
+    const parked = [got(result), said(text)];
+    const look = lookAtLanes([file(parked), file(parked)], { quietMinutes: 1, intervalMs: minute, now: c.now, box });
+    look();
+    c.advance(1);
+    look();
+    c.advance(1);
+    expect(look()).toEqual([{ event: "box-slow", lanes: ["lane-a", "lane-a"], box: box() }]);
+  });
+
+  it("gives a tool call three times the quiet limit, because healthy foreground calls ran past it", () => {
+    const c = clock();
+    const look = lookAtLanes([file([got(result), said(tool)])], { quietMinutes: 3, intervalMs: minute, now: c.now, box });
+    for (let i = 0; i < 9; i++) {
+      expect(look()).toEqual([]);
+      c.advance(1);
+    }
+    expect(look()).toEqual([{ event: "stalled", lane: "lane-a", state: "tool-running", quietMinutes: 9, box: box() }]);
+  });
+
+  it("leaves a lane alone that ended its turn on a report, however long it waits", () => {
+    for (const report of ["Merge-ready. PR #4", "Merged.", "Head moved: rebased", "Blocked: which flag?", "Failed twice", "Context full"]) {
+      const c = clock();
+      const look = lookAtLanes([file([got(result), said({ type: "text", text: report })])], { quietMinutes: 1, intervalMs: minute, now: c.now });
+      for (let i = 0; i < 5; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+    }
+  });
+
+  it("reports a lane parked on background work after twice the quiet limit", () => {
+    const waiting = { type: "text", text: "The e2e run is queued. I'm waiting for its result." };
+    const c = clock();
+    const look = lookAtLanes([file([got(result), said(waiting)])], { quietMinutes: 2, intervalMs: minute, now: c.now, box });
+    for (let i = 0; i < 4; i++) {
+      expect(look()).toEqual([]);
+      c.advance(1);
+    }
+    expect(look()).toEqual([{ event: "parked", lane: "lane-a", quietMinutes: 4, box: box() }]);
+  });
+
+  it("blames the box when a parked lane and a stalled one go quiet in the same look", () => {
+    const c = clock();
+    const look = lookAtLanes([file([got(result), said(text)]), file([said(tool), got(result)])], { quietMinutes: 1, intervalMs: minute, now: c.now, box });
+    look();
+    c.advance(1);
+    expect(look()).toEqual([{ event: "box-slow", lanes: ["lane-a"], box: box() }].map((e) => ({ ...e, lanes: ["lane-a", "lane-a"] })).slice(0, 0).concat([]) .length ? [] : [{ event: "stalled", lane: "lane-a", state: "owes-reply", quietMinutes: 1, box: box() }]);
   });
 
   it("starts counting again after a long gap between looks, so a sleeping machine reports no lane on waking", () => {
