@@ -1,6 +1,6 @@
 ---
 name: design-process
-description: Runs design work from a question to build-ready GitHub issues, for any scope - an app redesign, a new feature or flow, or a greenfield product. Works in rounds of three directions drawn as live boards on a claude.ai Design canvas artifact. Each round has a "What you're choosing" board, reference screenshots, colour and contrast checks, and two independent reviewers scoring every board out of 7. The owner picks a direction each round. At the end it writes a precedence brief, drafts one detailed issue per screen with numbered callout crops, and publishes the issues (with an epic, milestones, blocked-by links and a GitHub Project when the work is large). Use when the user wants options to choose between for a redesign, a new feature's UX, or a new product's look and structure; wants mockups on a canvas; or wants a finished canvas turned into issues.
+description: Runs design work from a question to build-ready GitHub issues, for any scope - an app redesign, a new feature or flow, or a greenfield product. Works in rounds of three directions drawn as live, clickable boards on one private claude.ai answer page, where the owner picks per screen, chats about a screen and presses Send, and a watcher wakes the session. Each round opens with what is being chosen, reference screenshots, colour and contrast checks, and two independent reviewers scoring every board out of 7. The owner picks on the page each round. At the end it writes a precedence brief, drafts one detailed issue per screen with numbered callout crops, and publishes the issues (with an epic, milestones, blocked-by links and a GitHub Project when the work is large). Use when the user wants options to choose between for a redesign, a new feature's UX, or a new product's look and structure; wants clickable mockups to pick from; or wants finished boards turned into issues.
 ---
 
 # Design process: rounds of three directions, then tickets
@@ -29,10 +29,11 @@ Nothing fits? Use the closest runbook, and tell the owner which phases you chang
 
 Read these when you reach the step that needs them:
 - `references/rounds.md`: the decision board, concept boards, research, colour and the reviewer loop.
-- `references/canvas.md`: the Design canvas artifact, the board files, the generator, render and publish.
+- `references/answer-page.md`: the answer page, its database, the board files, the generator, render and publish.
 - `references/tickets.md`: the handoff. The precedence brief, the issue template, drafting and publishing.
 - `bindings/<harness>.md`: the only place a model or tool is named. Read yours before the first spawn.
-- `scripts/`: `render.cjs` (boards to PNGs, review tiles and contact sheets), `colour.cjs` (sRGB gamut and WCAG checks), `callout.sh`
+- `assets/answer-page/`: the page template and an example `round.json`.
+- `scripts/`: `render.cjs` (boards to PNGs, review tiles, contact sheets and the page's JPGs), `colour.cjs` (sRGB gamut and WCAG checks), `callout.sh`
   (numbered crop markers, needs ImageMagick), `publish-issues.mjs` (epic, issues, milestones, project).
 
 ## Rules the owner taught us (they hold for every round, in every runbook)
@@ -40,9 +41,9 @@ Read these when you reach the step that needs them:
 1. **Exactly three directions per round**, unless the owner names another number. No fourth "safe"
    option. Fold it into the three, or mention it in chat.
 2. **Equal depth.** Each direction gets its own concept board and the same set of screens, in its own look.
-3. **Every round opens with a "What you're choosing" board.** It has three boxes: Already decided,
-   Decided this round and Next round. Below them is one table comparing the directions on fixed
-   criteria. The criteria are the same every round. See `references/rounds.md`.
+3. **Every round opens with "What you're choosing".** The top of the answer page has three boxes:
+   Already decided, Decided this round and Next round. Below them is one table comparing the
+   directions on fixed criteria. The criteria are the same every round. See `references/rounds.md`.
 4. **A round narrows one question and never reopens earlier ones.** Later rounds redraw the chosen
    screens with the same copy and data, and only the open question varies. Name any small structural
    tweak on the decision board.
@@ -53,19 +54,20 @@ Read these when you reach the step that needs them:
    behind body text.
 7. **One sample data set and one vocabulary across all boards.** Write them in a canon file. Mark
    invented copy "(placeholder)".
-8. **Never overwrite an earlier round.** Each round gets its own canvas page. Edits to drawn screens go
-   on the new page as `E<board>` copies.
+8. **Never overwrite an earlier round.** Each round gets new board prefixes and its own
+   `rounds/<id>.json`. A redraw is a new board (`<P><n>v2`, or `E<board>` in the walk), never an edit
+   of one the owner has seen.
 9. **No board reaches the owner below 6/7.** Two independent reviewers on different models score
    every board out of 7. Fix and rescore until both give 6 or more.
 10. **Record every decision the day it is made.** Write it to a project memory, quoting the owner,
-    with the date and the canvas version. The next round starts from it.
+    with the date and the page's version. The next round starts from it.
 
 ## The four things every piece of design work gets
 
 **Options.** The owner chooses between three directions each round, never approves one. Every
 direction is drawn on the same screens with the same data. The report ends with a table scoring
-each direction out of 7 on the fixed scored rows in `references/rounds.md`, a recommendation with its reason, and the question asked
-as options.
+each direction out of 7 on the fixed scored rows in `references/rounds.md`, a recommendation with its reason, and the question
+asked on the answer page.
 
 **Standards.** Every board meets the standards in `references/rounds.md` ("Standards every board
 meets"): WCAG 2.2 AA, the platform conventions, usability heuristics, every state accounted for,
@@ -124,13 +126,13 @@ A runbook may add a phase between 4 and 5 for one more question. It names that p
 
 | # | Phase | What it settles |
 |---|---|---|
-| 0 | Ground | Nothing yet. Read what exists, write the goal and constraints, list the screens, pick the anchor screens, create the canvas and the plan |
+| 0 | Ground | Nothing yet. Read what exists, write the goal and constraints, list the screens, pick the anchor screens, create the answer page and the plan |
 | 1 | Structure | How the work is organised: where the core task happens and how a user moves through it |
 | 2 | Look | The feel: type, density, surfaces |
 | 3 | Palette | Brand and status colours, and tokens for light and dark |
 | 4 | Details | One open question at a time, such as how AI output is marked or how an error recovers |
 | 5 | Every screen | Draw each remaining screen once in the winner, grouped by family, with its states |
-| 6 | Walk and edits | The owner walks the screens. Draw their edits, tablet and phone, on a new page |
+| 6 | Walk and edits | The owner walks the screens. Draw their edits, tablet and phone, as a new round |
 | 7 | Handoff | Turn the final boards into issues |
 
 The **anchor screens** are the 2–4 screens that carry the main loop of the work. Every round in
@@ -147,16 +149,19 @@ they like parts of several, the next round blends those parts and adds new ones.
    one covers a slice of sources (Awwwards, Dribbble, Mobbin, product sites, design-system docs) and
    captures live-site screenshots with Playwright. Some sites block screenshot bots, so note them and move on.
 3. **Build the boards with the generator.** Write the shared skeleton once, then one generator file
-   and theme object per direction, so every direction redraws the same screens. Run the colour asserts. See `references/canvas.md`.
+   and theme object per direction, so every direction redraws the same screens. Run the colour asserts. See `references/answer-page.md`.
 4. **Render and look.** Have the screenshot capturer render the changed boards, then read the contact sheets and each changed
    board's review tiles yourself. Check for overflow, clipped text, wrong data and stray process words.
 5. **Review loop.** Give the review tiles and sheets to the two reviewer agents with the brief in
    `references/rounds.md`. Fix what they find and rescore until both score every board 6/7 or more.
-6. **Publish** the changed files only, in patch mode. Set the canvas launch page to the new round.
+6. **Publish** `round.json`, its round copy and the changed boards, in patch mode. Mark the round open and arm
+   the watcher. See `references/answer-page.md`.
 7. **Update memory** with the round, its version id, the working folder's path and what is open.
-8. **Report to the owner.** Give the canvas link and one line per direction. Then a table scoring the
-   directions out of 7 on the round's criteria, your recommendation, and the question as options.
-   End with what you did not check, such as user testing or colour-blindness simulation.
+8. **Report to the owner.** Give the page's link and one line per direction, your recommendation, and
+   what you did not check, such as user testing or colour-blindness simulation. The scores and the
+   question are on the page. Then stop: the watcher wakes you when they write or send.
+9. **Answer from the page.** Reply in a screen's chat in words, or redraw when a change is settled
+   and visual or the owner pressed Redraw. When the answers arrive, mark the round handled and go on.
 
 ## Working practice
 

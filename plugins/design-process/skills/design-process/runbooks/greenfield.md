@@ -14,7 +14,7 @@ from nothing.
 - **Write the screen list from the jobs**, not from routes: for each job, the screens a user passes
   through, plus sign-in, settings, first run and empty states. Expect Structure rounds to change it.
 - **Pick 3 anchor screens**: the screens of the most important job.
-- Create the canvas and a project memory named `<product>-design-direction`.
+- Create the answer page and a project memory named `<product>-design-direction`.
 
 ## Phases
 
@@ -30,7 +30,7 @@ from nothing.
 
 ## Handoff
 
-There is no DESIGN.md yet, so the first ticket writes it from the canvas, with the tokens and the
+There is no DESIGN.md yet, so the first ticket writes it from the final boards, with the tokens and the
 type scale, and sets up the UI kit. If the repo has a design framework with a
 command that writes DESIGN.md, that ticket runs it. The next tickets build shared primitives, then the shell, then screens by the
 main job's order. Publish with an epic, milestones and a project.

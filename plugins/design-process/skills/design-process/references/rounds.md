@@ -1,21 +1,22 @@
 # Rounds: the decision board, research, colour and review
 
-## The "What you're choosing" board (`R<n>-Choose`, first on every page)
+## "What you're choosing" (the top of the answer page)
+
+You write it into `round.json` (`references/answer-page.md`); the page draws it.
 
 - A head that names the round and its one question, in a sentence.
 - Three boxes: **Already decided** (bullets), **Decided this round**, **Next round**.
-- **A comparison table.** One column per direction. Each column head is a scaled live `mini()` of
-  that direction's concept board, linked to it. The rows are the same every round:
-  In one line · Feels like · Colour · Type · Density · The product's key differentiator (e.g. how AI
-  suggestions show) · Signature moment · Strongest at · Weakest at · Pick it if.
+- **One card per direction**, with its concept board's thumbnail, linked to the board: In one line ·
+  Feels like · Pick it if. Colour, type, density, the product's key differentiator (e.g. how AI
+  suggestions show), the signature moment, and strongest and weakest at go on the concept board.
 - **Scored rows**, below the descriptive ones, each direction out of 7: **Fits the main task** ·
   **Clarity and hierarchy** · **Meets the standards** · **Distinct from competitors** · **Scales to
   every screen** · **Cost to build** (cheaper scores higher). Each score is the mean of the two
   reviewers'. Add an **Overall /7** row, which is your judgement, not an average.
 - A recommendation line with its reason.
-- A footer with the check counts from the generator and what was not checked.
-- A round with several sub-choices (colour, navigation, edits to confirm) gets one card per choice
-  on this board.
+- A note under the table with the check counts from the generator and what was not checked.
+- A round with several sub-choices (colour, navigation, edits to confirm) makes each one a screen
+  of the round, so each gets its own pick.
 
 ## A concept board (`<P>0-Concept`)
 
@@ -33,7 +34,7 @@ round's shots folder, and one line on what it would give us, written to that res
 Report the sites that block bots. Ask for no opinions on the owner's choice.
 
 Merge the researchers' picks into the round's reference log, `<work>/refs/<round>.md`, one row per
-pick: product, URL, screenshot path (and its `/_blob/` path once uploaded), what it gave, and which
+pick: product, URL, screenshot path (and its `refs/` path on the page), what it gave, and which
 direction used it. A concept board cites only picks in the log.
 
 ## Standards every board meets
@@ -94,12 +95,12 @@ board 6 or more. Tell the owner the final scores. Three passes is normal.
   doc first (when they change), then the shell (when it changes), then screens by traffic, with
   onboarding last. The runbook says which of these apply.
 - Give options only where a real choice is open, such as onboarding. Those get their own 3
-  directions and a Choose board.
+  directions and their own round on the page.
 
 ## Walk and edits
 
 Walk the owner through each family, or each screen when there are few. Quote their edits verbatim in the plan. Draw them as `E<board>`
-on the next page with the old boards untouched, and add a "confirm or change" table to that page's
-Choose board. Draw tablet (834) and phone (390) for each layout pattern the work touches; the
+in a new round with the old boards untouched, one screen per edit, so the owner confirms or
+changes each one. Draw tablet (834) and phone (390) for each layout pattern the work touches; the
 runbook lists them. A navigation or colour question raised in the walk
 becomes its own round of three.
