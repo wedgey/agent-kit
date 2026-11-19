@@ -7,7 +7,7 @@ Design docs per entry: see [CONTEXT-MAP.md](./CONTEXT-MAP.md).
 ## Entries
 
 - [`skills/conductor`](./skills/conductor/SKILL.md): the agent mode that sets how a coding agent plans, delegates and verifies, packaged as the `conductor` plugin. Work that needs one PR runs as a feature. Work that needs several PRs runs as an epic, with one lane per ticket. It also ships a box-wide queue for heavy checks, and Bash hooks that queue heavy commands and keep agents from waiting in loops.
-- [`plugins/design-process`](./plugins/design-process/skills/design-process/SKILL.md): design work from a question to build-ready GitHub issues. Rounds of three directions on a claude.ai Design canvas, two senior reviewers scoring every board out of 7, then one detailed issue per screen. Packaged as the `design-process` plugin with eight role agents, each on its own model and effort.
+- [`plugins/design-process`](./plugins/design-process/skills/design-process/SKILL.md): design work from a question to build-ready GitHub issues. Rounds of three directions on a private claude.ai answer page where the owner picks, comments and presses Send, two senior reviewers scoring every board out of 7, then one detailed issue per screen. Packaged as the `design-process` plugin with eight role agents, each on its own model and effort.
 - [`plugins/session-activity`](./plugins/session-activity/README.md): a Claude Code pane of the session's todo list, its subagents and lanes, background servers and the heavy-check queue.
 
 ## Add conductor to your codebase

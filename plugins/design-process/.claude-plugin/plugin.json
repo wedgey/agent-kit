@@ -1,6 +1,6 @@
 {
   "name": "design-process",
-  "description": "Runs design work from a question to build-ready GitHub issues: rounds of three directions on a Design canvas, two senior reviewers scoring every board, then one detailed issue per screen. Ships its role agents, each on its own model and effort",
+  "description": "Runs design work from a question to build-ready GitHub issues: rounds of three directions on an answer page the owner picks and comments on, two senior reviewers scoring every board, then one detailed issue per screen. Ships its role agents, each on its own model and effort",
   "author": {
     "name": "Desmond Poon"
   },
