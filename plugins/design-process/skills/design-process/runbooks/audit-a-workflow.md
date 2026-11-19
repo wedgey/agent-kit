@@ -20,7 +20,7 @@ the flow at a time.
   what the directions must close.
 - **Canon** (`canon.md`): one sample object, one set of people, the vocabulary. Each round appends a
   "Round <x> data" section; boards never invent copy outside it.
-- Create the canvas page and a project memory, and write `plan.md` with the owner's words verbatim.
+- Create the answer page (`references/answer-page.md`) and a project memory, and write `plan.md` with the owner's words verbatim.
 
 ## Phases
 
@@ -45,16 +45,15 @@ the flow at a time.
    review is open). Errors are plain lines in canon words.
 4. **Research when the round borrows a pattern** (e.g. how GitHub or Google Docs review): two
    researchers in parallel, one per slice, while the drafters start; drafters build the Concept board
-   last, once `refs/<round>-*.md` lands. Upload the shots with `upload_asset` and map them in
-   `blobs.json` before the first full build, or Concept boards render empty frames.
+   last, once `refs/<round>-*.md` lands. Copy the shots into the page's `refs/` folder before the first full build, or Concept boards render empty frames.
 5. **Generator per round**: `gen-<round>.cjs` is a harness that loads one `gen-<round>-<k>.cjs` per
-   direction. `ONLY=<k>` builds one direction and never writes canvas.json, so drafters run in
-   parallel; a full build writes the Choose board and the page. Self-checks: one primary per screen
+   direction. `ONLY=<k>` builds one direction and never writes `round.json`, so drafters run in
+   parallel; a full build writes `round.json`. Self-checks: one primary per screen
    frame (cut out regions behind a scrim), nothing under 12px, banned words, colour asserts.
 6. **Drafters** (one per direction) write their own State line to the round plan and stay on for
-   fix passes, reached with SendMessage.
-7. **Read every PNG and check PNG height = board h.** render.cjs does not catch overflow; the height
-   check does.
+   fix passes, reached with the continue verb.
+7. **Read every PNG and check PNG height = board h.** `render.cjs --round` prints `overflow ...` and exits 1 for a
+   board taller than its height.
 8. **Reviewers**: the two design-process reviewers, given the PNG folder **and the board HTML path**
    for exact values. Review 1 scores freely; from review 2 the convergence rule applies (score only
    the last fix brief's items, regressions and hard standards failures; polish goes under
@@ -67,17 +66,15 @@ the flow at a time.
    as quick 1b/1c passes. One fix pass plus the convergence rule usually gets every board to 6+.
    Polish the reviewers list as unscored goes into a short fix 2 brief only if it is cheap; the rest
    waits for the tickets.
-10. Fill the Choose board's scores (mean of the two reviewers) and recommendation, publish the
-    round's files in patch mode on a new page, update memory, and report with the scores table and
-    the question as options. Before publishing, read the live `canvas.json` version (`list_files`):
-    if it moved since your last publish, merge your page into the live file with `edit_version`,
-    never overwrite it from the local copy.
+10. Fill the scores in `round.json` (mean of the two reviewers) and the recommendation, publish the
+    round's files in patch mode, mark the round open, arm the watcher, update memory, and send the
+    owner the page's link. Then wait for the watcher.
 
 ## Edit rounds and the narrow round
 
 - **A single-board edit** (the owner tweaks one approved screen) needs no drafter: the orchestrator
-  reuses the direction's generator through a harness flag that writes only the `E-<board>` copy on
-  a new page, then runs the same two reviewers.
+  reuses the direction's generator through a harness flag that writes only the edit's copy as
+  a new board (key `E`, the round's one direction, screens numbered 1 to N), then runs the same two reviewers.
 - **Tablet and phone come last, as their own round**: three ways the multi-pane screens fold
   (e.g. stack, pane tabs, main pane + sheets) on the anchor screens at 834 and 390, with a 320
   reflow check. The winner then draws every other screen once (a phase-5 round with an approval
@@ -85,8 +82,8 @@ the flow at a time.
 
 ## What the owner decides
 
-Per stretch: which direction, or a blend. A blend or a pick with tweaks becomes the next round on its
-own page (`r3b`, `r3c`…), redrawing only what changed; a stretch the owner approves is fixed and
+Per stretch: which direction, or a blend. A blend or a pick with tweaks becomes the next round
+(`r3b`, `r3c`…), redrawing only what changed; a stretch the owner approves is fixed and
 never reopened. The owner may approve some screens of a round and send others back.
 
 ## Handoff
@@ -94,5 +91,5 @@ never reopened. The owner may approve some screens of a round and send others ba
 Usually one ticket per screen or per stretch, with an epic once there are 4 or more. Add a ticket
 for any cross-cutting rule the owner set during the audit (e.g. "the AI name is one constant"),
 and list the findings each ticket closes. The precedence brief names, per screen, the chain of
-edit boards newest first (`E-*` > the edit rounds > the round that picked it), the narrow boards
+edit boards newest first (`E*` boards > the edit rounds > the round that picked it), the narrow boards
 that win at 834 and 390, and every unpicked direction under "Never build".

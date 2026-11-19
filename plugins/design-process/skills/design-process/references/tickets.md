@@ -1,6 +1,6 @@
 # Handoff: from final boards to issues and a project
 
-The canvas now holds every round, and only some boards are final. Builders must never have to
+The answer page now holds every round, and only some boards are final. Builders must never have to
 work out which ones.
 
 Every path below is relative to the repo root. `<work>` is the design work's folder outside
@@ -10,11 +10,11 @@ the repo (see SKILL.md, "Working practice").
 
 Write it once and give it to every drafting agent. It holds:
 
-- **The goal.** The product gets built to match the canvas exactly. One implementer per issue must
+- **The goal.** The product gets built to match the final boards exactly. One implementer per issue must
   build pixel-close without guessing.
 - **Paths.** The board HTML, the board PNGs, the generator, the canon, `callout.sh`, and where to
-  write. Give the canvas URL and slug, and say that implementers can read any board with the
-  artifact server's `read_file` tool (`project/<Board>.dc.html`). The canvas is private, so they
+  write. Give the answer page's URL and slug, and say that implementers can read any board with the
+  artifact server's `read_file` tool (`boards/<Board>.html`). The page is private, so they
   ask the owner for access.
 - **Which board wins.** Go part by part:
   1. *Chrome* (rail, panels, top bar, folding, phone drawer and tabs): only the boards of the
@@ -67,9 +67,9 @@ line each, with a proposed default.
 ```
 Part of {{EPIC}}          (omit when there is no EPIC.md)
 
-**Boards:** `<Board>` (wins), `<Board>` (body) on the [design canvas](<url>), page *<page>*.
-Read exact CSS with the artifact server's `read_file` tool: slug `<slug>`, path `project/<Board>.dc.html`.
-The canvas is private; ask the repo owner for access.
+**Boards:** `<Board>` (wins), `<Board>` (body) on the [answer page](<url>), round *<round>*.
+Read exact CSS with the artifact server's `read_file` tool: slug `<slug>`, path `boards/<Board>.html`.
+The page is private; ask the repo owner for access.
 
 **Route:** `<route>` · **Replaces:** `<current files>`
 
@@ -103,7 +103,7 @@ resolves them to issue numbers and hosted images.
 ## 4. The epic (`<work>/tickets/EPIC.md`, large handoffs only)
 
 It holds:
-- the goal and the canvas link, with an access note;
+- the goal and the answer page's link, with an access note;
 - the precedence rules in short form;
 - the milestones and the Mermaid dependency graph;
 - the owner questions, each with a proposed default;

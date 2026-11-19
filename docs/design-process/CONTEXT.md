@@ -1,6 +1,6 @@
 # Design process
 
-A skill that runs design work from a question to build-ready issues: rounds of three directions on a Design canvas, reviewed and scored, then one issue per screen.
+A skill that runs design work from a question to build-ready issues: rounds of three directions on an answer page, reviewed and scored, then one issue per screen.
 
 ## Work
 
@@ -17,8 +17,16 @@ One coherent answer to a round's question, drawn at equal depth with the other t
 _Avoid_: Option, variant, concept
 
 **Board**:
-One screen or concept drawn as a live HTML file on the canvas, scored out of 7 by two reviewers.
+One screen or concept drawn as a live HTML file and shown as a click-through prototype on the answer page, scored out of 7 by two reviewers.
 _Avoid_: Mockup, frame, artboard
+
+**Answer page**:
+The private claude.ai artifact, one per piece of work, that shows each round and takes the owner's picks, notes and per-screen chat. Its database is where answers arrive, and the watcher wakes the session when they do.
+_Avoid_: Canvas, form, survey
+
+**Watcher**:
+The plugin's polling hook, armed for one round, that wakes the session when the owner sends answers or writes in a screen's chat, and stops when the round is handled or after 6 hours.
+_Avoid_: Listener, webhook
 
 **Canon**:
 The one vocabulary, data set and pattern list every board in a piece of work follows.

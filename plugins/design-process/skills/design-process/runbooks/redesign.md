@@ -12,7 +12,7 @@ navigation. Every phase runs. The handoff is large: an epic, milestones and a pr
   list and the ticket list.
 - **Pick 3 anchor screens**: the ones that carry the product's main loop, such as the main object's
   page, the main correction or editing action, and publishing.
-- Create the canvas (`references/canvas.md`) and a project memory named `<product>-redesign-direction`.
+- Create the answer page (`references/answer-page.md`) and a project memory named `<product>-redesign-direction`.
 
 ## Phases
 

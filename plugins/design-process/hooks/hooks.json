@@ -1,1 +1,1 @@
-{ "modules": ["./compact-mod.mjs"] }
+{ "modules": ["./register.mjs"] }

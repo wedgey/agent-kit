@@ -15,7 +15,7 @@ and behaviour.
 - **Pick 2–3 anchor screens**: where the feature's main task happens and where a user first meets it.
 - **Theme the generator from DESIGN.md**, not from a new direction. Assert that every colour is a
   DESIGN.md token. A board that needs a new token is a finding for the owner, not a quiet addition.
-- Create the canvas, or a new page on the product's existing canvas, and a project memory named
+- Create the answer page, or add rounds to the product's existing one, and a project memory named
   `<feature>-design`.
 
 ## Phases
