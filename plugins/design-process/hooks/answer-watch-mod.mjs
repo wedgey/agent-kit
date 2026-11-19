@@ -9,7 +9,7 @@ const MAX_ERRORS = 30;
 export const DESCRIPTION =
   "Call this once after you publish a design round to an artifact: it polls the artifact's database every 10 s and wakes this session when the owner sends answers or a chat message, " +
   "and stops by itself when rounds/<round>.status is \"handled\", after 6 h, or with stop: true. Arming again for another round replaces the watch. " +
-  "Database layout it reads: rounds/<round>/answers/<uid>, rounds/<round>/threads/<n>/<msgId> (a row with from \"claude\" never wakes you).";
+  "Database layout it reads: rounds/<round>/answers/<uid>, rounds/<round>/threads/<n>/msgs/<msgId> (a row with from \"claude\" never wakes you).";
 
 const SCHEMA = {
   type: "object",
@@ -83,7 +83,7 @@ async function poll($, w) {
   const stopIfCurrent = (why) => (current === w ? stop($, why) : undefined);
   if ((await $.clock.now()) - w.armedAt > MAX_MS) return stopIfCurrent("6 hours passed");
   if ((await statusOf($, w.slug, w.round)) === "handled") return stopIfCurrent(`round ${w.round} is handled`);
-  const collections = [`rounds/${w.round}/answers`, ...w.screens.map((n) => `rounds/${w.round}/threads/${n}`)];
+  const collections = [`rounds/${w.round}/answers`, ...w.screens.map((n) => `rounds/${w.round}/threads/${n}/msgs`)];
   const rows = (await Promise.all(collections.map((c) => rowsOf($, w.slug, c)))).flat();
   const fresh = rows.filter((r) => r.data.from !== "claude" && w.seen[r.path] !== r.stamp);
   if (current !== w || !fresh.length) return;

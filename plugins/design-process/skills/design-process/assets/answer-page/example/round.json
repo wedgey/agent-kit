@@ -1,0 +1,160 @@
+{
+ "id": "r1",
+ "n": 1,
+ "of": 3,
+ "steps": [
+  "R1 Adding",
+  "R2 The look",
+  "Handoff"
+ ],
+ "project": {
+  "name": "Notes app",
+  "sub": "Design process · Example round"
+ },
+ "title": "How should adding a note work?",
+ "lede": "**Every screen is a live prototype.** Click through each screen in A, B and C, pick one under each screen, then send. Nothing is sent until you press Send.",
+ "decided": [
+  "Notes live in lists",
+  "Phone and desktop share one layout"
+ ],
+ "thisRound": [
+  "A, B or C for each of three screens"
+ ],
+ "next": [
+  "The look: type, colour, density"
+ ],
+ "dirs": {
+  "A": {
+   "name": "Quick add",
+   "ovr": 5,
+   "line": "A field at the top of the list; press Enter and it is saved.",
+   "feels": "A plain to-do list.",
+   "pickIf": "Speed matters more than detail."
+  },
+  "B": {
+   "name": "Add sheet",
+   "ovr": 6,
+   "line": "An Add button opens a sheet with title, date and list.",
+   "feels": "A calendar app's new event.",
+   "pickIf": "Most notes need a date.",
+   "rec": true
+  },
+  "C": {
+   "name": "Type anything",
+   "ovr": 4.5,
+   "line": "One box reads 'call Sam Friday' and fills the fields.",
+   "feels": "A command bar.",
+   "pickIf": "You want typing to do the work."
+  }
+ },
+ "order": [
+  "A",
+  "B",
+  "C"
+ ],
+ "scores": {
+  "criteria": [
+   "Fits the main task",
+   "Clarity",
+   "Cost to build"
+  ],
+  "rows": {
+   "A": [
+    5,
+    6,
+    7
+   ],
+   "B": [
+    6,
+    6,
+    5
+   ],
+   "C": [
+    5,
+    4,
+    3
+   ]
+  },
+  "overall": {
+   "A": 5,
+   "B": 6,
+   "C": 4.5
+  },
+  "note": "Mean of the two reviewers. Overall is Claude's judgement."
+ },
+ "screens": [
+  {
+   "n": 1,
+   "title": "Empty list",
+   "rev": "B1",
+   "opts": {
+    "A": "Quick add, screen 1",
+    "B": "Add sheet, screen 1",
+    "C": "Type anything, screen 1"
+   },
+   "fixes": {
+    "A": 2,
+    "B": 3,
+    "C": 2
+   }
+  },
+  {
+   "n": 2,
+   "title": "Adding a note",
+   "rev": "B2",
+   "opts": {
+    "A": "Quick add, screen 2",
+    "B": "Add sheet, screen 2",
+    "C": "Type anything, screen 2"
+   },
+   "fixes": {
+    "A": 2,
+    "B": 3,
+    "C": 2
+   }
+  },
+  {
+   "n": 3,
+   "title": "The list with notes",
+   "rev": "B3",
+   "opts": {
+    "A": "Quick add, screen 3",
+    "B": "Add sheet, screen 3",
+    "C": "Type anything, screen 3"
+   },
+   "fixes": {
+    "A": 2,
+    "B": 3,
+    "C": 2
+   }
+  }
+ ],
+ "recommend": {
+  "label": "Take the recommendation: B on all three",
+  "text": "Recommendation: B on all three. Both reviewers rank B first.",
+  "picks": {
+   "1": "B",
+   "2": "B",
+   "3": "B"
+  }
+ },
+ "heights": {
+  "A0": 900,
+  "A1": 900,
+  "A2": 900,
+  "A3": 900,
+  "A4": 900,
+  "B0": 900,
+  "B1": 900,
+  "B2": 900,
+  "B3": 900,
+  "B4": 900,
+  "C0": 900,
+  "C1": 900,
+  "C2": 900,
+  "C3": 900,
+  "C4": 900
+ },
+ "revisions": {},
+ "decisions": []
+}

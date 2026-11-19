@@ -63,10 +63,10 @@ describe('the answer watch', () => {
   test('a count of screens watches threads 0 to N+1', async ($, on) => {
     const clock = mock.clock(on)
     const w = harness(on)
-    w.db['rounds/r1/threads/3'] = [answer('m1', { from: 'owner', text: 'hi', sentAt: 1 })]
+    w.db['rounds/r1/threads/3/msgs'] = [answer('m1', { from: 'owner', text: 'hi', sentAt: 1 })]
     await watch($, { screens: 2 })
     await clock.advance(10_000)
-    expect(w.submitted[0]).toContain('rounds/r1/threads/3/m1')
+    expect(w.submitted[0]).toContain('rounds/r1/threads/3/msgs/m1')
   })
 
   test('refuses a call without a slug and round', async ($, on) => {
@@ -120,7 +120,7 @@ describe('the answer watch', () => {
     const clock = mock.clock(on)
     const w = harness(on)
     await watch($)
-    w.db['rounds/r1/threads/1'] = [answer('m1', { from: 'claude', text: 'done', sentAt: 5 })]
+    w.db['rounds/r1/threads/1/msgs'] = [answer('m1', { from: 'claude', text: 'done', sentAt: 5 })]
     await clock.advance(30_000)
     expect(w.submitted).toEqual([])
   })
@@ -129,10 +129,10 @@ describe('the answer watch', () => {
     const clock = mock.clock(on)
     const w = harness(on)
     await watch($)
-    w.db['rounds/r1/threads/1'] = [answer('m1', { from: 'owner', kind: 'redraw', text: 'again', sentAt: 5 })]
+    w.db['rounds/r1/threads/1/msgs'] = [answer('m1', { from: 'owner', kind: 'redraw', text: 'again', sentAt: 5 })]
     await clock.advance(10_000)
     expect(w.submitted).toHaveLength(1)
-    expect(w.submitted[0]).toContain('rounds/r1/threads/1/m1 (redraw)')
+    expect(w.submitted[0]).toContain('rounds/r1/threads/1/msgs/m1 (redraw)')
   })
 
   test('rows arriving together wake once', async ($, on) => {
@@ -140,11 +140,11 @@ describe('the answer watch', () => {
     const w = harness(on)
     await watch($)
     w.db['rounds/r1/answers'] = [answer('u1', { sentAt: 1 })]
-    w.db['rounds/r1/threads/1'] = [answer('m1', { from: 'owner', text: 'q', sentAt: 2 })]
+    w.db['rounds/r1/threads/1/msgs'] = [answer('m1', { from: 'owner', text: 'q', sentAt: 2 })]
     await clock.advance(10_000)
     expect(w.submitted).toHaveLength(1)
     expect(w.submitted[0]).toContain('answers/u1')
-    expect(w.submitted[0]).toContain('threads/1/m1')
+    expect(w.submitted[0]).toContain('threads/1/msgs/m1')
   })
 
   test('offers the rows again when the wake could not be submitted', async ($, on) => {

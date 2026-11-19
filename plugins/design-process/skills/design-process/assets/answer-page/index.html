@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design process: answer page</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--fg:#221d33;--soft:#433d52;--muted:#5d576b;--line:#ebebeb;--line2:#d6d6d8;--input:#8f8a9b;--sec:#f4f3f7;--bg:#fafafa;
+    --brand:#05585f;--tint:#dcf4f6;--ok:#0f6b46;--oktint:#ddf3e7;--warn:#7d5100;--warntint:#fbefd9;--bad:#b3261e;--tap:32px}
+  @media (pointer:coarse),(any-pointer:coarse),(max-width:640px){:root{--tap:44px}}
+  *{box-sizing:border-box;margin:0}
+  [hidden]{display:none!important}
+  html{overflow-x:hidden}
+  body{font:14px/1.5 Inter,system-ui,sans-serif;color:var(--fg);background:var(--bg)}
+  button{font:inherit;color:inherit;cursor:pointer;background:none;border:0}
+  button:disabled{cursor:not-allowed}
+  :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px}
+  .wrap{max-width:1360px;margin:0 auto;padding:0 24px}
+  @media (max-width:640px){.wrap{padding:0 14px}}
+
+
+  header.top{background:#fff;border-bottom:1px solid var(--line)}
+  header.top .wrap{display:flex;align-items:center;gap:8px 20px;padding-top:14px;padding-bottom:14px;flex-wrap:wrap}
+  .proj{font-weight:650;font-size:16px}
+  .proj small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+  header.top nav{margin-left:auto}
+  .steps{display:flex;gap:4px 8px;flex-wrap:wrap;list-style:none;padding:0;font-size:12px;color:var(--muted)}
+  .steps li+li::before{content:"›";margin-right:8px}
+  .steps [aria-current]{color:var(--brand);font-weight:650}
+  .steps .of{color:var(--muted);font-weight:400}
+  @media (min-width:641px){.steps .of{display:none}}
+  @media (max-width:640px){.steps li:not([aria-current]){display:none}}
+
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;padding-top:24px;padding-bottom:64px;align-items:start}
+  @media (max-width:1060px){.grid{grid-template-columns:minmax(0,1fr)}}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px}
+  .pad{padding:20px 24px}
+  @media (max-width:640px){.pad{padding:16px}}
+  .stack{min-width:0}
+  .stack>*+*{margin-top:20px}
+  h1{font-size:22px;line-height:1.3;font-weight:650;letter-spacing:-.01em}
+  h2{font-size:16px;font-weight:650}
+  .eyebrow{font-size:12px;font-weight:600;color:var(--brand);text-transform:uppercase;letter-spacing:.06em}
+  .lede{color:var(--soft);margin-top:6px;max-width:75ch}
+  .lede b{color:var(--fg);font-weight:600}
+  .hint{font-size:12px;color:var(--muted)}
+  .jump{display:none;color:var(--brand);font-weight:600;min-height:var(--tap);align-items:center}
+  @media (max-width:760px){.jump{display:inline-flex}}
+
+  .boxes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
+  @media (max-width:760px){.boxes{grid-template-columns:1fr}}
+  .box{border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:var(--bg)}
+  .box h3{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+  .box summary{cursor:pointer;min-height:var(--tap);display:flex;align-items:center;gap:6px;list-style:none}
+  .box summary::before{content:"▸";font-size:12px;color:var(--muted)}
+  .box[open] summary::before{content:"▾"}
+  .box summary h3{margin:0}
+  .box ul{padding-left:16px;font-size:13px;color:var(--soft)}
+  .box.this{background:var(--tint);border-color:#b5e3e8}.box.this h3{color:var(--brand)}
+  .box ul+h3{margin-top:10px}
+  .box.ctx{display:none}
+  @media (max-width:760px){.box.ctx{display:block}.box.wide{display:none}}
+
+  /* directions */
+  .dirs{display:grid;grid-template-columns:repeat(var(--nd,3),1fr);gap:14px;margin-top:14px}
+  @media (max-width:900px){.dirs{grid-template-columns:1fr}}
+  .dir{border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:#fff;display:flex;flex-direction:column}
+  .shot{display:block;width:100%;aspect-ratio:1440/900;overflow:hidden;background:var(--sec);border-bottom:1px solid var(--line);position:relative}
+  .shot img{width:100%;display:block}
+  .shot .zoom{position:absolute;right:8px;bottom:8px;background:#fffffff0;border:1px solid var(--line2);border-radius:6px;font-size:13px;padding:0 10px;font-weight:500;min-height:var(--tap);display:flex;align-items:center}
+  .shot:hover .zoom{border-color:var(--fg)}
+  .dir .meta{padding:12px 14px 14px;display:flex;flex-direction:column;gap:6px;flex:1}
+  .dir .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .dir .name{font-weight:650}
+  .ovr{font-size:12px;color:var(--muted)}.ovr b{font-size:16px;color:var(--fg)}
+  .rec{font-size:12px;font-weight:600;color:var(--brand);border:1px solid var(--brand);border-radius:999px;padding:0 8px}
+  .dir dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:13px;margin-top:2px}
+  .dir dt{color:var(--muted)} .dir dd{color:var(--soft)}
+  .links{display:flex;flex-wrap:wrap;gap:0 16px;margin-top:2px}
+  .linkbtn{font-size:13px;color:var(--brand);font-weight:500;text-decoration:underline;text-underline-offset:2px;min-height:var(--tap);display:inline-flex;align-items:center}
+
+  /* per-screen picks */
+  .screen{border-top:1px solid var(--line);padding-top:16px;margin-top:16px}
+  .screen:first-of-type{border-top:0;margin-top:8px}
+  .shead{display:flex;align-items:baseline;gap:4px 10px;flex-wrap:wrap}
+  .shead .clear{margin-left:auto}
+  .snum{font-size:12px;font-weight:600;color:var(--muted)}
+  .chip{font-size:12px;border-radius:999px;padding:1px 8px;border:1px solid var(--line2);color:var(--soft);background:#fff}
+  .picks{display:grid;grid-template-columns:repeat(var(--np,3),1fr);gap:12px;margin-top:10px;border:0;padding:0;min-width:0}
+  @media (max-width:760px){.picks{grid-template-columns:1fr;gap:8px}}
+  #screens.over .shot{opacity:.45}
+  .overnote{margin-top:12px;background:var(--sec);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--soft)}
+  .pick{border:1.5px solid var(--line2);border-radius:10px;overflow:hidden;background:#fff;display:flex;flex-direction:column;text-align:left}
+  .pick:has(input:checked){border-color:var(--fg);box-shadow:0 0 0 1.5px var(--fg)}
+  .pick .shot{aspect-ratio:1440/820}
+  .pick .cap{padding:10px 12px 12px;display:flex;gap:10px;align-items:flex-start;cursor:pointer;flex:1}
+  .pick .cap:hover{background:var(--bg)}
+  .cap input{width:18px;height:18px;flex:none;margin:2px 0 0;accent-color:var(--fg);cursor:inherit}
+  .cap .t{font-size:13px;font-weight:600}
+  .cap .d{font-size:12px;color:var(--muted)}
+  .clash{margin-top:12px;background:var(--warntint);color:var(--warn);border-radius:8px;padding:9px 12px;font-size:13px}
+  .quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  .ghost{border:1px solid var(--input);border-radius:8px;padding:6px 12px;font-size:13px;background:#fff;min-height:max(36px,var(--tap))}
+  .ghost[aria-pressed=true]{border-color:var(--fg);box-shadow:0 0 0 1px var(--fg);font-weight:500}
+  .ghost:disabled{color:var(--muted)}
+  textarea{width:100%;margin-top:12px;border:1px solid var(--input);border-radius:8px;padding:10px 12px;font:inherit;font-size:13px;resize:vertical;min-height:64px;color:var(--fg)}
+  textarea::placeholder{color:var(--muted)}
+  textarea:read-only{background:var(--sec)}
+
+  details.table summary{font-size:13px;font-weight:600;cursor:pointer;min-height:var(--tap);display:flex;align-items:center}
+  .tscroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;margin-top:10px;font-size:13px;min-width:560px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);font-weight:600}
+  td.n{font-variant-numeric:tabular-nums;font-weight:600}
+  tr.overall td{border-top:1.5px solid var(--fg);font-weight:650}
+
+  aside{position:sticky;top:16px;display:flex;flex-direction:column;gap:16px}
+  @media (max-width:1060px){aside{position:static}}
+  .watch{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .dot.off{background:var(--muted);box-shadow:0 0 0 3px var(--sec)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--oktint)}
+  .summary ul{padding:0;margin-top:8px}
+  .summary li{list-style:none;display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;align-items:center}
+  .summary li:last-child{border-bottom:0}
+  .summary .ph{width:56px;height:35px;flex:none;border-radius:4px;border:1px dashed var(--line2);background:var(--sec)}
+  .summary img{width:56px;height:35px;flex:none;object-fit:cover;object-position:top;border-radius:4px;border:1px solid var(--line);background:var(--sec)}
+  .summary .ans{color:var(--muted);font-size:12px}
+  .summary .ans.warn{color:var(--warn);font-weight:600}
+  .cta{width:100%;margin-top:14px;background:var(--fg);color:#fff;border:1px solid var(--fg);border-radius:8px;padding:10px 14px;font-weight:600;display:flex;justify-content:center;align-items:center;gap:8px;min-height:44px}
+  .cta:disabled{background:var(--sec);color:var(--muted);border-color:var(--line2)}
+  .cta.sent:disabled{background:var(--oktint);color:var(--ok);border-color:#9fd3b8;cursor:default}
+  .locked{margin-top:12px;display:flex;flex-wrap:wrap;align-items:center;gap:0 6px}
+  .locked .linkbtn{color:var(--ok)}
+  .cta kbd{font:12px "JetBrains Mono",monospace;opacity:.8}
+  @media (hover:none){.cta kbd{display:none}}
+  .status{margin-top:12px;border-radius:8px;padding:10px 12px;font-size:13px}
+  .status.wait{background:var(--warntint);color:var(--warn)}
+  .status.done{background:var(--oktint);color:var(--ok)}
+  .hist .item{font-size:13px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .hist .item:last-child{border-bottom:0}
+  .hist .when{font-size:12px;color:var(--muted)}
+
+  /* sticky send bar below the two-column width */
+  .sbar{display:none}
+  @media (max-width:1060px){
+    .sbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:5;background:#fff;border-top:1px solid var(--line2);padding:8px 14px calc(8px + env(safe-area-inset-bottom));gap:12px;align-items:center;justify-content:space-between}
+    .sbar .cta{width:auto;margin:0;flex:none}
+    body{padding-bottom:84px}
+  }
+
+  /* viewer: the canvas replacement. One bar on wide screens; on narrow ones the chips get their own row */
+  .viewer{position:fixed;inset:0;background:#221d33;display:none;flex-direction:column;z-index:10;color:#fff}
+  .viewer.open{display:flex}
+  .vbar{display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr) auto auto auto auto;grid-template-areas:"ttl chips help chat ctl close";align-items:center;gap:8px 12px;padding:8px 16px}
+  @media (max-width:1099px){.vbar{grid-template-columns:minmax(0,1fr) auto auto auto;grid-template-areas:"ttl ctl ctl close" "chips chips help chat"}#vchat,#vclose{justify-self:end}}
+  /* phone: wrapped rows (switch, overview, close / title, review / chips, help, chat) keep the board tall.
+     The flex-basis values force the line breaks; widening .ttl or .vchips puts two rows on one line. */
+  @media (max-width:699px){.vbar{display:flex;flex-wrap:wrap;align-items:center;padding:6px 12px;gap:4px 8px}
+    .vctl{order:1;margin-right:auto}#vzoom1{order:2}#vclose{order:3}.vbar .ttl{order:4;flex:1 1 60%;min-width:0}
+    .vchips{order:6;flex:1 1 calc(100% - 200px)}.vhelp{order:7}#vchat{order:8}}
+  @media (max-width:374px){#vswl{display:none!important}}
+  #vchat{grid-area:chat}
+  @media (max-width:1299px){#vchat .long{display:none}}
+  .vbar .ttl{grid-area:ttl;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:34vw}
+  @media (min-width:1100px) and (max-width:1299px){.vbar .ttl{max-width:22vw}.vchips{min-width:180px}}
+  @media (max-width:1099px){.vbar .ttl{max-width:none}}
+  @media (max-width:699px){.vbar .ttl{font-size:13px}}
+  .ttl .v2,.vchip .v2{font-size:12px;font-weight:700;background:#ffd8a8;color:var(--fg);border-radius:4px;padding:0 5px;margin-left:4px}
+  .vctl{grid-area:ctl;display:flex;gap:8px;align-items:center}
+  .vlab{font-size:12px;color:#ffffffcc}
+  #vswl{display:none;white-space:nowrap}
+  #vzoom1{grid-area:zoom1;justify-self:end}
+  @media (max-width:699px){#vswl{display:block}}
+  #vclose{grid-area:close}
+  .seg{display:flex;border:1px solid #ffffff55;border-radius:8px;overflow:hidden;flex:none}
+  .seg button{color:#fff;padding:0 12px;font-size:13px;min-height:max(36px,var(--tap));min-width:max(36px,var(--tap));white-space:nowrap}
+  .seg button+button{border-left:1px solid #ffffff33}
+  .seg button[aria-pressed=true]{background:#fff;color:var(--fg);font-weight:600}
+  .seg button:disabled{color:#ffffff66}
+  .vbtn{color:#fff;border:1px solid #ffffff55;border-radius:8px;padding:0 12px;font-size:13px;min-height:max(36px,var(--tap));min-width:max(36px,var(--tap));white-space:nowrap;flex:none}
+  .vbtn[aria-pressed=true]{background:#fff;color:var(--fg);font-weight:600}
+  .vbtn.primary{background:#fff;color:var(--fg);border-color:#fff;font-weight:600}
+  .vbtn.primary:disabled{background:#ffffff33;color:#fff;border-color:transparent}
+  .vbtn[aria-disabled=true]{color:#ffffff66;border-color:#ffffff33;cursor:not-allowed}
+  #vzoom1{display:none}
+  @media (max-width:699px){#vcmp,#vzoom{display:none}#vzoom1{display:block}}
+  .viewer :focus-visible{outline-color:#fff}
+  .vchips{grid-area:chips;display:flex;gap:8px;align-items:center;overflow-x:auto;white-space:nowrap;font-size:12px;color:#ffffffcc;min-width:0;scrollbar-width:thin}
+  .vchip{flex:none;color:var(--fg);background:#dcf4f6;border-radius:999px;padding:0 14px;font-size:13px;font-weight:600;min-height:var(--tap)}
+  .vchip .to{font-weight:400;color:var(--brand)}
+  .vhelp{grid-area:help;flex:none;font-size:12px;color:#ffffffcc}.vhelp summary{cursor:pointer;min-height:var(--tap);display:flex;align-items:center;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
+  .vhelp p{white-space:normal;position:absolute;right:12px;margin-top:4px;background:#fff;color:var(--fg);border-radius:8px;padding:10px 12px;z-index:3;max-width:min(560px,calc(100vw - 24px));font-size:13px}
+  .vtoast{position:absolute;left:50%;bottom:84px;transform:translateX(-50%);background:#fff;color:var(--fg);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:500;z-index:4;max-width:calc(100vw - 32px);box-shadow:0 6px 20px #0006}
+  .vstage{flex:1;position:relative;min-height:0;display:flex}
+  .vbody{flex:1;overflow:auto;padding:0 16px 16px;min-height:0;scrollbar-gutter:stable}
+  .vpan{position:absolute;top:0;right:0;bottom:16px;width:56px;pointer-events:none;background:linear-gradient(to right,#221d3300,#221d33cc)}
+  .vpan span{position:absolute;right:12px;bottom:12px;background:#fff;color:var(--fg);border-radius:999px;padding:4px 12px;font-size:13px;font-weight:600;white-space:nowrap;box-shadow:0 4px 14px #0006}
+  .vbox{position:relative;margin:0 auto}
+  .vframe{position:absolute;top:0;left:0;width:1440px;background:#fff;border-radius:6px;overflow:hidden;transform-origin:0 0}
+  .vframe iframe,.vframe img{display:block;border:0;width:1440px}
+  .vfoot{display:flex;gap:8px;align-items:center;padding:8px 16px calc(8px + env(safe-area-inset-bottom));border-top:1px solid #ffffff22}
+  .vcount{font-size:12px;color:#ffffffcc;flex:none;display:flex;gap:8px;align-items:center}
+  .vpicks{flex:1;display:flex;gap:8px;justify-content:center;align-items:center;min-width:0}.vpicks .vbtn{flex:1 1 0;max-width:320px;min-width:0;white-space:normal;line-height:1.15;padding-top:4px;padding-bottom:4px}
+  @media (max-width:699px){.vfoot{padding-left:12px;padding-right:12px}.vfoot{padding-top:6px;padding-bottom:calc(6px + env(safe-area-inset-bottom))}.viewer .long,.vcount{display:none}#vnext{order:4}#vprev,#vnext{padding:0}}
+  /* something else, threads, the viewer's side panel */
+  .pick.alt{grid-column:1/-1}
+  .pick.alt .cap{flex:none}
+  .otherbox{padding:0 12px 12px}.otherbox textarea{margin-top:0}
+  .shot .v2{position:absolute;left:8px;top:8px}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .tdet{margin-top:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+  .tdet summary{cursor:pointer;min-height:var(--tap);display:flex;align-items:center;gap:6px;padding:0 12px;font-size:13px;font-weight:600}
+  .tdet summary .tn{color:var(--muted);font-weight:400}
+  .tdet>.msgs,.tdet>.tform{padding:0 12px}.tdet>.tform{padding-bottom:12px}
+  .msgs{list-style:none;padding:0;display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;font-size:13px}
+  .msg{border-radius:8px;padding:8px 10px;max-width:88%;overflow-wrap:anywhere}
+  .msg.owner{align-self:flex-end;background:var(--sec)}
+  .msg.claude{align-self:flex-start;background:var(--tint)}
+  .msg .who{display:block;font-size:12px;font-weight:600;color:var(--muted)}
+  .msg.typing{color:var(--brand);font-style:italic}
+  .msgs .empty{font-size:12px;color:var(--muted)}
+  .msgs .stale{font-size:13px;border:1px dashed var(--muted);border-radius:8px;padding:8px 10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+  .msgs .redraw{font:inherit;font-weight:600;min-height:44px;padding:0 14px;border-radius:8px;border:0;background:var(--fg);color:#fff;cursor:pointer}
+  .msg .ghost{margin-top:6px;border-color:var(--muted);display:inline-flex;align-items:center;gap:4px;font-weight:600}
+  .tform textarea{min-height:56px;margin-top:8px}
+  .tform .ghost{margin-top:8px}
+  .tform .row2{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+  .vstage{min-width:0}
+  .vdraw{flex:none;width:360px;background:#fff;color:var(--fg);display:flex;flex-direction:column;gap:10px;padding:12px 16px 16px;overflow-y:auto;border-radius:8px 0 0 0}
+  .vdraw :focus-visible{outline-color:var(--brand)}
+  .vdraw h3{font-size:14px;font-weight:650}
+  .vdhead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .vdraw .msgs{max-height:none;flex:1}
+  .vdraw .cta{margin-top:10px}
+  .vstage:has(.vdraw:not([hidden])) .vpan{right:360px}
+  @media (max-width:999px){
+    .vdraw{position:absolute;left:0;right:0;bottom:0;width:auto;max-height:75%;border-radius:12px 12px 0 0;box-shadow:0 -8px 24px #0006;z-index:5}
+    .vstage:has(.vdraw:not([hidden])) .vpan{right:0}
+  }
+  @media (max-width:699px){
+    .vpicks .vbtn{padding-left:6px;padding-right:6px;min-width:min-content}
+    .vfoot,.vpicks{gap:6px}#vdone{padding:0 6px}
+    .vcount:has(#vdone:not([hidden])){display:flex;order:3}#vcount{display:none}
+  }
+  /* compare: one header per pane, holding that board's name, its pick and a 100% view */
+  .vph{position:absolute;display:flex;align-items:center;gap:8px;height:56px;padding-bottom:8px;min-width:0}
+  .vph .n{flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vph .vbtn.primary{white-space:nowrap}
+  .vchips.more{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 48px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 48px),transparent)}
+  /* after .pick so it wins: one row per option on narrow screens */
+  @media (max-width:760px){.pick:not(.alt){flex-direction:row}.pick .shot{width:42%;flex:none;align-self:center;border-bottom:0;border-right:1px solid var(--line)}.pick .shot .zoom{right:4px;bottom:4px;padding:0 8px;font-size:12px}.pick .cap{padding:8px 10px}}
+</style>
+</head>
+<body>
+
+<p class="wrap hint" id="boot" style="padding-top:24px" role="status">Loading the round…</p>
+<div id="fail" class="wrap" style="padding-top:24px" hidden><div class="card pad"><h2>This round could not be loaded</h2><p class="lede">The page could not read its <span class="mono">round.json</span>. Reload the page. If it still fails, ask Claude to publish the round again.</p></div></div>
+
+<div id="app" hidden>
+<header class="top"><div class="wrap">
+  <div class="proj" id="proj"></div>
+  <nav aria-label="Rounds"><ol class="steps" id="steps"></ol></nav>
+</div></header>
+
+<main class="wrap grid">
+<div class="stack">
+  <section class="card pad">
+    <div class="eyebrow" id="eyebrow"></div>
+    <h1 id="title"></h1>
+    <p class="lede" id="lede"></p>
+    <div class="quick"><button class="cta" style="width:auto;margin:0" id="tryfirst">Try the screens</button><a class="jump" href="#picks">Jump to the picks ↓</a></div>
+    <div class="boxes" id="boxes"></div>
+  </section>
+
+  <section class="card pad">
+    <h2 id="dirsh">The directions</h2>
+    <div class="dirs" id="dirs"></div>
+    <details class="table" style="margin-top:16px" data-open-from="1061" id="scores" hidden>
+      <summary>Compare on the fixed criteria</summary>
+      <div class="tscroll"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+      <p class="hint" style="margin-top:8px" id="snote"></p>
+    </details>
+  </section>
+
+  <section class="card pad" id="picks">
+    <h2>Pick per screen</h2>
+    <p class="hint" style="margin-top:2px" id="pickhint"></p>
+    <div class="quick">
+      <button class="ghost" id="allB" hidden></button>
+      <button class="ghost" id="none" aria-pressed="false">None of these: research again</button>
+    </div>
+    <p class="status done locked" id="locked" role="status" hidden>Picks locked. <button class="linkbtn" id="change3">Change answers</button> to edit them.</p>
+    <p class="overnote" id="overnote" hidden>You chose “None of these”. Your picks are kept, but only “research again” is sent.</p>
+    <div id="screens"></div>
+    <textarea id="note" aria-label="Notes for Claude" placeholder="Anything to change in what you picked? Quoted word for word in the round plan."></textarea>
+  </section>
+</div>
+
+<aside>
+  <section class="card pad summary">
+    <div class="watch"><span class="dot off" id="dot"></span><span id="watchtxt">Connecting…</span></div>
+    <h2 style="margin-top:10px">Your answers</h2>
+    <ul id="sum"></ul>
+    <button class="cta" id="send" disabled><span></span> <kbd>⌘↩</kbd></button>
+    <p class="hint" id="why" style="margin-top:8px" role="status"></p>
+    <p class="hint" id="partial" style="margin-top:8px" hidden></p>
+    <button class="ghost" id="change" style="width:100%;margin-top:8px" hidden>Change answers</button>
+    <div class="status wait" id="wait" role="status" hidden>Sent. Claude will pick it up within 10 seconds.</div>
+    <div class="status done" id="done" role="status" hidden></div>
+  </section>
+  <section class="card pad hist">
+    <h2 style="font-size:14px">Decisions so far</h2>
+    <div id="decisions"></div>
+  </section>
+</aside>
+</main>
+</div>
+
+<div class="sr" id="live" aria-live="polite"></div>
+<div class="sbar" id="sbar">
+  <div><b id="sbn" style="font-size:13px"></b><div class="hint" id="sbh"></div></div>
+  <button class="cta" id="send2" disabled>Send</button>
+</div>
+
+<div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-labelledby="vttl">
+  <div class="vbar">
+    <h2 class="ttl" id="vttl" tabindex="-1"></h2>
+    <div class="vchips" id="vchips"></div>
+    <details class="vhelp"><summary>What's clickable</summary><p id="vhelptext"></p></details>
+    <div class="vctl">
+      <span class="vlab" id="vswl" aria-hidden="true">Direction</span>
+      <div class="seg" id="vseg" role="group" aria-label="Direction"></div>
+      <div class="seg" id="vwith" role="group" aria-label="Which boards side by side" hidden></div>
+      <div class="seg" id="vzoom" role="group" aria-label="Zoom"><button data-z="fit">Fit</button><button data-z="0.75">75%</button><button data-z="1">100%</button></div>
+      <button class="vbtn" id="vcmp" aria-pressed="false">Compare</button>
+    </div>
+    <button class="vbtn" id="vzoom1" aria-pressed="false">Overview</button>
+    <button class="vbtn" id="vchat" aria-expanded="false" aria-controls="vdraw"></button>
+    <button class="vbtn" id="vclose" aria-label="Close">✕<span class="long"> Close</span></button>
+  </div>
+  <div class="vstage"><div class="vbody" id="vbody"><div class="vbox" id="vbox"></div></div><div class="vpan" id="vpan" hidden><span id="vpanl">More to the right →</span></div>
+    <section class="vdraw" id="vdraw" aria-labelledby="vdrawh" hidden>
+      <div class="vdhead"><h3 id="vdrawh" tabindex="-1"></h3><button class="ghost" id="vdrawx">Hide<span class="sr"> panel</span></button></div>
+      <div id="vdother">
+        <label class="hint" for="vothert" id="votherl"></label>
+        <textarea class="othert" id="vothert" placeholder="For example: B's layout with A's tabs"></textarea>
+        <p class="hint" id="vothererr" role="status"></p>
+        <button class="cta" id="votherok"></button>
+      </div>
+      <div id="vdchat" style="display:flex;flex-direction:column;gap:8px;flex:1;min-height:0">
+        <ol class="msgs" id="vmsgs" aria-live="polite"></ol>
+        <form class="tform" id="vtform"></form>
+      </div>
+    </section></div>
+  <div class="vtoast" id="vtoast" role="status" hidden></div>
+  <div class="vfoot">
+    <div class="vcount"><span id="vcount"></span> <button class="vbtn" id="vdone" hidden></button></div>
+    <button class="vbtn" id="vprev"></button>
+    <div class="vpicks" id="vpicks"></div>
+    <button class="vbtn" id="vnext"></button>
+  </div>
+</div>
+
+<script>
+/* round.json: everything the page draws. Board files: boards/<board>.html, thumbs/<board>.jpg, full/<board>.jpg,
+   where a direction's board for screen n is <key><n> (stop 0 is the concept board <key>0, stop N+1 the states board).
+   Stops are single digits, so at most 8 screens.
+   id        round id, the database path rounds/<id>
+   n, of     this round's number and the number of rounds, for "Round n of of"
+   steps     the labels in the header trail, shown as written ("R1 Start"); step n is the current one
+   project   {name, sub} shown top left
+   title, lede   the heading and the sentence under it; **word** is bold
+   decided, thisRound, next   the three lists (strings)
+   dirs      {<key>:{name, ovr, line, feels, pickIf, rec?}} ; keys are board prefixes of any length ("A", "PB")
+   order     the keys in display order
+   scores    {criteria:[str], rows:{<key>:[number per criterion]}, overall:{<key>:number}, note, max?=7}
+   screens   [{n, title, rev, opts:{<key>:str}, fixes:{<key>:number}}] ; rev is the reviewers' pick, as text
+   recommend {text, label?, picks:{"<n>":"<key>"}} ; text is shown under "Pick per screen", picks fill the button
+   heights   {<board>:px} board heights; a revision falls back to its base board's height
+   revisions {"<n>":[{key, board, desc?}]} ; extra options for screen n. board is the explicit board id (e.g. "B3v2");
+             the page reads the direction and suffix from it. key is informational.
+   decisions [{round, date, text}]
+   clashes   [{screens:[a,b], dir, text, short}] ; picking dir for one of the two screens and another direction for the
+             other warns. text may contain {other}, the board that clashes. short goes in the footer line.
+   concept   false when the round has no concept boards (stop 0 is skipped, no concept image on the cards)
+   research  false hides "None of these: research again" (an approval round)
+   One direction in order, and no scores, are fine: the page then reads as approve or say what to change.
+   helpExtra text added to the viewer's "What's clickable" help
+   Database (claude.use("db"), claude.use("user")):
+   rounds/<id>/answers/<uid>   written by Send: {picks:{<n>:{board}|{other}}, note, sentAt} or {answer:"research again", note, sentAt}
+   rounds/<id>/threads/<n>/msgs/<msgId>   {from:"owner"|"claude", kind?:"redraw", text, board?, sentAt}; msgId sorts by time.
+       A claude row with board adds that board as an option for screen n. Segments alternate collection/doc, so msgs sits
+       between the screen and the row.
+   rounds/<id>   {status:"open"|"handled"} written by Claude; handled locks the page.
+   A thread is stale when Claude's last row has no board. */
+let LO = 0, R, DIRS, SCREENS, H, ORDER, N, ID;
+const picks = {}, other = {}, revs = {}, tmap = {};
+let none = false, sent = false, phase = "", handled = false, writing = false, sendErr = "", conn = "connecting", db = null, uid = null;
+const $ = id => document.getElementById(id);
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
+const rich = t => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+const list = a => `<ul>${(a || []).map(x => `<li>${esc(x)}</li>`).join("")}</ul>`;
+
+// An option key is a direction key, or the board id of a revision. Board ids are <direction key><n><suffix>.
+const isDir = p => ORDER.includes(p);
+function parseId(id){
+  const k = [...ORDER].sort((a, b) => b.length - a.length).find(k => id.startsWith(k) && /\d/.test(id[k.length] || ""));
+  return k ? { dir: k, n: +id[k.length], suffix: id.slice(k.length + 1) } : null;
+}
+const revOf = p => Object.values(revs).flat().find(r => r.board === p);
+const baseOf = p => isDir(p) ? p : revOf(p)?.base ?? parseId(p)?.dir ?? p;
+const suffixOf = p => isDir(p) ? "" : revOf(p)?.suffix ?? parseId(p)?.suffix ?? "";
+const bid = (p, n) => isDir(p) ? p + n : p;
+const disp = (p, n) => baseOf(p) + n + (isDir(p) ? "" : " " + suffixOf(p));
+const badge = (p, n) => baseOf(p) + n + (isDir(p) ? "" : ` <span class="v2">${esc(suffixOf(p))}</span>`);
+const short = p => isDir(p) ? p : baseOf(p) + " " + suffixOf(p);
+const dname = p => isDir(p) ? esc(DIRS[p].name) : "Claude's redraw";
+const hOf = id => H[id] || H[(parseId(id)?.dir ?? "") + (parseId(id)?.n ?? "")] || 964;
+const optsAt = n => [...ORDER, ...(revs[n] || []).map(r => r.board)];
+function addRev(n, o){
+  const m = parseId(String(o.board || ""));
+  if (!m || m.n !== n || !m.suffix || !/^\w+$/.test(o.board) || optsAt(n).includes(o.board)) return false;
+  (revs[n] ||= []).push({ board: o.board, base: m.dir, suffix: m.suffix, desc: String(o.desc || `${m.dir}${n} redrawn from your chat`) });
+  return true;
+}
+const answered = n => picks[n] && (picks[n] !== "X" || !!(other[n] || "").trim());
+const answers = () => SCREENS.filter(s => answered(s.n)).length;
+const stopName = n => n === 0 ? "Concept" : n === N + 1 ? "States" : SCREENS[n - 1].title;
+const stopShort = n => n === 0 ? "Concept" : n === N + 1 ? "States" : `Screen ${n}`;
+const screenFor = text => { const t = text.toLowerCase(); return SCREENS.find(s => { const x = s.title.toLowerCase(); return x === t || x.startsWith(t + " "); }); };
+const dataOf = s => s == null ? null : s.data ? s.data() : s;
+const rowsOf = s => (s?.docs || (Array.isArray(s) ? s : s?.items) || []).map(d => ({ id: String(d.id), ...(dataOf(d) || {}) }));
+const live = () => conn === "live";
+const reason = () => conn === "connecting" ? "Connecting to Claude…" : "Sending is off: this page is not connected to Claude's database.";
+const nextWord = () => R.n < R.of ? `started round ${R.n + 1}` : "has everything it needs";
+
+function setup(r){
+  R = r; LO = r.concept === false ? 1 : 0; ID = r.id; SCREENS = r.screens; N = SCREENS.length; DIRS = r.dirs; ORDER = r.order; H = r.heights || {};
+  for (const [n, a] of Object.entries(r.revisions || {})) a.forEach(o => addRev(+n, o));
+  document.title = `${r.title} · ${r.project?.name || "Design process"}`;
+  $("proj").innerHTML = `${esc(r.project?.name)}<small>${esc(r.project?.sub)}</small>`;
+  $("steps").innerHTML = r.steps.map((s, i) => i === r.n - 1 ? `<li aria-current="step">${esc(s)}<span class="of"> · Round ${r.n} of ${r.of}</span></li>` : `<li>${esc(s)}</li>`).join("");
+  $("eyebrow").textContent = `Round ${r.n} · What you're choosing`;
+  $("title").textContent = r.title; $("lede").innerHTML = rich(r.lede);
+  $("tryfirst").dataset.open = ORDER[0] + "1";
+  $("boxes").innerHTML = `
+      <details class="box wide" data-open-from="761"><summary><h3>Already decided</h3></summary>${list(r.decided)}</details>
+      <div class="box this"><h3>Decided this round</h3>${list(r.thisRound)}</div>
+      <details class="box wide" data-open-from="761"><summary><h3>Next round</h3></summary>${list(r.next)}</details>
+      <details class="box ctx"><summary><h3>Context: decided before, next round</h3></summary><h3>Already decided</h3>${list(r.decided)}<h3>Next round</h3>${list(r.next)}</details>`;
+  const max = r.scores?.max || 7;
+  $("dirs").style.setProperty("--nd", Math.min(ORDER.length, 3)); $("screens").style.setProperty("--np", Math.min(ORDER.length, 3));
+  if (ORDER.length === 1) $("dirsh").textContent = "The direction";
+  $("none").hidden = r.research === false;
+  $("dirs").innerHTML = ORDER.map(k => { const d = DIRS[k]; return `
+  <article class="dir">
+    ${LO ? "" : `<button class="shot" data-open="${k}0" aria-label="Open the ${k} concept board, a picture"><img src="thumbs/${k}0.jpg" alt="" loading="lazy"><span class="zoom">Concept image ⤢</span></button>`}
+    <div class="meta">
+      <div class="row"><span class="name">${k} · ${esc(d.name)}</span>${d.rec ? '<span class="rec">Recommended</span>' : ""}</div>
+      <div class="ovr"><b>${esc(d.ovr)}</b>/${max} overall</div>
+      <dl><dt>In a line</dt><dd>${esc(d.line)}</dd><dt>Feels like</dt><dd>${esc(d.feels)}</dd><dt>Pick it if</dt><dd>${esc(d.pickIf)}</dd></dl>
+      <div class="links"><button class="linkbtn" data-open="${k}1">Try ${k} from screen 1</button><button class="linkbtn" data-open="${k}${N + 1}">States board (${k}${N + 1})</button></div>
+    </div>
+  </article>`; }).join("");
+  if (r.scores) {
+    $("scores").hidden = false;
+    $("thead").innerHTML = `<tr><th></th>${ORDER.map(k => `<th>${k} · ${esc(DIRS[k].name)}</th>`).join("")}</tr>`;
+    $("tbody").innerHTML = r.scores.criteria.map((c, i) => `<tr><td>${esc(c)}</td>${ORDER.map(k => `<td class="n">${esc(r.scores.rows[k][i])}</td>`).join("")}</tr>`).join("")
+      + `<tr class="overall"><td>Overall /${max}</td>${ORDER.map(k => `<td class="n">${esc(r.scores.overall[k])}</td>`).join("")}</tr>`;
+    $("snote").textContent = r.scores.note || "";
+  }
+  const pk = ORDER.length > 1 ? ORDER.slice(0, -1).join(", ") + " or " + ORDER.at(-1) : ORDER[0];
+  $("pickhint").textContent = (ORDER.length > 1 ? `Try each screen, then pick ${pk} below it. ` : "Try each screen, then approve it, or say what to change under Something else. ") + (r.recommend?.text || "");
+  $("pickhint").textContent = $("pickhint").textContent.trim();
+  if (ORDER.length < 2) $("vcmp").hidden = true;
+  if (r.recommend?.picks) { $("allB").hidden = false; $("allB").textContent = r.recommend.label || "Take the recommendation"; }
+  $("decisions").innerHTML = (r.decisions || []).length
+    ? r.decisions.map(d => `<div class="item"><div class="when">${esc(d.date)} · ${esc(d.round)}</div>${esc(d.text)}</div>`).join("")
+    : `<p class="hint" style="margin-top:6px">None yet. Each round's picks and your notes will be listed here, with the date.</p>`;
+  $("vhelptext").textContent = "Every screen is a live prototype. Tabs switch (arrow keys too) and text fields take typing. The live buttons are listed as chips and outlined inside the board on touch screens; other buttons say they are not wired. "
+    + (r.helpExtra ? r.helpExtra + " " : "") + `Switch ${ORDER.join(", ")} to compare: your place and typing are kept. Keyboard: ← → switch direction, Esc closes (in a text field, the first Esc leaves the field).`;
+  $("screens").innerHTML = SCREENS.map(s => `
+  <div class="screen">
+    <div class="shead"><span class="snum">Screen ${s.n} of ${N}</span><h2 id="h${s.n}">${esc(s.title)}</h2><span class="chip">Reviewers pick ${esc(s.rev)}</span><button class="linkbtn clear" data-s="${s.n}" hidden>Clear pick</button></div>
+    <div class="picks" role="radiogroup" aria-labelledby="h${s.n}" data-s="${s.n}">${picksHTML(s)}
+    </div>
+    ${(r.clashes || []).map((c, i) => c.screens[0] === s.n ? `<div class="clash" role="status" data-c="${i}" hidden></div>` : "").join("")}
+    <details class="tdet" data-s="${s.n}"><summary>Chat with Claude about screen ${s.n} <span class="tn"></span></summary>
+      <ol class="msgs" data-s="${s.n}" aria-live="polite" aria-label="Chat about screen ${s.n}"></ol>
+      <form class="tform" data-s="${s.n}">${formHTML(s.n)}</form>
+    </details>
+  </div>`).join("");
+  document.querySelectorAll("[data-open-from]").forEach(d => d.open = innerWidth >= +d.dataset.openFrom);
+  $("send").lastElementChild.textContent = MAC ? "⌘↩" : "Ctrl+↩";
+  $("boot").hidden = true; $("app").hidden = false;
+  SCREENS.forEach(s => drawThread(s.n));
+  render();
+}
+
+const optCard = (s, d, name, desc, extra) => `
+        <div class="pick">
+          <button class="shot" data-open="${esc(bid(d, s.n))}" aria-label="Open ${esc(disp(d, s.n))} full size to try it"><img src="thumbs/${esc(bid(d, s.n))}.jpg" data-fb="thumbs/${baseOf(d)}${s.n}.jpg" alt="" loading="lazy">${isDir(d) ? "" : `<span class="v2">${esc(suffixOf(d))}</span>`}<span class="zoom">Try it ⤢</span></button>
+          <label class="cap"><input type="radio" name="s${s.n}" value="${esc(d)}"><div><div class="t">${badge(d, s.n)} · ${name}</div><div class="d">${esc(desc)}</div>${extra ? `<div class="d">${extra}</div>` : ""}</div></label>
+        </div>`;
+const picksHTML = s => ORDER.map(k => optCard(s, k, esc(DIRS[k].name), s.opts[k], `Fixes ${esc(s.fixes[k])} findings`)).join("")
+  + (revs[s.n] || []).map(r => optCard(s, r.board, "Claude's redraw", r.desc, "From your chat")).join("") + `
+        <div class="pick alt">
+          <label class="cap"><input type="radio" name="s${s.n}" value="X"><div><div class="t">Something else…</div><div class="d">Say what you want instead, or what to mix.</div></div></label>
+          <div class="otherbox" hidden><textarea class="othert" data-s="${s.n}" aria-label="Something else for screen ${s.n}: what you want instead, or what to mix" placeholder="For example: B's layout with A's tabs"></textarea></div>
+        </div>`;
+const formHTML = (n, pre = "tf") => `<label class="sr" for="${pre}${n}">Message to Claude about screen ${n}</label><textarea id="${pre}${n}" rows="2" placeholder="Ask about this screen, or say what to change. Claude can redraw a board."></textarea>
+  <div class="row2"><span class="hint">${MAC ? "⌘↩" : "Ctrl+↩"} sends</span><button class="ghost" type="submit">Send message</button></div>`;
+// A thumbnail missing for a redraw falls back to its base board's.
+document.addEventListener("error", e => { const i = e.target; if (i.tagName === "IMG" && i.dataset.fb && !i.dataset.tried) { i.dataset.tried = 1; i.src = i.dataset.fb; } }, true);
+
+function setPick(s, k){ if (sent) return; if (k) picks[s] = k; else delete picks[s]; none = false; render(); }
+function clashTexts(){
+  return (R.clashes || []).map(c => {
+    const [a, b] = c.screens, pa = picks[a], pb = picks[b];
+    if (none || !pa || !pb || pa === "X" || pb === "X" || (baseOf(pa) === c.dir) === (baseOf(pb) === c.dir)) return "";
+    return String(c.text).replace("{other}", baseOf(pa) === c.dir ? disp(pb, b) : disp(pa, a));
+  });
+}
+function syncForms(){
+  document.querySelectorAll(".tform textarea,.tform button,.redraw").forEach(e => e.disabled = !live());
+  document.querySelectorAll(".tform .hint").forEach(h => h.textContent = live() ? `${MAC ? "⌘↩" : "Ctrl+↩"} sends` : reason());
+}
+function render(){
+  document.querySelectorAll(".pick input").forEach(r => { r.checked = picks[r.name.slice(1)] === r.value; r.disabled = sent; });
+  document.querySelectorAll(".clear").forEach(b => b.hidden = sent || !picks[b.dataset.s]);
+  document.querySelectorAll(".otherbox").forEach(b => b.hidden = picks[b.firstElementChild.dataset.s] !== "X");
+  document.querySelectorAll(".othert").forEach(t => t.readOnly = sent);
+  $("screens").classList.toggle("over", none); $("overnote").hidden = !none;
+  $("none").setAttribute("aria-pressed", String(none));
+  $("allB").disabled = $("none").disabled = sent; $("note").readOnly = sent;
+  const clashes = clashTexts(), clashAt = clashes.findIndex(Boolean);
+  document.querySelectorAll(".clash").forEach(c => { const t = clashes[+c.dataset.c]; c.hidden = !t; c.textContent = t; });
+  $("dot").classList.toggle("off", !live());
+  $("watchtxt").textContent = live() ? "Claude is watching this round" : conn === "connecting" ? "Connecting…" : "Not connected";
+  $("sum").innerHTML = SCREENS.map(s => {
+    const k = picks[s.n];
+    const cl = (R.clashes || []).findIndex((c, i) => clashes[i] && c.screens.includes(s.n));
+    const warn = cl >= 0 ? `<div class="ans warn">Clashes with screen ${R.clashes[cl].screens.find(x => x !== s.n)}</div>` : "";
+    const o = (other[s.n] || "").trim(), sh = o.length > 60 ? o.slice(0, 58) + "…" : o;
+    const ans = none ? "Research again" : !k ? "Not picked" : k === "X" ? (o ? `Something else: “${esc(sh)}”` : "")
+      : `${badge(k, s.n)} · ${dname(k)}`;
+    const empty = !none && k === "X" && !o ? `<div class="ans warn">Something else: say what, or it is not sent</div>` : "";
+    return `<li>${k && k !== "X" && !none ? `<img src="thumbs/${esc(bid(k, s.n))}.jpg" data-fb="thumbs/${baseOf(k)}${s.n}.jpg" alt="">` : `<span class="ph"></span>`}<div><div>${s.n} · ${esc(s.title)}</div>${ans ? `<div class="ans">${ans}</div>` : ""}${empty}${warn}</div></li>`;
+  }).join("");
+  const n = answers(), count = none ? N : n;
+  $("send").disabled = sent || count === 0 || !live(); $("send").classList.toggle("sent", sent); $("locked").hidden = !sent || phase === "done";
+  $("send").firstElementChild.textContent = sent ? "Sent ✓" : none ? "Send: research again" : `Send ${n} of ${N} to Claude`;
+  const why = sent ? "" : sendErr || (live() ? "" : reason());
+  $("why").textContent = why; $("why").hidden = !why;
+  const partial = !none && n > 0 && n < N ? "Screens you leave unpicked: Claude draws them again next round." : "";
+  $("partial").textContent = partial; $("partial").hidden = sent || !partial;
+  $("change").hidden = !sent || phase === "done";
+  $("send").lastElementChild.hidden = sent;
+  $("wait").hidden = phase !== "wait"; $("done").hidden = phase !== "done";
+  $("done").textContent = `Claude read your answers and ${nextWord()}. You can close this page.`;
+  $("sbn").textContent = sent ? "Sent ✓ · picks locked" : none ? "Research again" : `${n} of ${N} picked`;
+  $("sbh").textContent = phase === "wait" ? "Sent. Claude picks it up within 10 seconds." : phase === "done" ? `Claude ${nextWord()}. You can close this page.`
+    : !sent && !live() ? reason() : none ? "Claude will research new directions." : clashAt >= 0 ? R.clashes[clashAt].short || "Two screens clash." : partial ? "Unpicked screens get redrawn next round."
+    : n === N ? `All ${N} picked.` : "Try the screens, then pick under each one.";
+  $("send2").textContent = phase === "done" ? "Sent ✓" : sent ? "Change answers" : none ? "Send" : `Send ${n} of ${N}`;
+  $("send2").disabled = phase === "done" || !sent && (count === 0 || !live());
+  $("note").placeholder = none ? "What was missing? Quoted word for word in the round plan." : "Anything to change in what you picked? Quoted word for word in the round plan.";
+  if ($("live").textContent !== $("sbn").textContent) $("live").textContent = $("sbn").textContent;
+  $("send2").classList.toggle("ghost", sent); $("send2").classList.toggle("cta", !sent);
+  syncForms();
+  if ($("viewer").classList.contains("open")) drawViewer();
+}
+let lastKey = "";
+addEventListener("keydown", e => lastKey = e.key, true);
+addEventListener("pointerdown", () => lastKey = "", true);
+document.addEventListener("change", e => {
+  if (!e.target.matches(".pick input")) return;
+  setPick(+e.target.name.slice(1), e.target.value);
+  if (e.target.value === "X" && !lastKey.startsWith("Arrow")) document.querySelector(`.otherbox .othert[data-s="${e.target.name.slice(1)}"]`).focus();
+  const c = document.querySelector(".clash:not([hidden])");
+  if (c) c.scrollIntoView({ block: "nearest" });
+});
+document.addEventListener("click", e => {
+  const o = e.target.closest("[data-open]"); if (o) return openViewer(o.dataset.open);
+  const c = e.target.closest(".clear"); if (c) { delete picks[c.dataset.s]; render(); document.querySelector(`input[name=s${c.dataset.s}]`).focus(); }
+});
+$("allB").onclick = () => { for (const s of SCREENS) if (isDir(R.recommend.picks[s.n])) picks[s.n] = R.recommend.picks[s.n]; none = false; render(); };
+$("none").onclick = () => { none = !none; render(); if (none) $("note").focus(); };
+
+async function send(){
+  if (sent || writing || !live() || (!none && !answers())) return;
+  const note = $("note").value.trim(), sentAt = Date.now();
+  const doc = none ? { answer: "research again", note, sentAt } : { picks: Object.fromEntries(SCREENS.filter(s => answered(s.n))
+    .map(s => [s.n, picks[s.n] === "X" ? { other: other[s.n].trim() } : { board: bid(picks[s.n], s.n) }])), note, sentAt };
+  writing = true; sent = true; phase = handled ? "done" : "wait"; sendErr = ""; render();
+  try { await db.doc(`rounds/${ID}/answers/${uid}`).set(doc); }
+  catch { sent = false; phase = ""; sendErr = "Could not send your answers. Try again."; }
+  writing = false; render();
+}
+function unsend(){ if (handled) return; sent = false; phase = ""; render(); }
+$("send").onclick = send;
+$("change").onclick = $("change3").onclick = unsend;
+$("send2").onclick = () => sent ? unsend() : send();
+
+/* viewer: one iframe per board, kept once loaded so typed text and tab choices survive flips */
+const NARROW = 700;
+// A set is option keys joined by "+": every pair of directions, all of them, and each redraw with its base.
+const setsAt = n => [...ORDER.flatMap((a, i) => ORDER.slice(i + 1).map(b => a + "+" + b)), ...(ORDER.length > 2 ? [ORDER.join("+")] : []), ...(revs[n] || []).map(r => r.base + "+" + r.board)];
+const pairFor = (n, d) => setsAt(n).find(x => { const p = x.split("+"); return p.length === 2 && p.every(isDir) && p.includes(baseOf(d)); });
+const inSet = (set, d) => set.split("+").includes(baseOf(d));
+let drawMode = "", dirL = "", cmpSet = "", stop = 1, cmp = false, opener = null, scale = 1, needHead = true, panned = false, headX = 0, toastTimer = 0;
+let zoom = innerWidth < 1100 || matchMedia("(any-pointer:coarse)").matches ? 0.75 : "fit", zoomWas = zoom;
+const frames = {}, leads = {};
+const panes = () => cmp && innerWidth >= NARROW ? cmpSet.split("+") : [dirL];
+// The chip names a control, not its description: aria-label, else the first piece of text in it.
+const leadText = el => {
+  if (el.getAttribute("aria-label")) return el.getAttribute("aria-label").trim();
+  const w = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let t; (t = w.nextNode());) if (t.data.trim()) return t.data.replace(/\s+/g, " ").trim();
+  return el.dataset.goto;
+};
+function toast(t){ $("vtoast").textContent = t; $("vtoast").hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $("vtoast").hidden = true, 2400); }
+function frame(id){
+  if (frames[id]) return frames[id];
+  const f = document.createElement("div"); f.className = "vframe"; f.style.height = hOf(id) + "px";
+  if (parseId(id).n === 0) f.innerHTML = `<img src="full/${esc(id)}.jpg" alt="${esc(id)} concept board, an image">`;
+  else {
+    const i = document.createElement("iframe");
+    i.src = `boards/${id}.html`; i.title = `${id} board, clickable`; i.style.height = hOf(id) + "px";
+    i.addEventListener("load", () => {
+      const d = i.contentDocument, s = d.createElement("script");
+      s.src = new URL("proto.js", location.href).href; d.head.append(s);
+      i.contentWindow.addEventListener("keydown", onKey);
+      // Dead links leave the tab order; links named after a screen stay, since the page routes them.
+      d.querySelectorAll("a[href]:not([data-goto])").forEach(a => { if (!screenFor(a.textContent.replace(/\s+/g, " ").trim())) a.tabIndex = -1; });
+      leads[id] = [...d.querySelectorAll("[data-goto]")].map(el => ({ label: leadText(el), to: el.dataset.goto }));
+      if (panes().some(p => bid(p, stop) === id)) { note(); if (needHead && id === bid(panes()[0], stop)) toHead(); }
+    });
+    f.append(i);
+  }
+  $("vbox").append(f);
+  return frames[id] = f;
+}
+function toHead(){
+  const h = frames[bid(panes()[0], stop)]?.querySelector("iframe")?.contentDocument?.querySelector("h1");
+  if (zoom === "fit" || !h) { if (zoom === "fit") needHead = false; return; }
+  needHead = false;
+  scrollX0(Math.max(0, h.getBoundingClientRect().left * scale - 12));
+}
+// pan() tells a programmatic scroll (to the board's heading) from the owner panning by hand.
+function scrollX0(x){ headX = x; $("vbody").scrollTo(x, 0); }
+function openViewer(id){
+  const p = parseId(id); if (!p) return;
+  const opt = p.suffix ? id : p.dir;
+  const again = $("viewer").classList.contains("open");
+  if (again) { if (innerWidth < NARROW) drawMode = ""; show(opt, p.n); return $("vttl").focus(); }
+  opener = document.activeElement; dirL = opt; stop = p.n; needHead = true;
+  if (!inSet(cmpSet, dirL)) cmpSet = pairFor(stop, dirL);
+  for (const el of document.body.children) if (el !== $("viewer") && el !== $("live")) el.inert = true;
+  $("viewer").classList.add("open"); document.body.style.overflow = "hidden";
+  drawViewer(); $("vclose").focus();
+}
+function closeViewer(){
+  drawMode = "";
+  for (const el of document.body.children) el.inert = false;
+  $("viewer").classList.remove("open"); document.body.style.overflow = ""; opener?.focus();
+}
+function show(dir, n){
+  if (n !== stop) { needHead = true; scrollX0(0); }
+  dirL = optsAt(n).includes(dir) ? dir : baseOf(dir); stop = n;
+  if (!inSet(cmpSet, dir)) cmpSet = pairFor(n, dir);
+  drawViewer();
+}
+function setCmp(set){ cmpSet = set; if (!set.split("+").includes(dirL)) dirL = set.split("+")[0]; needHead = true; drawViewer(); }
+function go(from, to){
+  const p = parseId(to || ""), f = parseId(from);
+  if (!p || p.suffix || p.n < LO || p.n > N + 1 || to === from) return;
+  if (p.dir === f.dir && panes().length > 1) { needHead = true; stop = p.n; scrollX0(0); drawViewer(); }
+  else show(p.dir, p.n);
+  $("vttl").focus();
+}
+function drawViewer(){
+  if (!dirL) dirL = ORDER[0];
+  if (!cmpSet) cmpSet = pairFor(stop, dirL) || ORDER.join("+");
+  const sets = setsAt(stop);
+  if (!sets.includes(cmpSet)) cmpSet = pairFor(stop, dirL) || ORDER.join("+");
+  const ps = panes(), two = ps.length > 1, opts = optsAt(stop);
+  $("vttl").innerHTML = two ? `${ps.map(d => badge(d, stop)).join(" vs ")} · ${esc(stopName(stop))}` : `${badge(dirL, stop)} · ${isDir(dirL) ? dname(dirL) : "Claude's redraw of " + baseOf(dirL) + stop} · ${esc(stopName(stop))}${stop === 0 ? " (image)" : ""}`;
+  $("vseg").hidden = $("vswl").hidden = two || opts.length < 2;
+  if (opts.length > 3 && innerWidth < 400) $("vswl").hidden = true;
+  if ($("vseg").dataset.opts !== opts.join()) { $("vseg").dataset.opts = opts.join(); $("vseg").innerHTML = opts.map(d => `<button data-dir="${esc(d)}"></button>`).join(""); }
+  $("vseg").querySelectorAll("button").forEach(b => {
+    const d = b.dataset.dir, picked = !none && picks[stop] === d, name = short(d);
+    b.textContent = name + (picked ? " ✓" : ""); b.setAttribute("aria-label", name + (picked ? ", picked" : ""));
+    b.setAttribute("aria-pressed", String(d === dirL));
+  });
+  $("vwith").hidden = !two;
+  if ($("vwith").dataset.sets !== sets.join()) { $("vwith").dataset.sets = sets.join(); $("vwith").innerHTML = sets.map(x => `<button data-set="${esc(x)}">${x === ORDER.join("+") && ORDER.length > 2 ? "All " + ORDER.length : esc(x.split("+").map(short).join("+"))}</button>`).join(""); }
+  $("vwith").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.set === cmpSet)));
+  $("vcmp").setAttribute("aria-pressed", String(cmp));
+  $("vzoom").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.z === String(zoom))));
+  $("vzoom1").setAttribute("aria-pressed", String(zoom === "fit"));
+  const ends = [[$("vprev"), stop - 1, n => `‹<span class="long"> ${stopShort(n)}</span>`, "Previous"], [$("vnext"), stop + 1, n => `<span class="long">${stopShort(n)} </span>›`, "Next"]];
+  for (const [b, n, label, word] of ends) {
+    const off = n < LO || n > N + 1, first = word === "Previous";
+    b.setAttribute("aria-disabled", String(off));
+    b.innerHTML = off ? (first ? '‹<span class="long"> Start</span>' : '<span class="long">End </span>›') : label(n);
+    b.setAttribute("aria-label", off ? `${word}: none, this is the ${first ? "first" : "last"} board` : `${word}: ${stopName(n)}`);
+  }
+  const n = answers();
+  $("vcount").textContent = none ? "Research again chosen" : sent ? "Sent" : `${n} of ${N} picked`;
+  $("vcount").hidden = !sent && !none && n > 0;
+  const narrow = innerWidth < NARROW;
+  $("vdone").hidden = sent || none || n === 0; $("vdone").innerHTML = narrow ? `Review ${n}/${N}` : `Review answers · ${n} of ${N}`;
+  $("vpicks").innerHTML = stop < 1 || stop > N ? `<span class="vlab">Picks are for screens 1 to ${N}</span>`
+    : sent ? `<button class="vbtn primary" disabled>Sent: picks locked</button>`
+    : (two ? [] : ps).map(d => { const on = !none && picks[stop] === d, D = esc(disp(d, stop)); return `<button class="vbtn primary" data-pick="${esc(d)}" aria-pressed="${on}" aria-label="${on ? `${D} picked for screen ${stop}. Unpick` : `Pick ${D} for screen ${stop}`}">${on ? `✓ ${D}${narrow ? "" : " picked"} · Unpick` : two || narrow ? `Pick ${D}` : `Pick ${D} for screen ${stop}`}</button>`; }).join("")
+      + `<button class="vbtn" id="vother" aria-expanded="${drawMode === "other"}" aria-controls="vdraw">${!none && picks[stop] === "X" ? "✓ Something else" : "Something else…"}</button>`;
+  drawDraw(); drawChatBtn();
+  layout(); note();
+  if (needHead) toHead();
+  pan();
+}
+function layout(){
+  const ids = panes().map(d => bid(d, stop)), many = ids.length > 1;
+  const stacked = many && innerHeight > innerWidth, cols = stacked ? 1 : ids.length, gap = 16;
+  const w = $("vbody").clientWidth - 32, h = $("vbody").clientHeight - 16, head = many ? 56 : 0;
+  const fitW = Math.min(1, (w - gap * (cols - 1)) / cols / 1440);
+  const s = scale = zoom !== "fit" ? zoom : many ? fitW : Math.min(fitW, h / hOf(ids[0]));
+  for (const f of Object.values(frames)) f.hidden = true;
+  let x = 0, y = 0, W = 0, Hh = 0, heads = "";
+  panes().forEach((d, i) => {
+    const id = ids[i], f = frame(id); f.hidden = false;
+    f.style.transform = `scale(${s})`; f.style.left = x + "px"; f.style.top = y + head + "px";
+    if (many) {
+      const on = !none && picks[stop] === d, D = esc(disp(d, stop));
+      const pick = stop < 1 || stop > N || sent ? "" : `<button class="vbtn primary" data-pick="${esc(d)}" aria-pressed="${on}" aria-label="${on ? `${D} picked for screen ${stop}. Unpick` : `Pick ${D} for screen ${stop}`}">${on ? `✓ ${D} · Unpick` : `Pick ${D}`}</button>`;
+      heads += `<div class="vph" style="left:${x}px;top:${y}px;width:${1440 * s}px"><span class="n">${badge(d, stop)} · ${dname(d)}</span>${pick}<button class="vbtn" data-alone="${esc(d)}" aria-label="Show ${D} alone at 100%">100%</button></div>`;
+    }
+    const hh = hOf(id) * s + head;
+    W = Math.max(W, x + 1440 * s); Hh = Math.max(Hh, y + hh);
+    if (stacked) y += hh + gap; else x += 1440 * s + gap;
+  });
+  $("vbox").querySelectorAll(".vph").forEach(e => e.remove());
+  $("vbox").insertAdjacentHTML("beforeend", heads);
+  $("vbox").style.width = W + "px"; $("vbox").style.height = Hh + "px";
+}
+function pan(){
+  const b = $("vbody"), more = b.scrollWidth - b.clientWidth - b.scrollLeft > 4;
+  $("vpan").hidden = !more; $("vpanl").hidden = panned;
+}
+$("vbody").addEventListener("scroll", () => { if (Math.abs($("vbody").scrollLeft - headX) > 4) panned = true; pan(); }, { passive: true });
+function note(){
+  const ps = panes(), many = ps.length > 1, out = [];
+  for (const d of ps) {
+    const id = bid(d, stop), l = leads[id], who = many ? `${id}:` : "", b = baseOf(d);
+    if (stop === 0) out.push(`<span>${esc(who)} Concept image, not clickable.</span>`, `<button class="vchip" data-from="${esc(id)}" data-to="${b}1">Start the flow <span class="to">→ ${b}1</span></button>`);
+    else if (l === undefined) out.push(`<span>${esc(who)} Loading…</span>`);
+    else if (l.length) out.push(`<span>${esc(who) || "Try:"}</span>`, ...l.map(x => `<button class="vchip" data-from="${esc(id)}" data-to="${esc(x.to)}">${esc(x.label)} <span class="to">→ ${esc(x.to)}</span></button>`));
+    else if (stop === N + 1) out.push(`<span>${esc(who)} States board: each frame is one state of a screen.</span>`);
+    else out.push(`<span>${esc(who)} End of the flow: pick it, or see the States board.</span>`, `<button class="vchip" data-from="${esc(id)}" data-to="${b}${N + 1}">States <span class="to">→ ${b}${N + 1}</span></button>`);
+  }
+  $("vchips").innerHTML = out.join("");
+  chipFade();
+}
+function chipFade(){ const c = $("vchips"); c.classList.toggle("more", c.scrollWidth - c.clientWidth - c.scrollLeft > 2); }
+$("vchips").addEventListener("scroll", chipFade, { passive: true });
+function onKey(e){
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && e.target.closest?.(".tform")) { e.preventDefault(); return postMsg(e.target.closest(".tform")); }
+  if (!$("viewer").classList.contains("open")) { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send(); } return; }
+  const field = e.target.closest?.("input,textarea,select,[contenteditable]");
+  if (e.key === "Escape") { if (field) { e.preventDefault(); return $("vdraw").contains(field) ? $("vdrawh").focus() : field.blur(); } return drawMode ? closeDraw() : closeViewer(); }
+  if (field || e.target.closest?.("[role=tab]")) return;
+  if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+  e.preventDefault();
+  const inBoard = e.target.ownerDocument !== document || document.activeElement?.tagName === "IFRAME";
+  const step = e.key === "ArrowRight" ? 1 : -1;
+  if (panes().length > 1) { const S = setsAt(stop); setCmp(S[(S.indexOf(cmpSet) + step + S.length) % S.length]); }
+  else { const o = optsAt(stop); show(o[(o.indexOf(dirL) + step + o.length) % o.length], stop); }
+  if (inBoard) frames[bid(panes()[0], stop)].querySelector("iframe")?.focus();
+}
+document.addEventListener("keydown", onKey);
+addEventListener("message", e => {
+  if (e.origin !== location.origin || !e.data?.proto || !$("viewer").classList.contains("open")) return;
+  const from = Object.keys(frames).find(id => frames[id].querySelector("iframe")?.contentWindow === e.source);
+  if (!from) return;
+  if (e.data.dead !== undefined) return toast(`“${e.data.dead || "This button"}” is not wired in this prototype.`);
+  let to = e.data.goto;
+  if (e.data.link) { const s = screenFor(e.data.link); to = s && parseId(from).dir + s.n; if (!to) return toast(`“${e.data.link}” is not wired in this prototype.`); }
+  go(from, to);
+});
+$("vchips").onclick = e => { const b = e.target.closest("[data-to]"); if (b) go(b.dataset.from, b.dataset.to); };
+$("vseg").onclick = e => { const b = e.target.closest("[data-dir]"); if (b) show(b.dataset.dir, stop); };
+$("vwith").onclick = e => { const b = e.target.closest("[data-set]"); if (b) setCmp(b.dataset.set); };
+$("vzoom").onclick = e => { const b = e.target.closest("[data-z]"); if (b) { zoom = b.dataset.z === "fit" ? "fit" : +b.dataset.z; needHead = true; drawViewer(); } };
+$("vzoom1").onclick = () => { zoom = zoom === "fit" ? 0.75 : "fit"; needHead = true; drawViewer(); };
+// Compare opens at Fit so every pane shows whole; turning it off brings back the zoom from before.
+$("vcmp").onclick = () => { cmp = !cmp; if (cmp) { zoomWas = zoom; zoom = "fit"; } else zoom = zoomWas; needHead = true; drawViewer(); };
+$("vbox").onclick = e => {
+  const a = e.target.closest("[data-alone]");
+  if (a) { cmp = false; dirL = a.dataset.alone; zoom = 1; needHead = true; drawViewer(); return $("vcmp").focus(); }
+  const b = e.target.closest(".vph [data-pick]"); if (!b) return;
+  const d = b.dataset.pick; setPick(stop, picks[stop] === d && !none ? null : d);
+  [...$("vbox").querySelectorAll(".vph [data-pick]")].find(x => x.dataset.pick === d)?.focus();
+};
+$("vprev").onclick = () => { if (stop > LO) show(dirL, stop - 1); };
+$("vnext").onclick = () => { if (stop < N + 1) show(dirL, stop + 1); };
+$("vpicks").onclick = e => {
+  if (e.target.closest("#vother")) return drawMode === "other" ? closeDraw() : openDraw("other");
+  const b = e.target.closest("[data-pick]"); if (!b) return;
+  const d = b.dataset.pick; setPick(stop, picks[stop] === d && !none ? null : d);
+  [...$("vpicks").querySelectorAll("[data-pick]")].find(x => x.dataset.pick === d)?.focus();
+};
+$("vdone").onclick = () => { closeViewer(); const t = innerWidth <= 1060 ? $("send2") : $("send"); t.scrollIntoView({ block: "center" }); t.focus(); };
+$("vclose").onclick = closeViewer;
+
+/* something else and threads: under each screen, and in the viewer's side panel */
+document.addEventListener("input", e => {
+  if (!e.target.matches(".othert")) return;
+  const at = t => t.id === "vothert" ? stop : +t.dataset.s, n = at(e.target);
+  other[n] = e.target.value; $("vothererr").textContent = "";
+  document.querySelectorAll(".othert").forEach(t => { if (t !== e.target && at(t) === n) t.value = other[n]; });
+  render();
+});
+document.addEventListener("submit", e => { if (e.target.matches(".tform")) { e.preventDefault(); postMsg(e.target); } });
+const msgHTML = m => `<li class="msg ${m.from}"><span class="who">${m.from === "owner" ? "You" : "Claude"}</span>${esc(m.text)}${m.board
+  ? `<br><button class="ghost" data-open="${esc(m.board)}">Try ${esc(baseOf(m.board) + m.n)} <span class="v2">${esc(suffixOf(m.board))}</span> ⤢</button>` : ""}</li>`;
+const threadOf = n => [...(tmap[n]?.values() || [])].sort((a, b) => a.id < b.id ? -1 : 1);
+// Appends rather than redraws, so the live region announces only the new message.
+function drawThread(n){
+  const t = threadOf(n), last = t.at(-1), lastClaude = t.findLast(m => m.from === "claude");
+  const reading = last?.from === "owner", stale = !!lastClaude && !lastClaude.board;
+  const sig = i => t.slice(0, i).map(m => m.id).join("|");
+  document.querySelectorAll(`.msgs[data-s="${n}"]`).forEach(ol => {
+    ol.querySelectorAll(".typing,.empty,.stale").forEach(x => x.remove());
+    const have = +(ol.dataset.n || 0);
+    if (have && (have > t.length || ol.dataset.sig !== sig(have))) { ol.innerHTML = ""; ol.dataset.n = 0; }
+    for (let i = +(ol.dataset.n || 0); i < t.length; i++) ol.insertAdjacentHTML("beforeend", msgHTML({ ...t[i], n }));
+    ol.dataset.n = t.length; ol.dataset.sig = sig(t.length);
+    ol.insertAdjacentHTML("beforeend", reading ? `<li class="msg claude typing">Claude is reading…</li>`
+      : stale ? `<li class="stale">The boards don't show this chat yet. <button type="button" class="redraw" data-s="${n}"${live() ? "" : " disabled"}>Redraw as a new option</button></li>`
+      : t.length ? "" : `<li class="empty">No messages yet. Ask about this screen or say what to change. Claude redraws a board when a change is clear; press Redraw any time to ask for one.</li>`);
+    ol.scrollTop = ol.scrollHeight;
+  });
+  document.querySelectorAll(`.tdet[data-s="${n}"] .tn`).forEach(x => x.textContent = t.length ? `· ${t.length} message${t.length > 1 ? "s" : ""}` : "");
+  if ($("viewer").classList.contains("open") && n === stop) drawChatBtn();
+}
+// Rows are untrusted: only owner and claude senders, a board only if it names this screen's direction.
+function ingest(n, rows){
+  const m = tmap[n] ||= new Map();
+  for (const r of rows) m.set(r.id, { id: r.id, from: r.from === "claude" ? "claude" : "owner", kind: r.kind, text: String(r.text ?? ""), board: typeof r.board === "string" ? r.board : "", sentAt: r.sentAt });
+  let ask = "", added = false;
+  for (const x of threadOf(n)) {
+    if (x.from === "owner" && !x.kind) ask = x.text;
+    if (x.from === "claude" && x.board) {
+      const q = ask.length > 50 ? ask.slice(0, 48) + "…" : ask, p = parseId(x.board);
+      if (p && addRev(n, { board: x.board, desc: `${p.dir}${n} redrawn from your chat: “${q}”` })) {
+        added = true;
+        document.querySelector(`.picks[data-s="${n}"] .pick.alt`).insertAdjacentHTML("beforebegin", optCard(SCREENS[n - 1], x.board, "Claude's redraw", revs[n].at(-1).desc, "From your chat"));
+      }
+      if (!p || p.n !== n || !p.suffix) x.board = "";
+    }
+  }
+  drawThread(n); if (added) render();
+}
+async function addOwner(n, extra, text){
+  if (!live()) return false;
+  const id = new Date().toISOString() + "-" + Math.random().toString(36).slice(2, 6), msg = { from: "owner", ...extra, text, sentAt: Date.now() };
+  (tmap[n] ||= new Map()).set(id, { id, ...msg }); drawThread(n);
+  try { await db.doc(`rounds/${ID}/threads/${n}/msgs/${id}`).set(msg); return true; }
+  catch { tmap[n].delete(id); drawThread(n); return false; }
+}
+async function postMsg(form){
+  const n = +form.dataset.s, ta = form.querySelector("textarea"), text = ta.value.trim();
+  if (!text) return ta.focus();
+  ta.value = "";
+  if (!await addOwner(n, {}, text)) { ta.value = text; form.querySelector(".hint").textContent = live() ? "Could not send. Try again." : reason(); }
+}
+document.addEventListener("click", e => { const b = e.target.closest(".redraw"); if (b) addOwner(+b.dataset.s, { kind: "redraw" }, "Redraw with these changes"); });
+function drawChatBtn(){
+  const c = threadOf(stop).length;
+  $("vchat").hidden = stop < 1 || stop > N;
+  $("vchat").innerHTML = `Chat<span class="long"> about screen ${stop}</span>${c ? ` · ${c}` : ""}`;
+  $("vchat").setAttribute("aria-expanded", String(drawMode === "chat"));
+}
+function drawDraw(){
+  if (stop < 1 || stop > N) drawMode = "";
+  $("vdraw").hidden = !drawMode;
+  if ($("vdraw").dataset.s !== String(stop) && stop >= 1 && stop <= N) {
+    $("vdraw").dataset.s = $("vmsgs").dataset.s = $("vtform").dataset.s = stop;
+    $("vmsgs").innerHTML = ""; $("vmsgs").dataset.n = 0; $("vmsgs").setAttribute("aria-label", `Chat about screen ${stop}`);
+    $("vtform").innerHTML = formHTML(stop, "vtf");
+    $("vothert").value = other[stop] || ""; $("vothererr").textContent = "";
+    drawThread(stop);
+  }
+  $("vdother").hidden = drawMode !== "other"; $("vdchat").hidden = drawMode !== "chat";
+  $("vdrawh").textContent = drawMode === "other" ? `Something else for screen ${stop}` : `Chat about screen ${stop}`;
+  $("votherl").textContent = `What do you want instead of ${optsAt(stop).map(d => disp(d, stop)).join(", ")}? Or what should be mixed?`;
+  $("vothert").readOnly = sent;
+  const on = !none && picks[stop] === "X";
+  $("votherok").textContent = sent ? "Sent: picks locked" : on ? `✓ Your answer for screen ${stop} · Unpick` : `Use this as my answer for screen ${stop}`;
+  $("votherok").disabled = sent;
+  syncForms();
+}
+function openDraw(mode){ drawMode = mode; drawViewer(); (mode === "chat" ? $("vtform").querySelector("textarea") : $("vothert")).focus(); }
+function closeDraw(){ const was = drawMode; drawMode = ""; drawViewer(); $(was === "chat" ? "vchat" : "vother")?.focus(); }
+$("vchat").onclick = () => drawMode === "chat" ? closeDraw() : openDraw("chat");
+$("vdrawx").onclick = closeDraw;
+$("votherok").onclick = () => {
+  if (!none && picks[stop] === "X") return setPick(stop, null);
+  if (!(other[stop] || "").trim()) { $("vothererr").textContent = "Write what you want first, then use it as your answer."; return $("vothert").focus(); }
+  setPick(stop, "X");
+};
+addEventListener("resize", () => { if ($("viewer").classList.contains("open")) drawViewer(); else chipFade(); });
+
+/* database: restore the owner's own answer, follow the round status and each screen's thread; one subscription each */
+function restore(d){
+  if (d.answer === "research again") none = true;
+  else for (const [k, v] of Object.entries(d.picks || {})) {
+    const n = +k; if (!(n >= 1 && n <= N) || !v) continue;
+    if (typeof v.other === "string") { picks[n] = "X"; other[n] = v.other; }
+    else if (typeof v.board === "string" && parseId(v.board)?.n === n) { const p = parseId(v.board); picks[n] = p.suffix ? v.board : p.dir; }
+  }
+  $("note").value = String(d.note ?? "");
+  sent = true; phase = handled ? "done" : "wait";
+  SCREENS.forEach(s => { const b = document.querySelector(`.othert[data-s="${s.n}"]`); if (b) b.value = other[s.n] || ""; });
+}
+async function connect(){
+  let timer = setTimeout(() => { conn = "off"; render(); }, 10000);
+  const off = () => { clearTimeout(timer); conn = "off"; render(); };
+  try {
+    db = await window.claude?.use("db"); const user = db && await window.claude.use("user");
+    uid = user ? await user.id() : null;
+  } catch { db = null; }
+  if (!db || !uid) return off();
+  let restored = false;
+  db.doc(`rounds/${ID}`).onSnapshot(s => {
+    handled = dataOf(s)?.status === "handled";
+    if (handled) { sent = true; phase = "done"; } else if (phase === "done") phase = "wait";
+    render();
+  }, off);
+  db.doc(`rounds/${ID}/answers/${uid}`).onSnapshot(s => {
+    clearTimeout(timer); conn = "live";
+    if (!restored) { restored = true; const d = dataOf(s); if (d && (d.picks || d.answer)) restore(d); }
+    render();
+  }, off);
+  SCREENS.forEach(s => db.collection(`rounds/${ID}/threads/${s.n}/msgs`).onSnapshot(c => ingest(s.n, rowsOf(c)), () => {}));
+}
+
+(async () => {
+  try {
+    const res = await fetch("round.json"); if (!res.ok) throw new Error(res.status);
+    setup(await res.json());
+  } catch { $("boot").hidden = true; $("fail").hidden = false; return; }
+  connect();
+})();
+</script>
+</body>
+</html>
