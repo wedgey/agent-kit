@@ -323,15 +323,59 @@ export function todoInputError(input: Record<string, unknown>): string | undefin
   return undefined
 }
 
+// Items are never dropped, so the total only grows when work is found; a call naming none of the last
+// list's items, or a new title, starts a new list.
 export function applyTodos(prev: TodoList | undefined, input: TodoInput, now: number): TodoList {
-  const items = input.items.map(({ content, status, note, ticket, lane }) => {
-    const startedAt = status === 'pending' ? undefined : (prev?.items.find(p => p.content === content)?.startedAt ?? (status === 'in_progress' ? now : undefined))
-    return { content, status, ...(note ? { note } : {}), ...(ticket ? { ticket } : {}), ...(lane ? { lane } : {}), ...(startedAt === undefined ? {} : { startedAt }) }
+  const label = (i: Pick<TodoItem, 'content' | 'ticket'>) => ticketOf(i).ticket?.label
+  const match = (base: readonly TodoItem[]) => {
+    const left = [...base]
+    const take = (is: (p: TodoItem) => boolean) => {
+      const at = left.findIndex(is)
+      return at < 0 ? undefined : left.splice(at, 1)[0]
+    }
+    const byText = input.items.map(i => take(p => p.content === i.content))
+    const pairs = input.items.map((i, n) => byText[n] ?? (label(i) ? take(p => label(p) === label(i)) : undefined))
+    return { pairs, left }
+  }
+  const isRetitled = Boolean(prev?.title && input.title && prev.title !== input.title)
+  let base = isRetitled ? [] : (prev?.items ?? [])
+  let { pairs, left } = match(base)
+  if (input.items.length > 0 && base.length > 0 && pairs.every(p => p === undefined)) ({ pairs, left } = match((base = [])))
+  const items: TodoItem[] = input.items.map(({ content, status, note, ticket, lane }, n) => {
+    const before = pairs[n]
+    const startedAt = status === 'pending' ? undefined : (before?.startedAt ?? (status === 'in_progress' ? now : undefined))
+    const isFound = before ? before.isFound : base.length > 0
+    return {
+      content,
+      status,
+      ...(note ? { note } : {}),
+      ...(ticket ? { ticket } : {}),
+      ...(lane ? { lane } : {}),
+      ...(startedAt === undefined ? {} : { startedAt }),
+      ...(isFound ? { isFound } : {}),
+    }
   })
   const title = input.title ?? prev?.title
   const link = input.link ?? prev?.link
-  return { ...(title ? { title } : {}), ...(link ? { link } : {}), items }
+  return { ...(title ? { title } : {}), ...(link ? { link } : {}), items: [...items, ...left], updatedAt: now }
 }
+
+// With lanes, the list is an epic: its ticket items are the scope, the rest is the orchestrator's own.
+export const hasLanes = (items: readonly Pick<TodoItem, 'lane'>[]) => items.some(i => i.lane)
+
+export function todoCounts(items: readonly Pick<TodoItem, 'content' | 'ticket' | 'lane' | 'status' | 'isFound'>[]) {
+  const scoped = hasLanes(items) ? items.filter(i => ticketOf(i).ticket) : items
+  const counted = scoped.filter(i => !i.isFound)
+  return { done: counted.filter(isSettled).length, total: counted.length, found: scoped.length - counted.length }
+}
+
+const isSettled = (i: Pick<TodoItem, 'status'>) => i.status === 'completed' || i.status === 'skipped'
+
+export const settleClosed = <T extends TodoItem>(items: readonly T[], closed: readonly string[], repo?: string): T[] =>
+  items.map(i => {
+    const href = ticketOf(i, repo).ticket?.href
+    return !isSettled(i) && href && closed.includes(href) ? { ...i, status: 'completed' as const, note: 'closed on GitHub' } : i
+  })
 
 export function currentItem(list: TodoList): TodoItem | undefined {
   const active = list.items.filter(i => i.status === 'in_progress')
@@ -344,7 +388,7 @@ export function groupTodos<T extends Pick<TodoItem, 'status'>>(items: readonly T
   return {
     now: items.filter(i => i.status === 'in_progress'),
     next: items.filter(i => i.status === 'pending'),
-    done: items.filter(i => i.status === 'completed' || i.status === 'skipped'),
+    done: items.filter(isSettled),
   }
 }
 
@@ -492,7 +536,10 @@ export function queueOutcome(what: string, out: { exitCode: number; stdout: stri
 export const cores = (pct: number): string => `${(Math.max(0, pct) / 100).toFixed(1)} cores`
 
 // Where a run is: its worktree's name, else its last folder.
-export const place = (cwd: string) => /\/\.worktrees\/([^/]+)/.exec(cwd)?.[1] ?? cwd.split('/').filter(Boolean).pop() ?? cwd
+export const place = (cwd: string) => /\/\.(?:claude\/)?worktrees\/([^/]+)/.exec(cwd)?.[1] ?? cwd.split('/').filter(Boolean).pop() ?? cwd
+
+// The agent whose `isolation: worktree` checkout a run is in.
+export const worktreeAgent = (cwd: string) => /\/\.claude\/worktrees\/agent-([^/]+)/.exec(cwd)?.[1]
 
 export function parseQueueStatus(stdout: string): QueueStatus | undefined {
   try {
@@ -551,7 +598,11 @@ export function parseBranch(stdout: string): BranchHealth | undefined {
 export function parseAgentsList(stdout: string): LaneEntry[] | undefined {
   try {
     const list: unknown = JSON.parse(stdout)
-    return Array.isArray(list) ? list.filter((e): e is LaneEntry => typeof e?.name === 'string' && typeof e.sessionId === 'string') : undefined
+    if (!Array.isArray(list)) return undefined
+    return list
+      .filter((e): e is LaneEntry => typeof e?.name === 'string' && typeof e.sessionId === 'string')
+      // `claude agents --json` prints start times as ISO text.
+      .map(e => (typeof (e.startedAt as unknown) === 'string' ? { ...e, startedAt: Date.parse(e.startedAt as unknown as string) } : e))
   } catch {
     return undefined
   }
@@ -564,7 +615,8 @@ export const matchLane = (entries: readonly LaneEntry[], name: string) =>
   entries.filter(e => e.kind === 'background' && e.name === name).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]
 
 export function laneProgress(list: TodoList, repo?: string): LaneProgress {
-  const { now, next, done } = groupTodos(list.items)
+  const { now, next } = groupTodos(list.items)
+  const { done, total } = todoCounts(list.items)
   const first = next[0]
-  return { done: done.length, total: list.items.length, now: now.slice(0, 2).map(i => oneLine(todoTitle(i, repo))), ...(first ? { next: oneLine(todoTitle(first, repo)) } : {}) }
+  return { done, total, now: now.slice(0, 2).map(i => oneLine(todoTitle(i, repo))), ...(first ? { next: oneLine(todoTitle(first, repo)) } : {}) }
 }

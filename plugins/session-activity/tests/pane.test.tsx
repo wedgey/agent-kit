@@ -818,7 +818,7 @@ test('the todo list is kept in the store under the session, and a restart of tha
   quietHost(on, {}, [''], undefined, undefined, {}, { store, sessionId: 's1' })
   on('agent.list', () => ({ value: [] }))
   await writeTodos($, { title: 'feature', items: STEPS })
-  expect(store['todos:s1']).toEqual({ savedAt: 10 * DAY, todos: { title: 'feature', items: expect.any(Array) } })
+  expect(store['todos:s1']).toEqual({ savedAt: 10 * DAY, todos: { title: 'feature', items: expect.any(Array), updatedAt: 10 * DAY } })
   expect((store['todos:s1'] as { todos: { items: unknown[] } }).todos.items).toHaveLength(4)
 })
 
