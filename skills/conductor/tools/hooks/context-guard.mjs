@@ -117,7 +117,8 @@ const DELEGATE_ACTION =
   `Finish the edit in hand and run its check. Start no new stage. ` +
   `If you are a lane, push your branch and end your turn with a Context full report, per roles.md "Lanes". ` +
   `Otherwise end your turn with your report, and put what remains under OPEN.`;
-// The lane agent compacts at its autoCompactWindow, so it only gets here when one tool output jumps past the limit before that runs.
+// The lane agent compacts at its autoCompactWindow, so a turn that jumps past the limit from below it is one large output.
+// A lane already past the limit a turn earlier is not compacting, so it gets DELEGATE_ACTION and stops.
 const LANE_AGENT = "conductor:lane";
 const LANE_ACTION =
   `One tool output took you past it before your compaction could run. You compact in place, so go on with the step in hand. ` +
@@ -161,7 +162,7 @@ export function contextNote(input, env, read = readTail, memory = fileMemory()) 
   if (step < 0 || step <= last) return null;
   const note =
     `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. Every turn re-reads all of it. ` +
-    (own ? SESSION_ACTION : input.agent_type === LANE_AGENT ? LANE_ACTION : DELEGATE_ACTION);
+    (own ? SESSION_ACTION : input.agent_type === LANE_AGENT && band(before, limit) < 0 ? LANE_ACTION : DELEGATE_ACTION);
   return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note } };
 }
 

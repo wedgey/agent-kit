@@ -77,6 +77,11 @@ describe("the context guard, a PostToolUse and UserPromptSubmit hook for delegat
     expect(out).not.toMatch(/push your branch/);
   });
 
+  it("tells a lane agent still past the limit a turn later to report Context full, since its compaction is not running", () => {
+    const out = note(guard({ ...session([turn("m1", 125_000), result(), turn("m2", 175_000)]), agent_type: "conductor:lane" }, {}));
+    expect(out).toMatch(/push your branch.*Context full/);
+  });
+
   it("speaks again at each further step past the limit", () => {
     const mem = memory();
     expect(note(guard(session([turn("m1", 110_000), result(), turn("m2", 121_000)]), {}, mem))).toMatch(/121k/);
