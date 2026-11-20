@@ -406,15 +406,15 @@ async function runTurn($: Engine, agentId: string, model: string, effort: Effort
   await $.turn.complete({ turnId: `t-${agentId}`, agentId, answer, durationMs: 1, isAborted: false, reason: 'answer', usage })
 }
 
-test('a repo with no origin remote still shows its branch, though the branch script exits nonzero', async ($, on) => {
+test('a branch script killed partway shows no branch line rather than a partial one', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   quietHost(on, {}, [''], undefined, undefined, {}, {
-    sh: args => (args.join(' ').includes('rev-parse --abbrev-ref HEAD') ? { exitCode: 2, stdout: 'feat/x\norigin/main\n\n1\n' } : undefined),
+    sh: args => (args.join(' ').includes('rev-parse --abbrev-ref HEAD') ? { exitCode: 1, stdout: 'feat/x\norigin/main\n3\n' } : undefined),
   })
   on('agent.list', () => ({ value: [] }))
   await writeTodos($, { items: STEPS })
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /^feat\/x · 1 changed/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^feat\/x/ })).toBeUndefined()
 })
 
 test('the todos tool draws the list with its title, progress, branch and skipped reason', async ($, on) => {

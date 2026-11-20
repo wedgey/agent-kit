@@ -45,6 +45,7 @@ import {
   modelMatches,
   newChanges,
   parseBranch,
+  BRANCH_SCRIPT,
   agentName,
   groupTodos,
   pluginAgentPaths,
@@ -699,6 +700,9 @@ describe('delegates', () => {
 })
 
 describe('branch health', () => {
+  test('a missing origin remote cannot fail the branch script, whose exit code is its last command\'s', () => {
+    expect(BRANCH_SCRIPT).toMatch(/git remote get-url origin 2>\/dev\/null \|\| true$/)
+  })
   test('the branch script output reads as branch, trunk, behind and changed', () => {
     expect(parseBranch('feat/x\norigin/main\n3\n      2\n')).toEqual({ branch: 'feat/x', trunk: 'origin/main', behind: 3, changed: 2 })
     expect(parseBranch('feat/x\norigin/main\n\n0\n')).toEqual({ branch: 'feat/x', trunk: 'origin/main', changed: 0 })

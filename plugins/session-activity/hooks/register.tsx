@@ -328,7 +328,7 @@ async function refreshBranch($: $, now: number) {
   if (now - branchAt < BRANCH_EVERY_MS) return
   branchAt = now
   const out = await $.process.run(['sh', '-c', BRANCH_SCRIPT]).catch(() => undefined)
-  const health = out ? parseBranch(out.stdout) : undefined
+  const health = out?.exitCode === 0 ? parseBranch(out.stdout) : undefined
   if (!health) return
   if (prLookup?.branch !== health.branch || now - prLookup.at >= PR_EVERY_MS) {
     const pr = await $.process.run(['gh', 'pr', 'view', '--json', 'number', '-q', '.number'], { timeoutMs: GH_TIMEOUT_MS }).catch(() => undefined)
