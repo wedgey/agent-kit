@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { ShellTask } from '../types'
+import type { ShellTask, TodoItem } from '../types'
 
 import {
   isQueueReadDue,
@@ -452,12 +452,12 @@ describe('todos', () => {
   })
 
   test('an item whose ticket GitHub reports closed reads done, unless already settled', () => {
-    const items = [
+    const items: TodoItem[] = [
       { content: '#4 Fix', status: 'in_progress' },
       { content: 'Other', status: 'pending', ticket: 'o/x#5' },
       { content: '#6 Skip', status: 'skipped' },
       { content: '#7 Open', status: 'pending' },
-    ] as const
+    ]
     const closed = ['https://github.com/o/r/issues/4', 'https://github.com/o/x/issues/5', 'https://github.com/o/r/issues/6']
     expect(settleClosed(items, closed, 'o/r').map(i => [i.status, i.note])).toEqual([
       ['completed', 'closed on GitHub'],
