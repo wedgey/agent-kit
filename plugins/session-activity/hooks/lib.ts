@@ -601,7 +601,7 @@ export function queueHeader(status: QueueStatus): string {
 // BRANCH_SCRIPT's five lines: branch, trunk, commits behind trunk, changed files, origin's URL.
 export const BRANCH_SCRIPT =
   'b=$(git rev-parse --abbrev-ref HEAD) || exit 1; t=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null) || t=origin/main; ' +
-  'echo "$b"; echo "$t"; git rev-list --count "HEAD..$t" 2>/dev/null || echo; git status --porcelain | wc -l; git remote get-url origin 2>/dev/null'
+  'echo "$b"; echo "$t"; git rev-list --count "HEAD..$t" 2>/dev/null || echo; git status --porcelain | wc -l; git remote get-url origin 2>/dev/null || true'
 
 export function parseBranch(stdout: string): BranchHealth | undefined {
   const [branch, trunk, behind, changed, remote] = stdout.split('\n').map(l => l.trim())
