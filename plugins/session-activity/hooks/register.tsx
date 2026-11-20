@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentMetrics, AgentRow, HeavyQueue, LaneReading, Orphan, QueueHolder, QueueStatus, QueueWaiter, ShellTask, SpawnInfo, TodoItem, TodoList, TodoStatus, Verdict } from '../types'
+import type { AgentMetrics, AgentRow, ClosedAs, HeavyQueue, LaneReading, Orphan, QueueHolder, QueueStatus, QueueWaiter, ShellTask, SpawnInfo, TodoItem, TodoList, TodoStatus, Verdict } from '../types'
 import {
   agentName,
   applyTodos,
@@ -100,7 +100,7 @@ const queueNoteA = atom({ plugin: 'session-activity', key: 'queueNote' } as cons
 const queueOwnA = atom({ plugin: 'session-activity', key: 'queueOwn' } as const, [])
 const lanesA = atom({ plugin: 'session-activity', key: 'lanes' } as const, {})
 const agentTodosA = atom({ plugin: 'session-activity', key: 'agentTodos' } as const, {})
-const closedA = atom({ plugin: 'session-activity', key: 'closed' } as const, [])
+const closedAsA = atom({ plugin: 'session-activity', key: 'closedAs' } as const, {})
 
 // $.state lives as long as the process; a resumed session in a new process gets its todos back from here.
 const TODOS_KEY = 'todos:'
@@ -121,6 +121,8 @@ const LANE_ICON: Record<string, { glyph: string; color: string }> = {
   done: { glyph: '✓', color: 'success' },
   stopped: { glyph: '■', color: 'inactive' },
 }
+
+const LANE_ENDED = ['done', 'failed', 'stopped']
 
 const TODO_TOOL = 'todos'
 const TODO_TOOL_CALL = /^mcp__session-activity__todos$/
@@ -148,6 +150,7 @@ const TODO_DESCRIPTION = [
   'Keep an item\'s text as it was; to reword one, mark the old item skipped and add the new one.',
   'A subagent may call this too: its list shows as one line under its own row.',
   'An item whose ticket a background session (a lane) owns passes that session\'s name as `lane`.',
+  'For an epic, pass `epic: true` on the first call: only the ticket items count, and your own steps show apart.',
   '`title` heads the list (the kind of task, or the playbook it follows). `link` is the URL of the issue that holds the work state.',
 ].join(' ')
 const TODO_SCHEMA = {
@@ -155,6 +158,7 @@ const TODO_SCHEMA = {
   properties: {
     title: { type: 'string', description: 'Short heading, such as the playbook name' },
     link: { type: 'string', description: 'URL of the tracker issue for this work' },
+    epic: { type: 'boolean', description: 'True when the tickets are the work: only ticket items count, the rest are your own steps' },
     items: {
       type: 'array',
       items: {
@@ -321,8 +325,8 @@ async function refreshBranch($: $, now: number) {
   await update($, branchA, () => ({ ...health, ...(prLookup?.pr ? { pr: prLookup.pr } : {}) }))
 }
 
-// GitHub's issues endpoint answers for PRs too. Only a merged PR or an issue closed as completed is done;
-// a PR closed unmerged or an issue closed as not planned is not.
+// GitHub's issues endpoint answers for PRs too. A merged PR or an issue closed as completed is done, one closed
+// as not planned or a duplicate is skipped; a PR closed unmerged stays open, as it may be reopened or replaced.
 const TICKET_STATE = '[.state, .state_reason // "", .pull_request.merged_at // ""] | join(" ")'
 
 async function refreshTickets($: $, now: number) {
@@ -338,20 +342,21 @@ async function refreshTickets($: $, now: number) {
   const from = all.length > MAX_TICKET_READS ? ticketCursor % all.length : 0
   const hrefs = [...all.slice(from), ...all.slice(0, from)].slice(0, MAX_TICKET_READS)
   ticketCursor = from + hrefs.length
-  const closed: string[] = []
+  const closed: Record<string, ClosedAs> = {}
   const open: string[] = []
   const readOne = async (href: string) => {
     const [, repoName, n] = GITHUB_ISSUE.exec(href)!
     const out = await $.process.run(['gh', 'api', `repos/${repoName}/issues/${n}`, '--jq', TICKET_STATE], { timeoutMs: GH_TIMEOUT_MS }).catch(() => undefined)
     if (out?.exitCode !== 0) return
     const [state, reason, mergedAt] = out.stdout.trim().split(' ')
-    if (state === 'closed' && (reason === 'completed' || mergedAt)) closed.push(href)
+    const as = mergedAt ? 'completed' : reason
+    if (state === 'closed' && (as === 'completed' || as === 'not_planned' || as === 'duplicate')) closed[href] = as
     else if (state) open.push(href)
   }
   // A few at a time: the box is shared, and each read is a gh process.
   for (let at = 0; at < hrefs.length; at += 5) await Promise.all(hrefs.slice(at, at + 5).map(readOne))
   // A failed read keeps what was last read.
-  await update($, closedA, prev => [...new Set([...prev.filter(h => !open.includes(h)), ...closed])])
+  await update($, closedAsA, prev => ({ ...Object.fromEntries(Object.entries(prev).filter(([h]) => !open.includes(h))), ...closed }))
 }
 
 async function maybeOpen($: $) {
@@ -632,6 +637,7 @@ async function pollLanesOnce($: $, isForced: boolean) {
       next[name] = {
         state: oneLine(entry.state ?? entry.status ?? 'unknown'),
         sessionId: entry.sessionId,
+        ...(entry.cwd ? { cwd: entry.cwd } : {}),
         ...(entry.waitingFor ? { waitingFor: oneLine(entry.waitingFor) } : {}),
         ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
         ...(progress ? { progress } : {}),
@@ -701,8 +707,8 @@ async function refreshStatus($: $) {
   const words = parts.filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`)
   if (orphans.length > 0) words.push(`⚠ ${orphans.length} orphan${orphans.length === 1 ? '' : 's'}`)
   const repo = contextRepo(todos.link, branch.repo)
-  const items = settleClosed(todos.items, await read($, closedA), repo)
-  const { done, total } = todoCounts(items)
+  const items = settleClosed(todos.items, await read($, closedAsA), repo)
+  const { done, total } = todoCounts(items, todos.isEpic)
   const now = currentItem({ items })
   const step = todos.items.length > 0 ? `◆ ${done}/${total}${now ? ` ${todoTitle(now, repo)}` : ''}` : undefined
   const totals = queue ? queueTotals(queue) : undefined
@@ -876,14 +882,14 @@ export const register: Register = (on, options) => {
     if (agentId) {
       const all = await update($, agentTodosA, all => ({ ...all, [agentId]: applyTodos(all[agentId] ?? { items: [] }, e as unknown as TodoInput, now) }))
       const list = all[agentId]!
-      return { result: `Saved ${list.items.length} items, ${todoCounts(list.items).done} done. They show under your row in the session-activity pane.` }
+      return { result: `Saved ${list.items.length} items, ${todoCounts(list.items, list.isEpic).done} done. They show under your row in the session-activity pane.` }
     }
     await saveTodos($, await update($, todosA, prev => applyTodos(prev, e as unknown as TodoInput, now)))
     void maybeOpen($)
     await refreshBranch($, now)
     await refreshStatus($)
     const todos = await read($, todosA)
-    const { done } = todoCounts(todos.items)
+    const { done } = todoCounts(todos.items, todos.isEpic)
     return { result: `Saved ${todos.items.length} items, ${done} done. The user sees them in the session-activity pane.` }
   })
 
@@ -1060,8 +1066,9 @@ export const register: Register = (on, options) => {
       read($, queueOwnA),
       read($, lanesA),
       read($, agentTodosA),
-      read($, closedA),
+      read($, closedAsA),
     ])
+    const cwd = Object.keys(lanes).length > 0 ? await $.session.cwd() : undefined
     const queueCount = queue ? queueTotals(queue) : { busy: 0, waiting: 0 }
     const isQueueBusy = queueCount.busy + queueCount.waiting > 0
 
@@ -1125,7 +1132,7 @@ export const register: Register = (on, options) => {
 
     const repo = contextRepo(todos.link, branch.repo)
     const items = settleClosed(todos.items, closed, repo)
-    const isLaned = hasLanes(items)
+    const isLaned = Boolean(todos.isEpic) || hasLanes(items)
     const todoTexts = new Set(items.map(i => i.content))
     // A rename keeps the ticket, so an agent filed by ticket stays under its item.
     const ticketItems = new Map<string, string>()
@@ -1301,21 +1308,43 @@ export const register: Register = (on, options) => {
       const id = cwd === null ? undefined : worktreeAgent(cwd)
       return id === undefined ? undefined : { agent: agents.find(a => a.id === id || a.id.startsWith(id)) }
     }
-    const placeOf = (cwd: string) => {
-      const at = agentAt(cwd)
-      if (!at) return place(cwd)
-      return at.agent ? [spawns[at.agent.id]?.ticket, at.agent.type.split(':').pop()].filter(Boolean).join(' ') : 'other session'
+    // A lane in a checkout of its own owns the runs under it; one in or above this session's folder can't be told apart.
+    const isUnder = (path: string, dir: string) => path === dir || path.startsWith(`${dir}/`)
+    const isItemOpen = (i: TodoItem) => i.status === 'pending' || i.status === 'in_progress'
+    const laneAt = (runCwd: string | null) =>
+      runCwd === null
+        ? undefined
+        : items
+            .flatMap(item => {
+              const lane = item.lane !== undefined && Object.hasOwn(lanes, item.lane) ? lanes[item.lane] : undefined
+              const dir = lane && !lane.isMissing ? lane.cwd : undefined
+              return dir && !(cwd && isUnder(cwd, dir)) && isUnder(runCwd, dir) ? [{ item, dir }] : []
+            })
+            // A reused lane name: the open item owns the run, not the finished one.
+            .sort((a, b) => Number(isItemOpen(b.item)) - Number(isItemOpen(a.item)) || b.dir.length - a.dir.length)[0]?.item
+    const placeOf = (runCwd: string) => {
+      const at = agentAt(runCwd)
+      if (at?.agent) return [spawns[at.agent.id]?.ticket, at.agent.type.split(':').pop()].filter(Boolean).join(' ')
+      const laneItem = laneAt(runCwd)
+      if (laneItem) return `${ticketOf(laneItem, repo).ticket?.label ?? oneLine(laneItem.lane!)} lane`
+      return at ? 'other session' : place(runCwd)
+    }
+    const markOf = (runCwd: string | null) => {
+      const id = agentAt(runCwd)?.agent?.id
+      if (id) return id
+      const laneItem = laneAt(runCwd)
+      return laneItem ? `lane:${laneItem.lane}` : undefined
     }
     const where = (cwd: string | null, command: string | null) => (cwd === null && command === null ? '(process gone)' : `${cwd ? placeOf(cwd) : '?'} ${command ?? ''}`.trim())
     // What each of this session's agents holds or waits for in the queue, shown on its item.
     const queueMarks = new Map<string, string>()
     for (const q of queue?.queues ?? []) {
       for (const h of q.holders) {
-        const id = agentAt(h.cwd)?.agent?.id
+        const id = markOf(h.cwd)
         if (id) queueMarks.set(id, `⧗ ${q.name} slot${h.ageMs === null ? '' : ` · ${formatDuration(h.ageMs)}`}`)
       }
       ;[...q.waiters].sort((a, b) => a.rank - b.rank).forEach((w, i) => {
-        const id = agentAt(w.cwd)?.agent?.id
+        const id = markOf(w.cwd)
         if (id && !queueMarks.has(id)) queueMarks.set(id, `⧗ ${q.name} waiting #${i + 1}`)
       })
     }
@@ -1359,11 +1388,17 @@ export const register: Register = (on, options) => {
         {queueNote && <Text dimColor wrap="truncate-end">{queueNote}</Text>}
       </Box>
     )
-    const counts = todoCounts(items)
+    const counts = todoCounts(items, isLaned)
     const sinceUpdate = todos.updatedAt === undefined ? 0 : now - todos.updatedAt
     // An agent that ended after the last write means the list stopped being kept, not that nothing happens.
     // An agent first seen already ended (after a resume or "clear finished") carries no real end time.
-    const isStale = agents.some(a => a.endedAt !== undefined && a.endedAt > a.firstSeenAt && a.endedAt > (todos.updatedAt ?? now))
+    // So does a lane that has stopped while its item is still open.
+    const isStale =
+      agents.some(a => a.endedAt !== undefined && a.endedAt > a.firstSeenAt && a.endedAt > (todos.updatedAt ?? now)) ||
+      items.some(i => {
+        const lane = i.lane !== undefined && Object.hasOwn(lanes, i.lane) ? lanes[i.lane] : undefined
+        return isItemOpen(i) && lane !== undefined && !lane.isMissing && LANE_ENDED.includes(lane.state)
+      })
     const isBad = (a: AgentRow) =>
       a.status === 'failed' || (spawns[a.id]?.changedFiles ?? 0) > 0 || ['ISSUES', 'BLOCKED', 'FAIL'].includes(spawns[a.id]?.verdict ?? '')
 
@@ -1390,7 +1425,7 @@ export const register: Register = (on, options) => {
       const isOpen = item.status === 'in_progress' || needsLook(item) ? !expanded.includes(key) : expanded.includes(key)
       const icon = TODO_ICON[item.status]
       const count = `${under.length} agent${under.length === 1 ? '' : 's'}`
-      const held = under.map(a => queueMarks.get(a.id)).find(Boolean)
+      const held = [...under.map(a => a.id), ...(isItemOpen(item) ? [`lane:${item.lane}`] : [])].map(id => queueMarks.get(id)).find(Boolean)
       const said =
         item.status === 'skipped'
           ? `skip${item.note && !isNarrow ? `: ${item.note}` : ''}`

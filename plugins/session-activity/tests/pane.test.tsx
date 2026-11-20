@@ -546,7 +546,7 @@ test('work found after the first write counts apart, and a list not touched for 
   expect((await ui.findAll({ type: 'Text', text: /⚠ stale · updated 12m/ })).some(t => t.props.color === 'warning')).toBe(true)
 })
 
-test('an issue closed as completed or a merged PR reads done; one closed unmerged or not planned does not', async ($, on) => {
+test('an issue closed as completed or a merged PR reads done, one closed as not planned or a duplicate skipped; a PR closed unmerged stays open', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   const asked: string[] = []
   const states: Record<string, string> = {
@@ -555,6 +555,7 @@ test('an issue closed as completed or a merged PR reads done; one closed unmerge
     'repos/o/r/issues/9': 'closed  2026-11-19T10:00:00Z\n',
     'repos/o/r/issues/10': 'closed  \n',
     'repos/o/r/issues/11': 'closed not_planned \n',
+    'repos/o/r/issues/12': 'closed duplicate \n',
   }
   quietHost(on, {}, [''], undefined, undefined, {}, {
     gh: args => {
@@ -572,14 +573,18 @@ test('an issue closed as completed or a merged PR reads done; one closed unmerge
       { content: '#9 Merged PR', status: 'pending' },
       { content: '#10 Closed PR', status: 'pending' },
       { content: '#11 Dropped', status: 'pending' },
+      { content: '#12 Same as #7', status: 'in_progress' },
     ],
   })
   await openPane($)
   expect(asked.sort()).toEqual(Object.keys(states).sort())
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /TODOS · 2 of 5 done/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /TODOS · 4 of 6 done/ })).toBeDefined()
   await ui.press({ key: 'todos:done' })
   expect(await ui.find({ type: 'Text', text: 'closed on GitHub' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /skip: closed as not planned/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /skip: closed as duplicate/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Closed PR/ })).toBeDefined()
 })
 
 test('an agent sits under the step in progress when it was spawned, with its verdict; a finished step folds it', async ($, on) => {
@@ -1226,7 +1231,7 @@ const QUEUE_PS = [
 function queueHost(
   on: On,
   answers: Record<string, QueueAnswer> = {},
-  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string; agents?: { id: string; type: string; description: string; status: AgentStatus }[] } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown'> = {},
+  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; lanes?: unknown[]; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string; agents?: { id: string; type: string; description: string; status: AgentStatus }[] } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown'> = {},
 ) {
   const calls: string[][] = []
   const installs = opts.installs ?? { 'conductor@agent-kit': CONDUCTOR }
@@ -1244,6 +1249,7 @@ function queueHost(
     panes: opts.panes,
     ran: opts.ran,
     isStoreDown: opts.isStoreDown,
+    ...(opts.lanes ? { claude: () => ({ exitCode: 0, stdout: JSON.stringify(opts.lanes) }) } : {}),
     get ps() {
       return opts.ps?.() ?? QUEUE_PS
     },
@@ -1927,4 +1933,65 @@ test("a queue run in an agent's worktree names its ticket, and the item shows th
   expect(lines.find(l => l.includes('Ship the queue'))).toMatch(/⧗ e2e slot · 1m11s/)
   expect(lines.find(l => l.startsWith('● e2e'))).toMatch(/^● e2e {2}#849 lane pnpm e2e/)
   expect(lines.find(l => l.startsWith('○ #1 tests'))).toMatch(/other session pnpm build/)
+})
+
+test('an epic counts only its tickets from the first write, before any lane is named', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  laneHost(on)
+  await writeTodos($, { epic: true, items: LANE_ITEMS.map(({ lane: _, ...i }) => i) })
+  await openPane($)
+  let { ui, lines } = await lanePane($)
+  expect(lines[0]).toMatch(/^TODOS · 0 of 3 done/)
+  expect(lines.some(l => l.startsWith('ORCHESTRATOR'))).toBe(true)
+  await ui.unmount()
+  await writeTodos($, { items: LANE_ITEMS })
+  ;({ lines } = await lanePane($))
+  expect(lines[0]).toMatch(/^TODOS · 0 of 3 done/)
+})
+
+test('a lane that has stopped while its item is open makes a list untouched for 10 minutes read stale; a working lane does not', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  let state = 'working'
+  laneHost(on, () => ({ exitCode: 0, stdout: JSON.stringify([laneEntry('rd-12', 'new-12', NOW, { state })]) }))
+  await writeTodos($, { items: LANE_ITEMS.slice(0, 1) })
+  await clock.advance(11 * 60_000)
+  await openPane($)
+  let { ui, lines } = await lanePane($)
+  expect(lines[0]).toMatch(/updated 11m/)
+  expect(lines[0]).not.toMatch(/stale/)
+  await ui.unmount()
+  state = 'done'
+  await clock.advance(60_000)
+  await openPane($)
+  ;({ lines } = await lanePane($))
+  expect(lines[0]).toMatch(/⚠ stale · updated 12m/)
+})
+
+test("a queue run in a lane's own checkout names the lane's ticket and marks its item; a lane in this session's folder claims nothing", async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const [tests, e2e, build] = QUEUE_FIXTURE.queues
+  const status = {
+    ...QUEUE_FIXTURE,
+    queues: [
+      { ...tests!, holders: [], waiters: [{ ...tests!.waiters[0]!, cwd: '/repo' }] },
+      { ...e2e!, holders: [{ slot: 0, pid: 777, cwd: '/repo/.worktrees/rd-849/apps/web', command: 'pnpm e2e', ageMs: 71_000, state: 'busy', cpuPct: 90, memKb: 1000 }] },
+      { ...build!, holders: [] },
+    ],
+  }
+  queueHost(on, {}, { status, lanes: [laneEntry('rd-849', 's-849', NOW, { cwd: '/repo/.worktrees/rd-849' }), laneEntry('rd-850', 's-850', NOW)] })
+  await writeTodos($, {
+    items: [
+      { content: '#848 Earlier ticket', status: 'completed', lane: 'rd-849' },
+      { content: '#849 Ship the queue', status: 'in_progress', lane: 'rd-849' },
+      { content: '#850 Next', status: 'in_progress', lane: 'rd-850' },
+    ],
+  })
+  await openPane($)
+  const { ui, lines } = await lanePane($)
+  expect(lines.find(l => l.includes('Ship the queue'))).toMatch(/⧗ e2e slot · 1m11s/)
+  expect(lines.find(l => l.includes('#850'))).not.toMatch(/⧗/)
+  await ui.press({ key: 'todos:done' })
+  expect(textOf(await ui.find({ type: 'Box' }))).not.toMatch(/Earlier ticket.*⧗/)
+  expect(lines.find(l => l.startsWith('● e2e'))).toMatch(/^● e2e {2}#849 lane pnpm e2e/)
+  expect(lines.find(l => l.startsWith('○ #1 tests'))).toMatch(/repo pnpm build/)
 })

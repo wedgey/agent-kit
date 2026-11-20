@@ -1,4 +1,4 @@
-import type { AgentRow, AgentStatusWord, BranchHealth, LaneEntry, LaneProgress, Orphan, QueueStatus, ShellTask, SpawnInfo, TodoItem, TodoList, Verdict } from '../types'
+import type { AgentRow, AgentStatusWord, BranchHealth, ClosedAs, LaneEntry, LaneProgress, Orphan, QueueStatus, ShellTask, SpawnInfo, TodoItem, TodoList, Verdict } from '../types'
 
 export type ProcRow = { pid: number; ppid: number; pgid: number; cpu: number; rssKb: number; args: string }
 
@@ -310,10 +310,11 @@ export const usageTokens = (u: {
 
 const TODO_STATUSES: readonly string[] = ['pending', 'in_progress', 'completed', 'skipped']
 
-export type TodoInput = { title?: string; link?: string; items: Pick<TodoItem, 'content' | 'status' | 'note' | 'ticket' | 'lane'>[] }
+export type TodoInput = { title?: string; link?: string; epic?: boolean; items: Pick<TodoItem, 'content' | 'status' | 'note' | 'ticket' | 'lane'>[] }
 
 export function todoInputError(input: Record<string, unknown>): string | undefined {
   if (!Array.isArray(input.items)) return '`items` must be an array of { content, status, note? }'
+  if (input.epic !== undefined && typeof input.epic !== 'boolean') return '`epic` must be true or false'
   for (const [i, item] of input.items.entries()) {
     if (typeof item?.content !== 'string' || item.content.trim() === '') return `items[${i}].content must be non-empty text`
     if (!TODO_STATUSES.includes(item.status)) return `items[${i}].status must be one of ${TODO_STATUSES.join(', ')}`
@@ -363,24 +364,32 @@ export function applyTodos(prev: TodoList | undefined, input: TodoInput, now: nu
   })
   const title = input.title ?? prev?.title
   const link = input.link ?? prev?.link
-  return { ...(title ? { title } : {}), ...(link ? { link } : {}), items: [...items, ...left], updatedAt: now }
+  const isEpic = input.epic ?? (base === prev?.items ? prev?.isEpic : undefined)
+  return { ...(title ? { title } : {}), ...(link ? { link } : {}), ...(isEpic ? { isEpic } : {}), items: [...items, ...left], updatedAt: now }
 }
 
 // With lanes, the list is an epic: its ticket items are the scope, the rest is the orchestrator's own.
 export const hasLanes = (items: readonly Pick<TodoItem, 'lane'>[]) => items.some(i => i.lane)
 
-export function todoCounts(items: readonly Pick<TodoItem, 'content' | 'ticket' | 'lane' | 'status' | 'isFound'>[]) {
-  const scoped = hasLanes(items) ? items.filter(i => ticketOf(i).ticket) : items
+export function todoCounts(items: readonly Pick<TodoItem, 'content' | 'ticket' | 'lane' | 'status' | 'isFound'>[], isEpic = false) {
+  const scoped = isEpic || hasLanes(items) ? items.filter(i => ticketOf(i).ticket) : items
   const counted = scoped.filter(i => !i.isFound)
   return { done: counted.filter(isSettled).length, total: counted.length, found: scoped.length - counted.length }
 }
 
 const isSettled = (i: Pick<TodoItem, 'status'>) => i.status === 'completed' || i.status === 'skipped'
 
-export const settleClosed = <T extends TodoItem>(items: readonly T[], closed: readonly string[], repo?: string): T[] =>
+const CLOSED_AS: Record<ClosedAs, Pick<TodoItem, 'status' | 'note'>> = {
+  completed: { status: 'completed', note: 'closed on GitHub' },
+  not_planned: { status: 'skipped', note: 'closed as not planned' },
+  duplicate: { status: 'skipped', note: 'closed as duplicate' },
+}
+
+export const settleClosed = <T extends TodoItem>(items: readonly T[], closed: Readonly<Record<string, ClosedAs>>, repo?: string): T[] =>
   items.map(i => {
     const href = ticketOf(i, repo).ticket?.href
-    return !isSettled(i) && href && closed.includes(href) ? { ...i, status: 'completed' as const, note: 'closed on GitHub' } : i
+    const as = href && Object.hasOwn(closed, href) ? closed[href] : undefined
+    return !isSettled(i) && as ? { ...i, ...CLOSED_AS[as] } : i
   })
 
 export function currentItem(list: TodoList): TodoItem | undefined {
@@ -622,7 +631,7 @@ export const matchLane = (entries: readonly LaneEntry[], name: string) =>
 
 export function laneProgress(list: TodoList, repo?: string): LaneProgress {
   const { now, next } = groupTodos(list.items)
-  const { done, total } = todoCounts(list.items)
+  const { done, total } = todoCounts(list.items, list.isEpic)
   const first = next[0]
   return { done, total, now: now.slice(0, 2).map(i => oneLine(todoTitle(i, repo))), ...(first ? { next: oneLine(todoTitle(first, repo)) } : {}) }
 }

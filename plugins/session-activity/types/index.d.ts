@@ -61,14 +61,17 @@ export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'skipped'
 export type TodoItem = { content: string; status: TodoStatus; note?: string; ticket?: string; lane?: string; startedAt?: number; isFound?: boolean }
 
 // One entry of `claude agents --json`; `state` is set on background sessions only.
-export type LaneEntry = { name: string; sessionId: string; kind?: string; status?: string; state?: string; waitingFor?: string; startedAt?: number }
+export type LaneEntry = { name: string; sessionId: string; cwd?: string; kind?: string; status?: string; state?: string; waitingFor?: string; startedAt?: number }
 
 export type LaneProgress = { done: number; total: number; now: string[]; next?: string }
 
 // A lane as last read: missing when no session has its name; progress only once its list was read.
-export type LaneReading = { isMissing: true } | { isMissing?: false; state: string; waitingFor?: string; startedAt?: number; sessionId: string; progress?: LaneProgress }
+export type LaneReading = { isMissing: true } | { isMissing?: false; state: string; waitingFor?: string; startedAt?: number; sessionId: string; cwd?: string; progress?: LaneProgress }
 
-export type TodoList = { title?: string; link?: string; items: TodoItem[]; updatedAt?: number }
+export type TodoList = { title?: string; link?: string; isEpic?: boolean; items: TodoItem[]; updatedAt?: number }
+
+// How GitHub closed a ticket: a merged PR reads completed.
+export type ClosedAs = 'completed' | 'not_planned' | 'duplicate'
 
 export type Verdict = 'PASS' | 'PASS+NOTES' | 'ISSUES' | 'BLOCKED' | 'FAIL'
 
@@ -131,7 +134,7 @@ declare module 'claude-code' {
       queueOwn: number[]
       lanes: Record<string, LaneReading>
       agentTodos: Record<string, TodoList>
-      closed: string[]
+      closedAs: Record<string, ClosedAs>
     }
   }
 }

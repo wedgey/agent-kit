@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { ShellTask, TodoItem } from '../types'
+import type { ClosedAs, ShellTask, TodoItem } from '../types'
 
 import {
   isQueueReadDue,
@@ -472,19 +472,46 @@ describe('todos', () => {
     expect(todoCounts(items.slice(1))).toEqual({ done: 1, total: 2, found: 1 })
   })
 
-  test('an item whose ticket GitHub reports closed reads done, unless already settled', () => {
+  test('an epic list counts only ticket items from its first write, before any lane is named', () => {
+    const items = [
+      { content: '#1 A', status: 'pending' },
+      { content: 'Plan the waves', status: 'completed' },
+    ] as const
+    expect(todoCounts(items)).toEqual({ done: 1, total: 2, found: 0 })
+    expect(todoCounts(items, true)).toEqual({ done: 0, total: 1, found: 0 })
+  })
+
+  test('epic is kept across writes that leave it out, and a new title clears it', () => {
+    const first = applyTodos(undefined, { epic: true, title: 'epic', items: [{ content: '#1 A', status: 'pending' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: '#1 A', status: 'in_progress' }] }, 2)
+    expect(second.isEpic).toBe(true)
+    expect(applyTodos(second, { title: 'feature', items: [{ content: 'Map', status: 'pending' }] }, 3).isEpic).toBeUndefined()
+    expect(todoInputError({ epic: 'yes', items: [] })).toMatch(/epic/)
+  })
+
+  test('an item whose ticket GitHub closed reads done, or skipped when closed as not planned or a duplicate, unless already settled', () => {
     const items: TodoItem[] = [
       { content: '#4 Fix', status: 'in_progress' },
       { content: 'Other', status: 'pending', ticket: 'o/x#5' },
       { content: '#6 Skip', status: 'skipped' },
       { content: '#7 Open', status: 'pending' },
+      { content: '#8 Dropped', status: 'pending' },
+      { content: '#9 Same as #4', status: 'in_progress' },
     ]
-    const closed = ['https://github.com/o/r/issues/4', 'https://github.com/o/x/issues/5', 'https://github.com/o/r/issues/6']
+    const closed: Record<string, ClosedAs> = {
+      'https://github.com/o/r/issues/4': 'completed',
+      'https://github.com/o/x/issues/5': 'completed',
+      'https://github.com/o/r/issues/6': 'completed',
+      'https://github.com/o/r/issues/8': 'not_planned',
+      'https://github.com/o/r/issues/9': 'duplicate',
+    }
     expect(settleClosed(items, closed, 'o/r').map(i => [i.status, i.note])).toEqual([
       ['completed', 'closed on GitHub'],
       ['completed', 'closed on GitHub'],
       ['skipped', undefined],
       ['pending', undefined],
+      ['skipped', 'closed as not planned'],
+      ['skipped', 'closed as duplicate'],
     ])
   })
 
