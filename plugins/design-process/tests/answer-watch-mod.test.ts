@@ -9,8 +9,9 @@ const HOUR = 3_600_000
 type Row = Record<string, unknown>
 /** The artifact beneath the mod: `db` maps a collection or document path to its rows, `fail` makes every call error. */
 function harness(on: On, entries: Record<string, unknown> = {}) {
-  const w = { db: {} as Record<string, Row[]>, round: {} as Record<string, Row>, registered: [] as string[], submitted: [] as string[], toasts: [] as string[], statuses: [] as unknown[], calls: 0, fail: false, submitFails: false, limits: [] as unknown[], gate: null as null | Promise<void>, inSubmit: false }
+  const w = { db: {} as Record<string, Row[]>, round: {} as Record<string, Row>, registered: [] as string[], submitted: [] as string[], toasts: [] as string[], statuses: [] as unknown[], calls: 0, session: 's-me', fail: false, submitFails: false, limits: [] as unknown[], gate: null as null | Promise<void>, inSubmit: false }
   mock.store(on, entries)
+  on('session.id', () => ({ value: w.session }))
   on('mcp.call', (_$, e) => {
     w.calls++
     if (w.fail) throw new Error('mcp down')
@@ -152,7 +153,7 @@ describe('the answer watch', () => {
   test('does not wake twice after a reload: the store holds what was seen', async ($, on) => {
     const clock = mock.clock(on)
     const w = harness(on, {
-      'answer-watch': { slug: SLUG, round: 'r1', screens: [1], armedAt: 0, seen: { 'rounds/r1/answers/u1': '5' } },
+      'answer-watch:s-me': { slug: SLUG, round: 'r1', screens: [1], armedAt: 0, seen: { 'rounds/r1/answers/u1': '5' } },
     })
     w.db['rounds/r1/answers'] = [answer('u1', { sentAt: 5 })]
     await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
@@ -164,6 +165,36 @@ describe('the answer watch', () => {
     expect(w.submitted).toHaveLength(1)
     expect(w.submitted[0]).toContain('answers/u2')
     expect(w.submitted[0]).not.toContain('answers/u1')
+  })
+
+  test('never takes over a watch another session armed', async ($, on) => {
+    const clock = mock.clock(on)
+    const armed = { slug: SLUG, round: 'r1', screens: [1], armedAt: 0, seen: {} }
+    const w = harness(on, { 'answer-watch:s-other': armed, 'answer-watch': armed })
+    w.db['rounds/r1/answers'] = [answer('u1', { sentAt: 5 })]
+    await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete({} as never)
+    await clock.advance(60_000)
+    expect(w.calls).toBe(0)
+    expect(w.submitted).toEqual([])
+  })
+
+  test('keeps the key it was armed under when the session id changes', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    await watch($)
+    w.session = 's-new'
+    w.db['rounds/r1/answers'] = [answer('u1', { sentAt: 5 })]
+    await clock.advance(10_000)
+    expect(w.submitted).toHaveLength(1)
+    await watch($, { stop: true })
+    const calls = w.calls
+    for (const session of ['s-me', 's-new']) {
+      w.session = session
+      await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
+      await clock.advance(30_000)
+    }
+    expect(w.calls).toBe(calls)
   })
 
   test('a claude row never wakes', async ($, on) => {
@@ -227,7 +258,7 @@ describe('the answer watch', () => {
 
   test('stops after 6 hours', async ($, on) => {
     const clock = mock.clock(on, { now: 7 * HOUR })
-    const w = harness(on, { 'answer-watch': { slug: SLUG, round: 'r1', screens: [], armedAt: 0, seen: {} } })
+    const w = harness(on, { 'answer-watch:s-me': { slug: SLUG, round: 'r1', screens: [], armedAt: 0, seen: {} } })
     await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
     await clock.advance(10_000)
     expect(w.toasts.join()).toContain('6 hours')
