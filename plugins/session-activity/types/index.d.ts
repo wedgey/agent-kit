@@ -84,6 +84,8 @@ export type SpawnInfo = {
   wantModel?: string
   wantEffort?: string
   isReadOnly?: boolean
+  /** A lane-type agent; only its report's PR link is saved. */
+  isLane?: boolean
   isolation?: string
   verdict?: Verdict
   escalatedFrom?: string

@@ -1236,7 +1236,7 @@ const QUEUE_PS = [
 function queueHost(
   on: On,
   answers: Record<string, QueueAnswer> = {},
-  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; lanes?: unknown[]; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string; agents?: { id: string; type: string; description: string; status: AgentStatus }[]; files?: Record<string, string> } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown' | 'sh'> = {},
+  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; lanes?: unknown[]; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string; agents?: { id: string; type: string; description: string; status: AgentStatus }[]; files?: Record<string, string> } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown' | 'sh' | 'claude'> = {},
 ) {
   const calls: string[][] = []
   const installs = opts.installs ?? { 'conductor@agent-kit': CONDUCTOR }
@@ -1256,7 +1256,7 @@ function queueHost(
     ran: opts.ran,
     isStoreDown: opts.isStoreDown,
     sh: opts.sh,
-    ...(opts.lanes ? { claude: () => ({ exitCode: 0, stdout: JSON.stringify(opts.lanes) }) } : {}),
+    ...(opts.lanes ? { claude: () => ({ exitCode: 0, stdout: JSON.stringify(opts.lanes) }) } : opts.claude ? { claude: opts.claude } : {}),
     get ps() {
       return opts.ps?.() ?? QUEUE_PS
     },
@@ -1971,13 +1971,13 @@ test('a lane that has stopped while its item is open makes a list untouched for 
   await clock.advance(11 * 60_000)
   await openPane($)
   let { ui, lines } = await lanePane($)
-  expect(lines[2]).toMatch(/· list written 11m ago$/)
+  expect(lines[2]).toMatch(/^\S+ · list written 11m ago · /)
   await ui.unmount()
   state = 'done'
   await clock.advance(60_000)
   await openPane($)
   ;({ lines } = await lanePane($))
-  expect(lines[2]).toMatch(/· list written 12m ago ⚠ stale$/)
+  expect(lines[2]).toMatch(/^\S+ · list written 12m ago ⚠ stale · /)
 })
 
 test("a queue run in a lane's own checkout names the lane's ticket and marks its item; a lane in this session's folder claims nothing", async ($, on) => {
@@ -2028,7 +2028,7 @@ test('the header reads the title as written with its epic link, a bar with the t
   expect(lines.slice(0, 3)).toEqual([
     'Create-a-skill audit · epic #834',
     `${'▰'.repeat(6)}${'▱'.repeat(18)}  1/4 tickets · +2 found, 1 done`,
-    'feat/epic · 0 behind main · 0 changed · no PR · list written 19m ago',
+    'feat/epic · list written 19m ago · 0 behind main · 0 changed · no PR',
   ])
   expect(await ui.find({ type: 'Link', text: 'epic #834' })).toMatchObject({ props: { href: 'https://github.com/wedgey/contexory/issues/834' } })
 })
@@ -2076,6 +2076,8 @@ test("a lane's item draws its run as a tree: model and calls, its own steps, and
   expect(tree[7]).toMatch(/^└ \+1 earlier · show/)
   expect(lines.some(l => l.includes('Fix A'))).toBe(false)
   expect(lines.some(l => /Opus 5\.5 · high/.test(l))).toBe(false)
+  expect(await ui.find({ key: 'agent:l1:stop' })).toBeDefined()
+  expect(await ui.find({ key: 'agent:l1:view' })).toBeDefined()
   await ui.press({ key: 'agent:r1:toggle' })
   expect(await ui.find({ type: 'Text', text: /Opus 5\.5 · high/ })).toBeDefined()
   await ui.press({ key: 'todo:#12 Build the releases page:earlier' })
@@ -2150,14 +2152,115 @@ test("a lane's PR shows on its run line, open and then merged", async ($, on) =>
   on('agent.spawn', () => ({ model: 'opus', agentId: 'l1' }))
   await writeTodos($, { epic: true, items: [{ content: '#12 Build the releases page', status: 'in_progress' }] })
   await spawn($, '#12 lane', 'conductor:lane')
-  await runTurn($, 'l1', 'claude-sonnet-5-5', 'medium', 'STATUS PASS\nhttps://github.com/wedgey/contexory/pull/877')
+  await runTurn($, 'l1', 'claude-sonnet-5-5', 'medium', 'Rebased past https://github.com/wedgey/contexory/pull/870\nSTATUS PASS\nhttps://github.com/wedgey/contexory/pull/877')
   await openPane($)
   let { ui, lines } = await lanePane($)
   expect(lines.find(l => l.includes('│'))?.trim()).toBe('│ Sonnet 5.5 · 0 calls · PR #877 open')
+  expect(asked.some(a => a.some(x => x.includes('issues/870')))).toBe(false)
   await ui.unmount()
   pr = 'closed  2026-11-19T10:00:00Z\n'
   await clock.advance(5 * 60_000)
   await openPane($)
   ;({ ui, lines } = await lanePane($))
   expect(lines.find(l => l.includes('│'))).toMatch(/· PR #877 merged$/)
+})
+
+test("a reviewer quoting a PR records none; a lane's new PR is read on its own, not with a full ticket round", async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const asked: string[][] = []
+  quietHost(on, {}, [''], undefined, undefined, {}, { gh: args => (asked.push([...args]), { exitCode: 0, stdout: 'open  \n' }) })
+  on('agent.list', () => ({
+    value: [
+      { id: 'l1', type: 'conductor:lane', description: '#12 lane', status: 'completed' },
+      { id: 'r1', type: 'conductor:reviewer', description: 'Review #12', status: 'completed' },
+    ],
+  }))
+  let next = ''
+  on('agent.spawn', () => ({ model: 'opus', agentId: next }))
+  await writeTodos($, { epic: true, items: [{ content: '#12 Build the releases page', status: 'in_progress' }, { content: '#13 Later', status: 'pending' }] })
+  for (const [id, d, t] of [['l1', '#12 lane', 'conductor:lane'], ['r1', 'Review #12', 'conductor:reviewer']]) {
+    next = id!
+    await spawn($, d!, t!)
+  }
+  await openPane($)
+  asked.length = 0
+  await runTurn($, 'r1', 'claude-opus-5-5', 'high', 'STATUS PASS\nReviewed https://github.com/wedgey/contexory/pull/999')
+  await runTurn($, 'l1', 'claude-sonnet-5-5', 'medium', 'STATUS PASS\nhttps://github.com/wedgey/contexory/pull/877')
+  await openPane($)
+  expect(asked.map(a => a[1])).toEqual(['repos/wedgey/contexory/issues/877'])
+})
+
+test("under 46 columns, or while a lane's item is folded, its queue slot stays on the item's row", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const [tests, e2e, build] = QUEUE_FIXTURE.queues
+  const status = {
+    ...QUEUE_FIXTURE,
+    queues: [
+      { ...tests!, holders: [], waiters: [] },
+      { ...e2e!, holders: [{ slot: 0, pid: 777, cwd: '/repo/.claude/worktrees/agent-l2', command: 'pnpm e2e', ageMs: 71_000, state: 'busy', cpuPct: 90, memKb: 1000 }] },
+      { ...build!, holders: [] },
+    ],
+  }
+  queueHost(on, {}, { status, agents: [{ id: 'l2', type: 'conductor:lane', description: '#849 lane', status: 'running' }] })
+  on('agent.spawn', () => ({ model: 'opus', agentId: 'l2' }))
+  await writeTodos($, { items: [{ content: '#849 Ship the queue', status: 'pending' }] })
+  await spawn($, '#849 lane', 'conductor:lane')
+  await openPane($)
+  const { ui, lines: wide } = await lanePane($)
+  expect(wide.find(l => l.includes('Ship the queue'))).not.toMatch(/⧗/)
+  expect(wide).toContain('│ ⧗ e2e slot · 1m11s')
+  await ui.press({ key: 'todo:#849 Ship the queue:toggle' })
+  const folded = textOf(await ui.find({ type: 'Box' })).split('\n')
+  expect(folded.find(l => l.includes('Ship the queue'))).toMatch(/⧗ e2e slot · 1m11s/)
+  expect(folded.some(l => l.startsWith('│'))).toBe(false)
+  await ui.unmount()
+  await writeTodos($, { items: [{ content: '#849 Ship the queue', status: 'in_progress' }] })
+  const narrow = (await lanePane($, 40)).lines
+  expect(narrow.find(l => l.includes('Ship'))).toMatch(/⧗ e2e slot/)
+})
+
+test("another session's run is named once the session list reads, retried after a failed read; this session's own cleared agent keeps its stop", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const [tests, e2e] = QUEUE_FIXTURE.queues
+  const status = {
+    ...QUEUE_FIXTURE,
+    queues: [
+      { ...tests!, holders: [{ slot: 0, pid: 778, cwd: '/repo/.claude/worktrees/agent-me1', command: 'pnpm test', ageMs: 1000, state: 'busy', cpuPct: 10, memKb: 1000 }], waiters: [] },
+      { ...e2e!, holders: [{ slot: 0, pid: 777, cwd: '/repo/.claude/worktrees/agent-zz9', command: 'pnpm e2e', ageMs: 71_000, state: 'busy', cpuPct: 280, memKb: 4_300_000 }] },
+    ],
+  }
+  const theirs = '/home/me/.claude/projects/-repo/sess-9/subagents/agent-zz9.meta.json'
+  const mine = '/home/me/.claude/projects/-repo/s1/subagents/agent-me1.meta.json'
+  let isListUp = false
+  const lookups: string[][] = []
+  queueHost(on, {}, {
+    status,
+    files: { [theirs]: JSON.stringify({ description: '#918 lane' }), [mine]: JSON.stringify({ description: '#12 lane' }) },
+    sh: args => {
+      if (!args.join(' ').includes('subagents/agent-')) return undefined
+      lookups.push(args.slice(3))
+      return { exitCode: 0, stdout: `${theirs}\n${mine}\n` }
+    },
+    claude: () =>
+      isListUp
+        ? { exitCode: 0, stdout: JSON.stringify([{ pid: 9, id: 'sess-9', cwd: '/repo', kind: 'interactive', startedAt: 0, sessionId: 'sess-9', name: 'landing-v2', status: 'busy' }]) }
+        : { exitCode: 1, stdout: '' },
+  })
+  await writeTodos($, { items: [{ content: 'Ship', status: 'in_progress' }] })
+  await openPane($)
+  await openPane($)
+  let { ui } = await lanePane($, 72)
+  expect(await ui.find({ key: 'queue:e2e:0:stop' })).toBeDefined()
+  await ui.unmount()
+  isListUp = true
+  await openPane($)
+  await openPane($)
+  let lines: string[]
+  ;({ ui, lines } = await lanePane($, 72))
+  expect(lines).toContain('● e2e  1/1  landing-v2 · #918 lane pnpm e2e')
+  expect(await ui.find({ key: 'queue:e2e:0:stop' })).toBeUndefined()
+  expect(await ui.find({ key: 'queue:tests:0:stop' })).toBeDefined()
+  const asked = lookups.length
+  await openPane($)
+  expect(lookups.length).toBe(asked)
 })
