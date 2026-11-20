@@ -75,6 +75,8 @@ export type ClosedAs = 'completed' | 'not_planned' | 'duplicate'
 
 export type Verdict = 'PASS' | 'PASS+NOTES' | 'ISSUES' | 'BLOCKED' | 'FAIL'
 
+export type PrState = 'open' | 'merged' | 'closed'
+
 export type SpawnInfo = {
   todo?: string
   // The ticket leading the Agent call's description, as `#849 lane`.
@@ -82,12 +84,16 @@ export type SpawnInfo = {
   wantModel?: string
   wantEffort?: string
   isReadOnly?: boolean
+  /** A lane-type agent; only its report's PR link is saved. */
+  isLane?: boolean
   isolation?: string
   verdict?: Verdict
   escalatedFrom?: string
   treeBefore?: string[]
   changedFiles?: number
   isFinished?: boolean
+  // The PR the agent's report linked, as https://github.com/o/r/pull/n.
+  pr?: string
 }
 
 // What conductor's `queue.mjs status --json` prints. null is a reading it could not take: an orphan's
@@ -135,6 +141,9 @@ declare module 'claude-code' {
       lanes: Record<string, LaneReading>
       agentTodos: Record<string, TodoList>
       closedAs: Record<string, ClosedAs>
+      prState: Record<string, PrState>
+      // Another session's agent, by id: `<session name> · <description>`, '' when unknown.
+      others: Record<string, string>
     }
   }
 }

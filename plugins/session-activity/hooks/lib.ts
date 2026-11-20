@@ -595,7 +595,7 @@ export const queuePids = (status: QueueStatus) =>
 export function queueHeader(status: QueueStatus): string {
   const m = status.machine
   const free = m.memAvailKb === null ? [] : [`${shortMemory(m.memAvailKb)} free`]
-  return [...status.queues.map(q => `${q.name} ${q.holders.length}/${q.slots}`), `load ${Math.round(m.load1)} / ${m.cores} cores`, ...free].join(' · ')
+  return ['box-wide', `load ${Math.round(m.load1)} / ${m.cores} cores`, ...free].join(' · ')
 }
 
 // BRANCH_SCRIPT's five lines: branch, trunk, commits behind trunk, changed files, origin's URL.
