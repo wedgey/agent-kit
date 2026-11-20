@@ -141,11 +141,11 @@ const TODO_ICON: Record<TodoStatus, { glyph: string; color: string }> = {
 const VERDICT_COLOR: Record<Verdict, string> = { PASS: 'success', 'PASS+NOTES': 'success', ISSUES: 'warning', BLOCKED: 'warning', FAIL: 'error' }
 const TODO_DESCRIPTION = [
   'Your todo list for the current task, drawn for the user in the session-activity pane beside the chat.',
-  'Use it wherever your instructions say to track steps in a todo list. Each call sends the whole list; an item left out keeps its last status, so never drop one: mark a step you will not do skipped with the reason in `note`. A new `title` starts a new list.',
+  'Use it wherever your instructions say to track steps in a todo list. Each call sends the whole list; an item left out keeps its last status, so never drop one: mark a step you will not do skipped with the reason in `note`. A new `title`, or a call naming none of the items once all are completed or skipped, starts a new list.',
   'Mark an item in_progress when you start it and completed as soon as it is done; an item whose work ends in a PR is done only when its PR is merge-ready and only the merge itself is left.',
   'Start an item with its ticket, as `#123 Fix the login redirect` (or `owner/repo#9` for another repo), or pass it as `ticket`; every item with a ticket names it.',
   'An agent you spawn is listed under the item whose ticket leads its description (as `#123 review`), else under the item in progress when you spawn it.',
-  'Keep an item\'s text as it was; to reword one without a ticket, mark the old item skipped and add the new one.',
+  'Keep an item\'s text as it was; to reword one, mark the old item skipped and add the new one.',
   'A subagent may call this too: its list shows as one line under its own row.',
   'An item whose ticket a background session (a lane) owns passes that session\'s name as `lane`.',
   '`title` heads the list (the kind of task, or the playbook it follows). `link` is the URL of the issue that holds the work state.',
@@ -340,16 +340,16 @@ async function refreshTickets($: $, now: number) {
   ticketCursor = from + hrefs.length
   const closed: string[] = []
   const open: string[] = []
-  await Promise.all(
-    hrefs.map(async href => {
-      const [, repoName, n] = GITHUB_ISSUE.exec(href)!
-      const out = await $.process.run(['gh', 'api', `repos/${repoName}/issues/${n}`, '--jq', TICKET_STATE], { timeoutMs: GH_TIMEOUT_MS }).catch(() => undefined)
-      if (out?.exitCode !== 0) return
-      const [state, reason, mergedAt] = out.stdout.trim().split(' ')
-      if (state === 'closed' && (reason === 'completed' || mergedAt)) closed.push(href)
-      else if (state) open.push(href)
-    }),
-  )
+  const readOne = async (href: string) => {
+    const [, repoName, n] = GITHUB_ISSUE.exec(href)!
+    const out = await $.process.run(['gh', 'api', `repos/${repoName}/issues/${n}`, '--jq', TICKET_STATE], { timeoutMs: GH_TIMEOUT_MS }).catch(() => undefined)
+    if (out?.exitCode !== 0) return
+    const [state, reason, mergedAt] = out.stdout.trim().split(' ')
+    if (state === 'closed' && (reason === 'completed' || mergedAt)) closed.push(href)
+    else if (state) open.push(href)
+  }
+  // A few at a time: the box is shared, and each read is a gh process.
+  for (let at = 0; at < hrefs.length; at += 5) await Promise.all(hrefs.slice(at, at + 5).map(readOne))
   // A failed read keeps what was last read.
   await update($, closedA, prev => [...new Set([...prev.filter(h => !open.includes(h)), ...closed])])
 }
@@ -469,7 +469,10 @@ async function tick($: $) {
     const now = await $.clock.now()
     const [list, spawns] = await Promise.all([$.agent.list(), read($, spawnsA)])
     const kept = await update($, agentsA, prev => mergeAgents(prev, settleFinished(list, spawns), now))
-    await update($, agentTodosA, all => Object.fromEntries(Object.entries(all).filter(([id]) => kept.some(a => a.id === id))))
+    await update($, agentTodosA, all => {
+      const left = Object.entries(all).filter(([id]) => kept.some(a => a.id === id))
+      return left.length === Object.keys(all).length ? all : Object.fromEntries(left)
+    })
     await update($, shellsA, shells => expireFinished(shells, now, clearAfterMs))
     const shells = await read($, shellsA)
     const orphans = await read($, orphansA)
@@ -1359,7 +1362,8 @@ export const register: Register = (on, options) => {
     const counts = todoCounts(items)
     const sinceUpdate = todos.updatedAt === undefined ? 0 : now - todos.updatedAt
     // An agent that ended after the last write means the list stopped being kept, not that nothing happens.
-    const isStale = agents.some(a => a.endedAt !== undefined && a.endedAt > (todos.updatedAt ?? now))
+    // An agent first seen already ended (after a resume or "clear finished") carries no real end time.
+    const isStale = agents.some(a => a.endedAt !== undefined && a.endedAt > a.firstSeenAt && a.endedAt > (todos.updatedAt ?? now))
     const isBad = (a: AgentRow) =>
       a.status === 'failed' || (spawns[a.id]?.changedFiles ?? 0) > 0 || ['ISSUES', 'BLOCKED', 'FAIL'].includes(spawns[a.id]?.verdict ?? '')
 

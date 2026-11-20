@@ -527,16 +527,23 @@ test('work found after the first write counts apart, and a list not touched for 
   expect(await ui.find({ type: 'Text', text: /stale/ })).toBeUndefined()
   await ui.unmount()
 
+  agents = [{ id: 'a0', type: 'Explore', description: 'Seen only once ended', status: 'completed' }]
+  await openPane($)
+  ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /stale/ })).toBeUndefined()
+  await ui.unmount()
+
   agents = [{ id: 'a1', type: 'Explore', description: 'Survey', status: 'running' }]
   await openPane($)
   ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
   expect(await ui.find({ type: 'Text', text: /stale/ })).toBeUndefined()
   await ui.unmount()
 
+  await clock.advance(60_000)
   agents = [{ id: 'a1', type: 'Explore', description: 'Survey', status: 'completed' }]
   await openPane($)
   ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect((await ui.findAll({ type: 'Text', text: /⚠ stale · updated 11m/ })).some(t => t.props.color === 'warning')).toBe(true)
+  expect((await ui.findAll({ type: 'Text', text: /⚠ stale · updated 12m/ })).some(t => t.props.color === 'warning')).toBe(true)
 })
 
 test('an issue closed as completed or a merged PR reads done; one closed unmerged or not planned does not', async ($, on) => {
