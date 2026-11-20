@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { ShellTask } from '../types'
+import type { ShellTask, TodoItem } from '../types'
 
 import {
   isQueueReadDue,
@@ -57,6 +57,9 @@ import {
   matchLane,
   parseAgentsList,
   oneLine,
+  todoCounts,
+  settleClosed,
+  worktreeAgent,
 } from '../hooks/lib'
 
 const PS = [
@@ -204,6 +207,9 @@ describe('queue', () => {
   test('a place is the worktree name, else the last folder', () => {
     expect(place('/workspace/.worktrees/q-plain/apps/web')).toBe('q-plain')
     expect(place('/repo/apps/web')).toBe('web')
+    expect(place('/repo/.claude/worktrees/agent-a1b2/apps/web')).toBe('agent-a1b2')
+    expect(worktreeAgent('/repo/.claude/worktrees/agent-a1b2/apps/web')).toBe('a1b2')
+    expect(worktreeAgent('/repo/.worktrees/q-plain')).toBeUndefined()
     expect(shortMemory(50_152)).toBe('49M')
     expect(shortMemory(1_048_576)).toBe('1.0G')
     expect(shortMemory(17_536_892)).toBe('16.7G')
@@ -364,8 +370,8 @@ describe('todos', () => {
 
   test('a call without a title or link keeps the ones before; an empty string clears them', () => {
     const first = applyTodos(undefined, { title: 'feature', link: 'https://x/1', items: [] }, 1)
-    expect(applyTodos(first, { items: [] }, 2)).toEqual({ title: 'feature', link: 'https://x/1', items: [] })
-    expect(applyTodos(first, { title: '', items: [] }, 2)).toEqual({ link: 'https://x/1', items: [] })
+    expect(applyTodos(first, { items: [] }, 2)).toEqual({ title: 'feature', link: 'https://x/1', items: [], updatedAt: 2 })
+    expect(applyTodos(first, { title: '', items: [] }, 2)).toEqual({ link: 'https://x/1', items: [], updatedAt: 2 })
   })
 
   test('an item that goes back to pending forgets when it started', () => {
@@ -400,6 +406,86 @@ describe('todos', () => {
       ticket: '#4',
       lane: 'rd-4',
     })
+  })
+
+  test('an item the call leaves out stays, so the total never shrinks', () => {
+    const first = applyTodos(undefined, { items: [{ content: 'A', status: 'completed' }, { content: 'B', status: 'pending' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: 'B', status: 'in_progress' }] }, 2)
+    expect(second.items.map(i => [i.content, i.status])).toEqual([
+      ['B', 'in_progress'],
+      ['A', 'completed'],
+    ])
+  })
+
+  test('an item added after the first write is found work, counted apart from the total', () => {
+    const first = applyTodos(undefined, { items: [{ content: 'A', status: 'pending' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: 'A', status: 'completed' }, { content: 'Fix the lint', status: 'pending' }] }, 2)
+    expect(second.items[0]?.isFound).toBeUndefined()
+    expect(second.items[1]?.isFound).toBe(true)
+    expect(todoCounts(second.items)).toEqual({ done: 1, total: 1, found: 1 })
+    expect(applyTodos(second, { items: [{ content: 'Fix the lint', status: 'completed' }] }, 3).items[0]?.isFound).toBe(true)
+  })
+
+  test('a renamed item is matched by its ticket and keeps when it started', () => {
+    const first = applyTodos(undefined, { items: [{ content: '#12 Build', status: 'in_progress' }, { content: 'Ship', status: 'pending' }] }, 100)
+    const second = applyTodos(first, { items: [{ content: '#12 Build the pane', status: 'in_progress' }, { content: 'Ship', status: 'pending' }] }, 200)
+    expect(second.items.map(i => i.content)).toEqual(['#12 Build the pane', 'Ship'])
+    expect(second.items[0]?.startedAt).toBe(100)
+    expect(second.items[0]?.isFound).toBeUndefined()
+  })
+
+  test('a new title, or a list sharing no item with the last, starts a new list', () => {
+    const first = applyTodos(undefined, { title: 'feature', items: [{ content: 'A', status: 'completed' }] }, 1)
+    expect(applyTodos(first, { title: 'bug-fix', items: [{ content: 'B', status: 'pending' }] }, 2).items).toEqual([{ content: 'B', status: 'pending' }])
+    expect(applyTodos(first, { items: [{ content: 'C', status: 'pending' }] }, 2).items).toEqual([{ content: 'C', status: 'pending' }])
+  })
+
+  test('a call sending only new items adds them while the list has open work', () => {
+    const first = applyTodos(undefined, { items: [{ content: 'A', status: 'completed' }, { content: 'B', status: 'in_progress' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: 'Fix the lint', status: 'pending' }] }, 2)
+    expect(second.items.map(i => i.content)).toEqual(['Fix the lint', 'A', 'B'])
+    expect(todoCounts(second.items)).toEqual({ done: 1, total: 2, found: 1 })
+  })
+
+  test('a ticket matches a renamed item only when one old and one new item share it', () => {
+    const first = applyTodos(undefined, { items: [{ content: '#5 Build', status: 'completed' }, { content: '#5 Ship', status: 'pending' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: '#5 Ship', status: 'in_progress' }, { content: '#5 Fix review', status: 'pending' }] }, 2)
+    expect(second.items.map(i => i.content)).toEqual(['#5 Ship', '#5 Fix review', '#5 Build'])
+    expect(todoCounts(second.items)).toEqual({ done: 1, total: 2, found: 1 })
+  })
+
+  test('an item keeps its lane when a later call leaves the lane out, so the count does not switch back', () => {
+    const first = applyTodos(undefined, { items: [{ content: '#1 A', status: 'in_progress', lane: 'rd-1' }, { content: 'Plan', status: 'completed' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: '#1 A', status: 'completed' }] }, 2)
+    expect(second.items[0]?.lane).toBe('rd-1')
+    expect(todoCounts(second.items)).toEqual({ done: 1, total: 1, found: 0 })
+  })
+
+  test('with lanes, only ticket items count toward the total', () => {
+    const items = [
+      { content: '#1 A', status: 'completed', lane: 'rd-1' },
+      { content: '#2 B', status: 'pending' },
+      { content: 'Verify the whole', status: 'completed' },
+      { content: '#3 C', status: 'pending', isFound: true },
+    ] as const
+    expect(todoCounts(items)).toEqual({ done: 1, total: 2, found: 1 })
+    expect(todoCounts(items.slice(1))).toEqual({ done: 1, total: 2, found: 1 })
+  })
+
+  test('an item whose ticket GitHub reports closed reads done, unless already settled', () => {
+    const items: TodoItem[] = [
+      { content: '#4 Fix', status: 'in_progress' },
+      { content: 'Other', status: 'pending', ticket: 'o/x#5' },
+      { content: '#6 Skip', status: 'skipped' },
+      { content: '#7 Open', status: 'pending' },
+    ]
+    const closed = ['https://github.com/o/r/issues/4', 'https://github.com/o/x/issues/5', 'https://github.com/o/r/issues/6']
+    expect(settleClosed(items, closed, 'o/r').map(i => [i.status, i.note])).toEqual([
+      ['completed', 'closed on GitHub'],
+      ['completed', 'closed on GitHub'],
+      ['skipped', undefined],
+      ['pending', undefined],
+    ])
   })
 
   test('items group into now, next and done, each in list order', () => {
@@ -608,6 +694,11 @@ describe('lanes', () => {
     expect(parseAgentsList('[]')).toEqual([])
     expect(parseAgentsList('{"error":"x"}')).toBeUndefined()
     expect(parseAgentsList('not json')).toBeUndefined()
+  })
+
+  test('a start time given as text reads as epoch milliseconds', () => {
+    const list = parseAgentsList(JSON.stringify([{ ...entry('a', 's-1', 1), startedAt: '2026-11-20T10:00:00.000Z' }]))
+    expect(list?.[0]?.startedAt).toBe(Date.parse('2026-11-20T10:00:00.000Z'))
   })
 
   test('a lane matches by name, the newest run when a name was reused', () => {

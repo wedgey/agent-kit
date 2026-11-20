@@ -58,7 +58,7 @@ export type Orphan = {
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'skipped'
 
-export type TodoItem = { content: string; status: TodoStatus; note?: string; ticket?: string; lane?: string; startedAt?: number }
+export type TodoItem = { content: string; status: TodoStatus; note?: string; ticket?: string; lane?: string; startedAt?: number; isFound?: boolean }
 
 // One entry of `claude agents --json`; `state` is set on background sessions only.
 export type LaneEntry = { name: string; sessionId: string; kind?: string; status?: string; state?: string; waitingFor?: string; startedAt?: number }
@@ -68,12 +68,14 @@ export type LaneProgress = { done: number; total: number; now: string[]; next?: 
 // A lane as last read: missing when no session has its name; progress only once its list was read.
 export type LaneReading = { isMissing: true } | { isMissing?: false; state: string; waitingFor?: string; startedAt?: number; sessionId: string; progress?: LaneProgress }
 
-export type TodoList = { title?: string; link?: string; items: TodoItem[] }
+export type TodoList = { title?: string; link?: string; items: TodoItem[]; updatedAt?: number }
 
 export type Verdict = 'PASS' | 'PASS+NOTES' | 'ISSUES' | 'BLOCKED' | 'FAIL'
 
 export type SpawnInfo = {
   todo?: string
+  // The ticket leading the Agent call's description, as `#849 lane`.
+  ticket?: string
   wantModel?: string
   wantEffort?: string
   isReadOnly?: boolean
@@ -128,6 +130,8 @@ declare module 'claude-code' {
       queueNote: string
       queueOwn: number[]
       lanes: Record<string, LaneReading>
+      agentTodos: Record<string, TodoList>
+      closed: string[]
     }
   }
 }
