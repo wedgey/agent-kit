@@ -8,10 +8,12 @@
  *
  *   watch-lanes.mjs <transcript>... [--quiet=<minutes>] [--interval=<seconds>] [--hours=<n>]
  *
- * Defaults: 15 quiet minutes, three times that for a lane inside a tool call, a look every 60 seconds, 72 hours.
+ * Defaults: 15 quiet minutes, three times that for a lane inside a tool call, twice that for a lane that ended its turn
+ * on something other than a report, a look every 60 seconds, 72 hours.
  *
  * Prints one JSON line, { events }, and exits 0. Events: { event: "stalled", lane, state, quietMinutes, box },
- * { event: "box-slow", lanes, box } when two or more stall in one look, { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
+ * { event: "parked", lane, quietMinutes, box } for a lane that ended its turn without a report and never woke,
+ * { event: "box-slow", lanes, box } when two or more stall or park in one look, { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
  */
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
@@ -27,7 +29,10 @@ const HANDBACK_TOOLS = new Set(["SubagentHandback"]);
 
 const blocksOf = (entry) => (Array.isArray(entry.message.content) ? entry.message.content : [{ type: "text", text: String(entry.message.content ?? "") }]);
 
-/** Where the lane's last turn stands: owes-reply, tool-running, turn-ended or unknown. */
+// A lane's reports, from roles.md "Lanes". A turn that ends on one is a message to the orchestrator, so the lane is idle by design.
+const REPORT = /^\W*(merge-ready|merged|head moved|blocked|failed|context full)\b/i;
+
+/** Where the lane's last turn stands: owes-reply, tool-running, parked, turn-ended or unknown. */
 export function turnState(text) {
   const entries = [];
   for (const line of text.split("\n")) {
@@ -46,7 +51,9 @@ export function turnState(text) {
     return call && HANDBACK_TOOLS.has(call.name) ? "turn-ended" : "owes-reply";
   }
   if (blocks.some((b) => b?.type === "tool_use")) return "tool-running";
-  return blocks.length && blocks.every((b) => b?.type === "thinking") ? "owes-reply" : "turn-ended";
+  if (blocks.length && blocks.every((b) => b?.type === "thinking")) return "owes-reply";
+  const said = blocks.filter((b) => b?.type === "text").map((b) => b.text).join("\n");
+  return REPORT.test(said) ? "turn-ended" : "parked";
 }
 
 function readTail(path, size, length) {
@@ -69,7 +76,8 @@ export function lastEntryState(path, start = TAIL_BYTES, size = statSync(path).s
 }
 
 // Healthy foreground calls ran 18 to 22 minutes, so a tool call gets three quiet limits before it counts.
-const QUIET_FACTOR = { "owes-reply": 1, "tool-running": 3 };
+// A parked lane is waiting on background work, and a legitimate wait behind the queue ran about an hour, so it gets two limits.
+const QUIET_FACTOR = { "owes-reply": 1, "tool-running": 3, parked: 2 };
 
 /**
  * A look at every lane, counting quiet time from the first look that saw the file as it is now.
@@ -106,13 +114,14 @@ export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now, b
       if (quiet < quietMinutes) continue;
       before.state ??= lastEntryState(path, TAIL_BYTES, stat.size);
       const factor = QUIET_FACTOR[before.state];
-      if (factor && quiet >= quietMinutes * factor) found.push({ event: "stalled", lane, state: before.state, quietMinutes: quiet });
+      if (!factor || quiet < quietMinutes * factor) continue;
+      found.push(before.state === "parked" ? { event: "parked", lane, quietMinutes: quiet } : { event: "stalled", lane, state: before.state, quietMinutes: quiet });
     }
-    const stalled = found.filter((f) => f.event === "stalled");
+    const stalled = found.filter((f) => f.event === "stalled" || f.event === "parked");
     if (!stalled.length) return found;
     // Lanes going quiet together point at the box, and replacing them would only add load to it.
     const load = box();
-    const rest = found.filter((f) => f.event !== "stalled");
+    const rest = found.filter((f) => !stalled.includes(f));
     if (stalled.length > 1) return [...rest, { event: "box-slow", lanes: stalled.map((f) => f.lane), box: load }];
     return [...rest, { ...stalled[0], box: load }];
   };
