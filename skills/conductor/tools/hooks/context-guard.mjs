@@ -117,6 +117,11 @@ const DELEGATE_ACTION =
   `Finish the edit in hand and run its check. Start no new stage. ` +
   `If you are a lane, push your branch and end your turn with a Context full report, per roles.md "Lanes". ` +
   `Otherwise end your turn with your report, and put what remains under OPEN.`;
+// The lane agent compacts at its autoCompactWindow, so it only gets here when one tool output jumps past the limit before that runs.
+const LANE_AGENT = "conductor:lane";
+const LANE_ACTION =
+  `One tool output took you past it before your compaction could run. You compact in place, so go on with the step in hand. ` +
+  `Do not report Context full. Keep each tool output short: tail logs and read files by line range.`;
 // Names the mod's tool despite ADR 0002; ADR 0015 says why.
 const HANDOVER_TOOL = "mcp__conductor__handover";
 // A lane run as its own session has no agent_id either, so the session note must route it to its report.
@@ -156,7 +161,7 @@ export function contextNote(input, env, read = readTail, memory = fileMemory()) 
   if (step < 0 || step <= last) return null;
   const note =
     `Conductor: your context is ${k(now)} tokens, past the limit of ${k(limit)}. Every turn re-reads all of it. ` +
-    (own ? SESSION_ACTION : DELEGATE_ACTION);
+    (own ? SESSION_ACTION : input.agent_type === LANE_AGENT ? LANE_ACTION : DELEGATE_ACTION);
   return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note } };
 }
 
