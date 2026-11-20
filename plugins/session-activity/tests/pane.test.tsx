@@ -313,6 +313,7 @@ type Host = {
   ps?: string
   stats?: string[]
   claude?: (args: readonly string[]) => { exitCode: number; stdout: string; stderr?: string } | undefined
+  gh?: (args: readonly string[]) => { exitCode: number; stdout: string } | undefined
   panes?: () => { id: string; isShown: boolean }[]
   ran?: string[]
   isStoreDown?: boolean
@@ -376,7 +377,7 @@ function quietHost(
   })
   on('process.run', async (_$, e) => {
     host.ran?.push(e.argv[0]!)
-    const ran = e.argv[0] === 'node' ? await host.node?.(e.argv.slice(1)) : e.argv[0] === 'claude' ? host.claude?.(e.argv.slice(1)) : undefined
+    const ran = e.argv[0] === 'node' ? await host.node?.(e.argv.slice(1)) : e.argv[0] === 'claude' ? host.claude?.(e.argv.slice(1)) : e.argv[0] === 'gh' ? host.gh?.(e.argv.slice(1)) : undefined
     if (ran !== undefined) return { value: { stderr: '', isStdoutTruncated: false, isStderrTruncated: false, ...ran } }
     const isSelf = e.argv[0] === 'sh' && e.argv[2]?.startsWith('echo "self')
     const stdout =
@@ -426,15 +427,108 @@ test('the todos tool draws the list with its title, progress, branch and skipped
   expect(await ui.find({ type: 'Text', text: 'skip: not asked' })).toBeDefined()
 })
 
-test('the todos tool refuses a bad status, and a subagent, and keeps the list it had', async ($, on) => {
+test('the todos tool refuses a bad status and keeps the list it had; a subagent\'s list stays its own', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   quietHost(on)
   on('agent.list', () => ({ value: [] }))
   await writeTodos($, { items: STEPS })
   expect((await writeTodos($, { items: [{ content: 'x', status: 'done' }] })).result).toMatch(/Not saved: .*status/)
-  expect((await writeTodos($, { items: [{ content: 'mine', status: 'pending' }], agentId: 'd1' })).result).toMatch(/Not saved: only the main conversation/)
+  expect((await writeTodos($, { items: [{ content: 'mine', status: 'pending' }], agentId: 'd1' })).result).toMatch(/Saved 1 items, 0 done/)
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
   expect(await ui.find({ type: 'Text', text: /TODOS · 2 of 4 done/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /mine/ })).toBeUndefined()
+})
+
+test("a subagent's own list shows as one line under its row", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on)
+  on('agent.list', () => ({ value: [{ id: 'a1', type: 'general-purpose', description: 'Build the loader', status: 'running' }] }))
+  on('agent.spawn', () => ({ model: 'opus', agentId: 'a1' }))
+  await writeTodos($, { items: STEPS })
+  await spawn($, 'Build the loader', 'general-purpose')
+  const steps = [
+    { content: 'Read the routes', status: 'completed' },
+    { content: 'Write the tests', status: 'in_progress' },
+    { content: 'Wire the loader', status: 'pending' },
+  ]
+  await writeTodos($, { items: steps, agentId: 'a1' })
+  await openPane($)
+  const { lines } = await lanePane($)
+  const at = lines.findIndex(l => l.includes('Build the loader'))
+  expect(lines.slice(at + 1, at + 4).map(l => l.trim())).toContain('steps 1/3 · ◐ Write the tests · ○ Wire the loader')
+})
+
+test('an agent finds its item by ticket, after a rename too; a rerun of the same brief folds into its latest run', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on)
+  on('agent.list', () => ({
+    value: [
+      { id: 'e1', type: 'Explore', description: 'Read the routes', status: 'running' },
+      { id: 'l1', type: 'conductor:lane', description: '#13 lane', status: 'failed' },
+      { id: 'l2', type: 'conductor:lane', description: '#13 lane', status: 'running' },
+    ],
+  }))
+  let next = ''
+  on('agent.spawn', () => ({ model: 'opus', agentId: next }))
+  await writeTodos($, { items: [{ content: '#12 Build the page', status: 'in_progress' }, { content: '#13 Gallery filters', status: 'pending' }] })
+  for (const [id, description, type] of [['e1', 'Read the routes', 'Explore'], ['l1', '#13 lane', 'conductor:lane'], ['l2', '#13 lane', 'conductor:lane']] as const) {
+    next = id
+    await spawn($, description, type)
+  }
+  await writeTodos($, { items: [{ content: '#12 Build the releases page', status: 'in_progress' }, { content: '#13 Gallery filters', status: 'pending' }] })
+  await openPane($)
+  const { ui, lines } = await lanePane($)
+  const row = (text: string) => lines.findIndex(l => l.includes(text))
+  expect(row('Build the releases page')).toBeLessThan(row('Read the routes'))
+  expect(row('Read the routes')).toBeLessThan(row('Gallery filters'))
+  expect(row('Gallery filters')).toBeLessThan(row('#13 lane'))
+  expect(await ui.find({ key: 'agent:l1:toggle' })).toBeUndefined()
+  expect(lines[row('#13 lane') + 1]).toMatch(/run 2/)
+  expect(await ui.find({ type: 'Text', text: /OTHER AGENTS/ })).toBeUndefined()
+})
+
+test('work found after the first write counts apart, and a list not touched for 10 minutes while agents run reads stale', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  quietHost(on)
+  let agents: { id: string; type: string; description: string; status: AgentStatus }[] = []
+  on('agent.list', () => ({ value: agents }))
+  await writeTodos($, { items: STEPS })
+  await writeTodos($, { items: [...STEPS, { content: 'Fix the flaky test', status: 'pending' }] })
+  let ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /TODOS · 2 of 4 done · \+1 found/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /updated/ })).toBeUndefined()
+  await ui.unmount()
+
+  await clock.advance(11 * 60_000)
+  ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /· updated 11m/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /stale/ })).toBeUndefined()
+  await ui.unmount()
+
+  agents = [{ id: 'a1', type: 'Explore', description: 'Survey', status: 'running' }]
+  await openPane($)
+  ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect((await ui.findAll({ type: 'Text', text: /⚠ stale · updated 11m/ })).some(t => t.props.color === 'warning')).toBe(true)
+})
+
+test('an item whose GitHub issue is closed reads done, and counts', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const asked: string[][] = []
+  quietHost(on, {}, [''], undefined, undefined, {}, {
+    gh: args => {
+      asked.push([...args])
+      return args[0] === 'api' ? { exitCode: 0, stdout: args[1] === 'repos/o/r/issues/7' ? 'closed\n' : 'open\n' } : { exitCode: 1, stdout: '' }
+    },
+  })
+  on('agent.list', () => ({ value: [] }))
+  await writeTodos($, { link: 'https://github.com/o/r/issues/1', items: [{ content: 'Ship it', ticket: 'https://github.com/o/r/issues/7', status: 'in_progress' }, { content: '#8 Next', status: 'pending' }] })
+  await openPane($)
+  expect(asked).toContainEqual(['api', 'repos/o/r/issues/7', '--jq', '.state'])
+  expect(asked).toContainEqual(['api', 'repos/o/r/issues/8', '--jq', '.state'])
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /TODOS · 1 of 2 done/ })).toBeDefined()
+  await ui.press({ key: 'todos:done' })
+  expect(await ui.find({ type: 'Text', text: 'closed on GitHub' })).toBeDefined()
 })
 
 test('an agent sits under the step in progress when it was spawned, with its verdict; a finished step folds it', async ($, on) => {
@@ -1081,7 +1175,7 @@ const QUEUE_PS = [
 function queueHost(
   on: On,
   answers: Record<string, QueueAnswer> = {},
-  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown'> = {},
+  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string; agents?: { id: string; type: string; description: string; status: AgentStatus }[] } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown'> = {},
 ) {
   const calls: string[][] = []
   const installs = opts.installs ?? { 'conductor@agent-kit': CONDUCTOR }
@@ -1109,7 +1203,7 @@ function queueHost(
       return answers[args[1] ?? ''] ?? { exitCode: 0, stdout: '{"ok":true}' }
     },
   })
-  on('agent.list', () => ({ value: [] }))
+  on('agent.list', () => ({ value: opts.agents ?? [] }))
   return calls
 }
 
@@ -1744,4 +1838,42 @@ test('listening ports are read every 10 s; the process table stays on every scan
   expect(count('ps')).toBe(ps + 5)
   await clock.advance(2000)
   expect(count('ss')).toBe(ss + 1)
+})
+
+test('with lanes, the count is tickets only; the orchestrator\'s own steps and agents sit under ORCHESTRATOR', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  laneHost(on, undefined, { agents: [{ id: 'x1', type: 'Explore', description: 'Survey the epic', status: 'running' }] })
+  on('agent.spawn', () => ({ model: 'opus', agentId: 'x1' }))
+  await spawn($, 'Survey the epic', 'Explore')
+  await writeTodos($, { items: LANE_ITEMS })
+  await openPane($)
+  const { lines } = await lanePane($)
+  expect(lines[0]).toMatch(/^TODOS · 0 of 3 done/)
+  const at = lines.findIndex(l => l.startsWith('ORCHESTRATOR'))
+  expect(at).toBeGreaterThan(lines.findIndex(l => l.includes('Drop the old route')))
+  expect(lines.findIndex(l => l.includes('Review the epic'))).toBeGreaterThan(at)
+  expect(lines.findIndex(l => l.includes('Survey the epic'))).toBeGreaterThan(at)
+  expect(lines.some(l => l.startsWith('OTHER AGENTS'))).toBe(false)
+})
+
+test("a queue run in an agent's worktree names its ticket, and the item shows the slot it holds", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const [tests, e2e, build] = QUEUE_FIXTURE.queues
+  const status = {
+    ...QUEUE_FIXTURE,
+    queues: [
+      { ...tests!, holders: [], waiters: [{ ...tests!.waiters[0]!, cwd: '/repo/.claude/worktrees/agent-zz9' }] },
+      { ...e2e!, holders: [{ slot: 0, pid: 777, cwd: '/repo/.claude/worktrees/agent-l2', command: 'pnpm e2e', ageMs: 71_000, state: 'busy', cpuPct: 90, memKb: 1000 }] },
+      { ...build!, holders: [] },
+    ],
+  }
+  queueHost(on, {}, { status, agents: [{ id: 'l2', type: 'conductor:lane', description: '#849 lane', status: 'running' }] })
+  on('agent.spawn', () => ({ model: 'opus', agentId: 'l2' }))
+  await writeTodos($, { items: [{ content: '#849 Ship the queue', status: 'in_progress' }] })
+  await spawn($, '#849 lane', 'conductor:lane')
+  await openPane($)
+  const { lines } = await lanePane($)
+  expect(lines.find(l => l.includes('Ship the queue'))).toMatch(/⧗ e2e slot · 1m11s/)
+  expect(lines.find(l => l.startsWith('● e2e'))).toMatch(/^● e2e {2}#849 lane pnpm e2e/)
+  expect(lines.find(l => l.startsWith('○ #1 tests'))).toMatch(/other session pnpm build/)
 })

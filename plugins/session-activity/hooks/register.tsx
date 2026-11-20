@@ -8,7 +8,6 @@ import {
   BRANCH_SCRIPT,
   cpuSince,
   currentItem,
-  currentTodo,
   groupTodos,
   pluginAgentPaths,
   pluginInstallPath,
@@ -62,6 +61,10 @@ import {
   type SharedQueue,
   usableQueueText,
   laneProgress,
+  hasLanes,
+  todoCounts,
+  settleClosed,
+  worktreeAgent,
   matchLane,
   oneLine,
   parseAgentsList,
@@ -96,6 +99,8 @@ const queueNoteA = atom({ plugin: 'session-activity', key: 'queueNote' } as cons
 // Pids in this session's process tree when the set of runs last changed: what marks a run "you".
 const queueOwnA = atom({ plugin: 'session-activity', key: 'queueOwn' } as const, [])
 const lanesA = atom({ plugin: 'session-activity', key: 'lanes' } as const, {})
+const agentTodosA = atom({ plugin: 'session-activity', key: 'agentTodos' } as const, {})
+const closedA = atom({ plugin: 'session-activity', key: 'closed' } as const, [])
 
 // $.state lives as long as the process; a resumed session in a new process gets its todos back from here.
 const TODOS_KEY = 'todos:'
@@ -124,6 +129,9 @@ const GH_TIMEOUT_MS = 3000
 const BRANCH_EVERY_MS = 30_000
 const PR_EVERY_MS = 300_000
 const PORTS_EVERY_MS = 10_000
+const MAX_TICKET_READS = 20
+const STALE_MS = 600_000
+const GITHUB_ISSUE = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)/
 const TODO_ICON: Record<TodoStatus, { glyph: string; color: string }> = {
   completed: { glyph: '✓', color: 'success' },
   in_progress: { glyph: '◐', color: 'suggestion' },
@@ -133,10 +141,11 @@ const TODO_ICON: Record<TodoStatus, { glyph: string; color: string }> = {
 const VERDICT_COLOR: Record<Verdict, string> = { PASS: 'success', 'PASS+NOTES': 'success', ISSUES: 'warning', BLOCKED: 'warning', FAIL: 'error' }
 const TODO_DESCRIPTION = [
   'Your todo list for the current task, drawn for the user in the session-activity pane beside the chat.',
-  'Use it wherever your instructions say to track steps in a todo list. Each call replaces the whole list.',
-  'Mark an item in_progress when you start it and completed as soon as it is done; an item whose work ends in a PR is done only when its PR is merge-ready and only the merge itself is left. Never delete a step you will not do: mark it skipped with the reason in `note`.',
-  'Start an item with its ticket, as `#123 Fix the login redirect` (or `owner/repo#9` for another repo), or pass it as `ticket`.',
-  'Agents you spawn are listed under the item in progress when you spawn them.',
+  'Use it wherever your instructions say to track steps in a todo list. Each call sends the whole list; an item left out keeps its last status, so never drop one: mark a step you will not do skipped with the reason in `note`. A new `title` starts a new list.',
+  'Mark an item in_progress when you start it and completed as soon as it is done; an item whose work ends in a PR is done only when its PR is merge-ready and only the merge itself is left.',
+  'Start an item with its ticket, as `#123 Fix the login redirect` (or `owner/repo#9` for another repo), or pass it as `ticket`; every item with a ticket names it.',
+  'An agent you spawn is listed under the item whose ticket leads its description (as `#123 review`), else under the item in progress when you spawn it.',
+  'A subagent may call this too: its list shows as one line under its own row.',
   'An item whose ticket a background session (a lane) owns passes that session\'s name as `lane`.',
   '`title` heads the list (the kind of task, or the playbook it follows). `link` is the URL of the issue that holds the work state.',
 ].join(' ')
@@ -185,6 +194,7 @@ let portsRead = { at: 0, ports: new Map<number, number[]>() }
 let queueToolMissing: string | undefined
 let lanesAt = 0
 let prLookup: { branch: string; at: number; pr?: number } | undefined
+let ticketsAt = 0
 
 const metricsOf = async ($: $, id: string, fn: (m: AgentMetrics) => AgentMetrics) =>
   update($, metricsA, all => ({ ...all, [id]: fn(all[id] ?? { toolUses: 0, tokens: 0, activity: [] }) }))
@@ -309,6 +319,30 @@ async function refreshBranch($: $, now: number) {
   await update($, branchA, () => ({ ...health, ...(prLookup?.pr ? { pr: prLookup.pr } : {}) }))
 }
 
+// GitHub's issues endpoint answers for PRs too; a merged PR reads closed.
+async function refreshTickets($: $, now: number) {
+  if (now - ticketsAt < PR_EVERY_MS) return
+  ticketsAt = now
+  const [todos, branch] = await Promise.all([read($, todosA), read($, branchA)])
+  const repo = contextRepo(todos.link, branch.repo)
+  const hrefs = todos.items
+    .filter(i => i.status === 'pending' || i.status === 'in_progress')
+    .flatMap(i => ticketOf(i, repo).ticket?.href ?? [])
+    .filter(href => GITHUB_ISSUE.test(href))
+    .slice(0, MAX_TICKET_READS)
+  const closed: string[] = []
+  const open: string[] = []
+  for (const href of hrefs) {
+    const [, repoName, n] = GITHUB_ISSUE.exec(href)!
+    const out = await $.process.run(['gh', 'api', `repos/${repoName}/issues/${n}`, '--jq', '.state'], { timeoutMs: GH_TIMEOUT_MS }).catch(() => undefined)
+    const state = out?.exitCode === 0 ? out.stdout.trim() : undefined
+    if (state === 'closed') closed.push(href)
+    else if (state === 'open') open.push(href)
+  }
+  // A failed read keeps what was last read.
+  await update($, closedA, prev => [...new Set([...prev.filter(h => !open.includes(h)), ...closed])])
+}
+
 async function maybeOpen($: $) {
   if (isDismissed) return
   const panes = await $.ui.panes()
@@ -431,7 +465,10 @@ async function tick($: $) {
       orphans.length > 0 ||
       shells.some(s => s.status === 'running' || (s.endedAt !== undefined && now - s.endedAt <= ORPHAN_WINDOW[1]))
     if (needsScan) await scan($, now)
-    if ((await read($, todosA)).items.length > 0) await refreshBranch($, now)
+    if ((await read($, todosA)).items.length > 0) {
+      await refreshBranch($, now)
+      await refreshTickets($, now)
+    }
     await refreshStatus($)
   } finally {
     isTicking = false
@@ -648,9 +685,11 @@ async function refreshStatus($: $) {
   ] as const
   const words = parts.filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`)
   if (orphans.length > 0) words.push(`⚠ ${orphans.length} orphan${orphans.length === 1 ? '' : 's'}`)
-  const done = todos.items.filter(i => i.status === 'completed' || i.status === 'skipped').length
-  const now = currentItem(todos)
-  const step = todos.items.length > 0 ? `◆ ${done}/${todos.items.length}${now ? ` ${todoTitle(now, contextRepo(todos.link, branch.repo))}` : ''}` : undefined
+  const repo = contextRepo(todos.link, branch.repo)
+  const items = settleClosed(todos.items, await read($, closedA), repo)
+  const { done, total } = todoCounts(items)
+  const now = currentItem({ items })
+  const step = todos.items.length > 0 ? `◆ ${done}/${total}${now ? ` ${todoTitle(now, repo)}` : ''}` : undefined
   const totals = queue ? queueTotals(queue) : undefined
   const queued = totals && totals.busy + totals.waiting > 0 ? `queue ${totals.busy}/${totals.slots}${totals.waiting > 0 ? ` +${totals.waiting}` : ''}` : undefined
   const line = [[step, words.length > 0 ? `⚙ ${words.join(' · ')}` : undefined].filter(Boolean).join('  '), queued].filter(Boolean).join(' · ')
@@ -815,16 +854,21 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: TODO_TOOL_CALL }, async ($, e) => {
-    if (e.agentId) return { result: 'Not saved: only the main conversation writes the todo list the user watches. Keep your own steps in your report.', isError: true }
     const error = todoInputError(e)
     if (error) return { result: `Not saved: ${error}`, isError: true }
     const now = await $.clock.now()
+    const agentId = e.agentId
+    if (agentId) {
+      const all = await update($, agentTodosA, all => ({ ...all, [agentId]: applyTodos(all[agentId] ?? { items: [] }, e as unknown as TodoInput, now) }))
+      const list = all[agentId]!
+      return { result: `Saved ${list.items.length} items, ${todoCounts(list.items).done} done. They show under your row in the session-activity pane.` }
+    }
     await saveTodos($, await update($, todosA, prev => applyTodos(prev, e as unknown as TodoInput, now)))
     void maybeOpen($)
     await refreshBranch($, now)
     await refreshStatus($)
     const todos = await read($, todosA)
-    const done = todos.items.filter(i => i.status === 'completed' || i.status === 'skipped').length
+    const { done } = todoCounts(todos.items)
     return { result: `Saved ${todos.items.length} items, ${done} done. The user sees them in the session-activity pane.` }
   })
 
@@ -848,7 +892,7 @@ export const register: Register = (on, options) => {
     agentCalls.delete(e.tool_use_id)
     const resumed = e.resume ? (await read($, spawnsA))[e.resume.agentId] : undefined
     const def = resumed ? { isReadOnly: resumed.isReadOnly ?? false } : await agentDef($, e.subagentType)
-    const [todos, before] = await Promise.all([read($, todosA), def.isReadOnly ? gitStatus($) : undefined])
+    const [todos, branch, before] = await Promise.all([read($, todosA), read($, branchA), def.isReadOnly ? gitStatus($) : undefined])
     const spawned = await next(e)
     const id = spawned.agentId
     if (spawned.deny !== undefined || !id) return spawned
@@ -863,8 +907,11 @@ export const register: Register = (on, options) => {
     const isEscalation =
       (e.model !== undefined && ran?.model !== undefined && !modelMatches(e.model, ran.model)) ||
       (call?.effort !== undefined && ran?.effort !== undefined && call.effort !== ran.effort)
+    const repo = contextRepo(todos.link, branch.repo)
+    const current = e.parentAgentId ? undefined : currentItem(todos)
     const info: SpawnInfo = {
-      todo: e.parentAgentId ? undefined : currentTodo(todos),
+      todo: current?.content,
+      ticket: e.parentAgentId ? undefined : (ticketOf({ content: e.description }, repo).ticket ?? (current ? ticketOf(current, repo).ticket : undefined))?.label,
       wantModel: e.fork ? undefined : (e.model ?? def.model),
       wantEffort: e.fork ? undefined : (call?.effort ?? def.effort),
       isReadOnly: def.isReadOnly,
@@ -992,7 +1039,14 @@ export const register: Register = (on, options) => {
       read($, spendA),
       $.clock.now(),
     ])
-    const [queue, queueNote, queueOwn, lanes] = await Promise.all([read($, queueA), read($, queueNoteA), read($, queueOwnA), read($, lanesA)])
+    const [queue, queueNote, queueOwn, lanes, agentTodos, closed] = await Promise.all([
+      read($, queueA),
+      read($, queueNoteA),
+      read($, queueOwnA),
+      read($, lanesA),
+      read($, agentTodosA),
+      read($, closedA),
+    ])
     const queueCount = queue ? queueTotals(queue) : { busy: 0, waiting: 0 }
     const isQueueBusy = queueCount.busy + queueCount.waiting > 0
 
@@ -1054,14 +1108,26 @@ export const register: Register = (on, options) => {
     }
     visit(undefined)
 
-    const todoTexts = new Set(todos.items.map(i => i.content))
+    const repo = contextRepo(todos.link, branch.repo)
+    const items = settleClosed(todos.items, closed, repo)
+    const isLaned = hasLanes(items)
+    const todoTexts = new Set(items.map(i => i.content))
+    // A rename keeps the ticket, so an agent filed by ticket stays under its item.
+    const ticketItems = new Map(items.flatMap(i => (ticketOf(i, repo).ticket ? [[ticketOf(i, repo).ticket!.label, i.content] as const] : [])))
     const todoOf = (a: AgentRow): string | undefined => {
       const parent = a.parentId ? agents.find(p => p.id === a.parentId) : undefined
       if (parent) return todoOf(parent)
-      const todo = spawns[a.id]?.todo
-      return todo && todoTexts.has(todo) ? todo : undefined
+      const sp = spawns[a.id]
+      return (sp?.ticket ? ticketItems.get(sp.ticket) : undefined) ?? (sp?.todo && todoTexts.has(sp.todo) ? sp.todo : undefined)
     }
-    const agentsUnder = (todo: string | undefined) => ordered.filter(a => todoOf(a) === todo)
+    // The same brief spawned again under one item shows as its latest run.
+    const runsOf = (a: AgentRow) => agents.filter(b => b.parentId === a.parentId && b.type === a.type && b.description === a.description && todoOf(b) === todoOf(a))
+    const isRerun = (a: AgentRow): boolean => {
+      const parent = a.parentId ? agents.find(p => p.id === a.parentId) : undefined
+      if (parent) return isRerun(parent)
+      return todoOf(a) !== undefined && runsOf(a).at(-1) !== a
+    }
+    const agentsUnder = (todo: string | undefined) => ordered.filter(a => todoOf(a) === todo && !isRerun(a))
     const otherAgents = agentsUnder(undefined)
     const activeAgents = otherAgents.filter(a => isAgentActive(a.status)).length
     const runningShells = shells.filter(s => s.status === 'running')
@@ -1082,7 +1148,11 @@ export const register: Register = (on, options) => {
       const key = `agent:${a.id}`
       const isOpen = expanded.includes(key)
       const indent = '  '.repeat(depthOf(a))
+      const runs = todoOf(a) === undefined ? 1 : runsOf(a).length
+      const own = Object.hasOwn(agentTodos, a.id) && agentTodos[a.id]!.items.length > 0 ? laneProgress(agentTodos[a.id]!, repo) : undefined
+      const steps = own && [`steps ${own.done}/${own.total}`, ...own.now.map(t => `◐ ${t}`), ...(own.next ? [`○ ${own.next}`] : [])].join(' · ')
       const meta = [
+        runs > 1 ? `run ${runs}` : undefined,
         m.model ? formatModel(m.model) : undefined,
         m.effort === undefined ? undefined : `${m.effort}${isRouted ? ' ✓' : ''}`,
         sp.isolation,
@@ -1111,6 +1181,7 @@ export const register: Register = (on, options) => {
         <Box key={key} flexDirection="column">
           {titleLine(key, `${indent}${icon.glyph}`, icon.color, `${role}${a.name ? `${a.name}: ` : ''}${a.description}`, right)}
           {(!isNarrow || isOpen) && subLine(indent, meta)}
+          {(!isNarrow || isOpen) && steps && subLine(indent, steps)}
           {(!isNarrow || isOpen) && prior && subLine(indent, `↑ escalated from ${prior.model ? formatModel(prior.model) : 'an earlier run'}${priorVerdict ? ` (${priorVerdict})` : ''}`)}
           {warnings.map(w => subLine(indent, w, 'warning'))}
           {!isOpen && !isNarrow && isActive && activity && subLine(indent, `⎿ ${activity}`)}
@@ -1206,7 +1277,28 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-    const where = (cwd: string | null, command: string | null) => (cwd === null && command === null ? '(process gone)' : `${cwd ? place(cwd) : '?'} ${command ?? ''}`.trim())
+    const agentAt = (cwd: string | null) => {
+      const id = cwd === null ? undefined : worktreeAgent(cwd)
+      return id === undefined ? undefined : { agent: agents.find(a => a.id === id || a.id.startsWith(id)) }
+    }
+    const placeOf = (cwd: string) => {
+      const at = agentAt(cwd)
+      if (!at) return place(cwd)
+      return at.agent ? [spawns[at.agent.id]?.ticket, at.agent.type.split(':').pop()].filter(Boolean).join(' ') : 'other session'
+    }
+    const where = (cwd: string | null, command: string | null) => (cwd === null && command === null ? '(process gone)' : `${cwd ? placeOf(cwd) : '?'} ${command ?? ''}`.trim())
+    // What each of this session's agents holds or waits for in the queue, shown on its item.
+    const queueMarks = new Map<string, string>()
+    for (const q of queue?.queues ?? []) {
+      for (const h of q.holders) {
+        const id = agentAt(h.cwd)?.agent?.id
+        if (id) queueMarks.set(id, `⧗ ${q.name} slot${h.ageMs === null ? '' : ` · ${formatDuration(h.ageMs)}`}`)
+      }
+      ;[...q.waiters].sort((a, b) => a.rank - b.rank).forEach((w, i) => {
+        const id = agentAt(w.cwd)?.agent?.id
+        if (id && !queueMarks.has(id)) queueMarks.set(id, `⧗ ${q.name} waiting #${i + 1}`)
+      })
+    }
     const holderRow = (q: HeavyQueue, holder: QueueHolder) => {
       const key = `queue:${q.name}:${holder.slot}`
       const mark = holder.state === 'idle' || holder.state === 'orphan' ? holder.state : undefined
@@ -1247,12 +1339,17 @@ export const register: Register = (on, options) => {
         {queueNote && <Text dimColor wrap="truncate-end">{queueNote}</Text>}
       </Box>
     )
-    const doneCount = todos.items.filter(i => i.status === 'completed' || i.status === 'skipped').length
+    const counts = todoCounts(items)
+    const sinceUpdate = todos.updatedAt === undefined ? 0 : now - todos.updatedAt
+    // Old while work goes on means the list stopped being kept, not that nothing happens.
+    const isStale = agents.some(a => isAgentActive(a.status)) || Object.values(lanes).some(l => !l.isMissing && l.state === 'working')
     const isBad = (a: AgentRow) =>
       a.status === 'failed' || (spawns[a.id]?.changedFiles ?? 0) > 0 || ['ISSUES', 'BLOCKED', 'FAIL'].includes(spawns[a.id]?.verdict ?? '')
 
-    const repo = contextRepo(todos.link, branch.repo)
-    const { now: nowItems, next: nextItems, done: doneItems } = groupTodos(todos.items)
+    // With lanes, the tickets are the work; the orchestrator's own steps sit apart, outside the count.
+    const isOwnStep = (i: TodoItem) => isLaned && !ticketOf(i, repo).ticket
+    const ownSteps = items.filter(isOwnStep)
+    const { now: nowItems, next: nextItems, done: doneItems } = groupTodos(items.filter(i => !isOwnStep(i)))
     // A done item stays out of the fold while an agent under it runs or needs a look.
     const needsLook = (item: TodoItem) => agentsUnder(item.content).some(a => isAgentActive(a.status) || isBad(a))
     const isNextOpen = !isNarrow || expanded.includes('todos')
@@ -1272,7 +1369,8 @@ export const register: Register = (on, options) => {
       const isOpen = item.status === 'in_progress' || needsLook(item) ? !expanded.includes(key) : expanded.includes(key)
       const icon = TODO_ICON[item.status]
       const count = `${under.length} agent${under.length === 1 ? '' : 's'}`
-      const right =
+      const held = under.map(a => queueMarks.get(a.id)).find(Boolean)
+      const said =
         item.status === 'skipped'
           ? `skip${item.note && !isNarrow ? `: ${item.note}` : ''}`
           : item.status === 'in_progress'
@@ -1280,6 +1378,7 @@ export const register: Register = (on, options) => {
             : under.length > 0
               ? `${count} ${under.some(isBad) ? '✗' : '✓'}`
               : (item.note ?? '')
+      const right = [held, said].filter(Boolean).join(' · ')
       const { ticket, text } = ticketOf(item, repo)
       const label = ticket ? clip(ticket.label) : ''
       const lane = item.lane !== undefined && Object.hasOwn(lanes, item.lane) ? lanes[item.lane] : undefined
@@ -1354,7 +1453,7 @@ export const register: Register = (on, options) => {
     }
 
     const barWidth = Math.max(10, Math.min(60, (e.props.bodyColumns ?? 80) - 12))
-    const filled = todos.items.length === 0 ? 0 : Math.round((doneCount / todos.items.length) * barWidth)
+    const filled = counts.total === 0 ? 0 : Math.round((counts.done / counts.total) * barWidth)
     const prLabel = todos.link ? (/(\d+)\/?$/.exec(todos.link)?.[1] ? `#${/(\d+)\/?$/.exec(todos.link)?.[1]}` : 'issue') : undefined
     const branchWords = branch.branch
       ? [
@@ -1373,8 +1472,15 @@ export const register: Register = (on, options) => {
               <Text bold>{(todos.title ?? 'Todos').toUpperCase()}</Text>
               <Text dimColor>
                 {' '}
-                · {doneCount} of {todos.items.length} done
+                · {counts.done} of {counts.total} done
+                {counts.found > 0 ? ` · +${counts.found} found` : ''}
               </Text>
+              {sinceUpdate > STALE_MS &&
+                (isStale ? (
+                  <Text color="warning">{` · ⚠ stale · updated ${formatDuration(sinceUpdate)} ago`}</Text>
+                ) : (
+                  <Text dimColor>{` · updated ${formatDuration(sinceUpdate)} ago`}</Text>
+                ))}
             </Text>
           </Box>
           {todos.link && prLabel && <Link href={todos.link} label={prLabel} />}
@@ -1412,7 +1518,18 @@ export const register: Register = (on, options) => {
 
         {todoSection}
 
-        {otherAgents.length > 0 && (
+        {isLaned && ownSteps.length + otherAgents.length > 0 && (
+          <Box flexDirection="column" marginBottom={1}>
+            <Text>
+              <Text bold>ORCHESTRATOR</Text>
+              <Text dimColor> · {activeAgents} running</Text>
+            </Text>
+            {ownSteps.map(todoRow)}
+            {otherAgents.map(agentRow)}
+          </Box>
+        )}
+
+        {!isLaned && otherAgents.length > 0 && (
           <Box flexDirection="column" marginBottom={1}>
             <Text>
               <Text bold>{todos.items.length > 0 ? 'OTHER AGENTS' : 'AGENTS'}</Text>
