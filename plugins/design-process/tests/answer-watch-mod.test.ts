@@ -9,9 +9,9 @@ const HOUR = 3_600_000
 type Row = Record<string, unknown>
 /** The artifact beneath the mod: `db` maps a collection or document path to its rows, `fail` makes every call error. */
 function harness(on: On, entries: Record<string, unknown> = {}) {
-  const w = { db: {} as Record<string, Row[]>, round: {} as Record<string, Row>, registered: [] as string[], submitted: [] as string[], toasts: [] as string[], statuses: [] as unknown[], calls: 0, fail: false, submitFails: false, limits: [] as unknown[], gate: null as null | Promise<void>, inSubmit: false }
+  const w = { db: {} as Record<string, Row[]>, round: {} as Record<string, Row>, registered: [] as string[], submitted: [] as string[], toasts: [] as string[], statuses: [] as unknown[], calls: 0, session: 's-me', fail: false, submitFails: false, limits: [] as unknown[], gate: null as null | Promise<void>, inSubmit: false }
   mock.store(on, entries)
-  on('session.id', () => ({ value: 's-me' }))
+  on('session.id', () => ({ value: w.session }))
   on('mcp.call', (_$, e) => {
     w.calls++
     if (w.fail) throw new Error('mcp down')
@@ -177,6 +177,24 @@ describe('the answer watch', () => {
     await clock.advance(60_000)
     expect(w.calls).toBe(0)
     expect(w.submitted).toEqual([])
+  })
+
+  test('keeps the key it was armed under when the session id changes', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    await watch($)
+    w.session = 's-new'
+    w.db['rounds/r1/answers'] = [answer('u1', { sentAt: 5 })]
+    await clock.advance(10_000)
+    expect(w.submitted).toHaveLength(1)
+    await watch($, { stop: true })
+    const calls = w.calls
+    for (const session of ['s-me', 's-new']) {
+      w.session = session
+      await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
+      await clock.advance(30_000)
+    }
+    expect(w.calls).toBe(calls)
   })
 
   test('a claude row never wakes', async ($, on) => {

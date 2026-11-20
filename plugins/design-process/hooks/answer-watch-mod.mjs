@@ -80,7 +80,7 @@ async function stop($, why, notify) {
   current = null;
   errors = 0;
   $.ui.status(undefined);
-  await $.store.delete(await keyOf($)).catch(() => {});
+  if (w) await $.store.delete(w.key).catch(() => {});
   if (why) $.ui.toast(`Answer watch stopped: ${why}`);
   if (notify && w) await $.prompt.submit({ text: stoppedText(w, why) }).catch(() => {});
 }
@@ -96,14 +96,14 @@ async function poll($, w) {
   if (current !== w || !fresh.length) return;
   const before = { ...w.seen };
   for (const r of fresh) w.seen[r.path] = r.stamp;
-  await $.store.set(await keyOf($), w);
+  await $.store.set(w.key, w);
   try {
     await $.prompt.submit({ text: wakeText(w, fresh) });
   } catch (error) {
     // The wake never happened, so the rows must be offered again next tick.
     // Only while still armed: a stop() during the submit has deleted the stored watch, and this would revive it.
     w.seen = before;
-    if (current === w) await $.store.set(await keyOf($), w);
+    if (current === w) await $.store.set(w.key, w);
     throw error;
   }
 }
@@ -130,8 +130,9 @@ function start($, w) {
 /** Re-arms from the store after a restart or a hot reload, which drop the timer. */
 async function resume($) {
   if (timer) return;
-  const w = await $.store.get(await keyOf($)).catch(() => undefined);
-  if (w?.slug && w.round) start($, w);
+  const key = await keyOf($);
+  const w = await $.store.get(key).catch(() => undefined);
+  if (w?.slug && w.round) start($, { ...w, key });
 }
 
 /** @type {import('claude-code').Register} */
@@ -157,8 +158,8 @@ export const register = (on) => {
       if (current?.slug === slug && current.round === round) await stop($);
       return { result: `Answer watch for round ${round} stopped.` };
     }
-    const w = { slug, round, screens: threadsOf(e.screens), armedAt: await $.clock.now(), seen: current?.slug === slug && current.round === round ? current.seen : {} };
-    await $.store.set(await keyOf($), w);
+    const w = { key: await keyOf($), slug, round, screens: threadsOf(e.screens), armedAt: await $.clock.now(), seen: current?.slug === slug && current.round === round ? current.seen : {} };
+    await $.store.set(w.key, w);
     start($, w);
     return { result: `Watching round ${round} of ${slug}: answers and ${w.screens.length} threads, every 10 s. You are woken when the owner replies; the watch stops when rounds/${round}.status is "handled", after 6 h, or with stop: true.` };
   });
