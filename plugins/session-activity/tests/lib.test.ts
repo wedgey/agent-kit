@@ -196,12 +196,12 @@ describe('queue', () => {
     expect(parseQueueStatus('not json')).toBeUndefined()
   })
 
-  test('the header names each queue, the load against cores and free memory', () => {
+  test('the header gives the box-wide load against cores and free memory', () => {
     const status = parseQueueStatus(JSON.stringify(STATUS))!
-    expect(queueHeader(status)).toBe('tests 2/2 · e2e 0/1 · load 12 / 8 cores · 8.0G free')
+    expect(queueHeader(status)).toBe('box-wide · load 12 / 8 cores · 8.0G free')
     expect(queueTotals(status)).toEqual({ busy: 2, slots: 3, waiting: 2 })
     const blind = parseQueueStatus(JSON.stringify({ ...STATUS, machine: { cores: 8, load1: 1.4, memAvailKb: null, memTotalKb: null } }))!
-    expect(queueHeader(blind)).toBe('tests 2/2 · e2e 0/1 · load 1 / 8 cores')
+    expect(queueHeader(blind)).toBe('box-wide · load 1 / 8 cores')
   })
 
   test('a place is the worktree name, else the last folder', () => {

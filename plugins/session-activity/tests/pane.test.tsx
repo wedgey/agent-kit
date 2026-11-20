@@ -314,6 +314,7 @@ type Host = {
   stats?: string[]
   claude?: (args: readonly string[]) => { exitCode: number; stdout: string; stderr?: string } | undefined
   gh?: (args: readonly string[]) => { exitCode: number; stdout: string } | undefined
+  sh?: (args: readonly string[]) => { exitCode: number; stdout: string } | undefined
   panes?: () => { id: string; isShown: boolean }[]
   ran?: string[]
   isStoreDown?: boolean
@@ -377,7 +378,7 @@ function quietHost(
   })
   on('process.run', async (_$, e) => {
     host.ran?.push(e.argv[0]!)
-    const ran = e.argv[0] === 'node' ? await host.node?.(e.argv.slice(1)) : e.argv[0] === 'claude' ? host.claude?.(e.argv.slice(1)) : e.argv[0] === 'gh' ? host.gh?.(e.argv.slice(1)) : undefined
+    const ran = e.argv[0] === 'sh' && host.sh ? host.sh(e.argv.slice(1)) : e.argv[0] === 'node' ? await host.node?.(e.argv.slice(1)) : e.argv[0] === 'claude' ? host.claude?.(e.argv.slice(1)) : e.argv[0] === 'gh' ? host.gh?.(e.argv.slice(1)) : undefined
     if (ran !== undefined) return { value: { stderr: '', isStdoutTruncated: false, isStderrTruncated: false, ...ran } }
     const isSelf = e.argv[0] === 'sh' && e.argv[2]?.startsWith('echo "self')
     const stdout =
@@ -415,7 +416,8 @@ test('the todos tool draws the list with its title, progress, branch and skipped
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'session-activity', surface, ...PANE })
-    expect(await ui.find({ type: 'Text', text: /FEATURE · 2 of 4 done/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /  2\/4 done$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'feature' })).toBeDefined()
     expect(await ui.find({ type: 'Link', text: '#512' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'feat/x · 2 behind main · 1 changed · no PR' })).toBeDefined()
     expect(await ui.find({ key: 'todo:Build in small units:toggle' })).toBeDefined()
@@ -435,7 +437,7 @@ test('the todos tool refuses a bad status and keeps the list it had; a subagent\
   expect((await writeTodos($, { items: [{ content: 'x', status: 'done' }] })).result).toMatch(/Not saved: .*status/)
   expect((await writeTodos($, { items: [{ content: 'mine', status: 'pending' }], agentId: 'd1' })).result).toMatch(/Saved 1 items, 0 done/)
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /TODOS · 2 of 4 done/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /  2\/4 done$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /mine/ })).toBeUndefined()
 })
 
@@ -481,9 +483,9 @@ test('an agent finds its item by ticket, after a rename too; a rerun of the same
   const row = (text: string) => lines.findIndex(l => l.includes(text))
   expect(row('Build the releases page')).toBeLessThan(row('Read the routes'))
   expect(row('Read the routes')).toBeLessThan(row('Gallery filters'))
-  expect(row('Gallery filters')).toBeLessThan(row('#13 lane'))
+  expect(lines[row('Gallery filters')]).toMatch(/● working/)
   expect(await ui.find({ key: 'agent:l1:toggle' })).toBeUndefined()
-  expect(lines[row('#13 lane') + 1]).toMatch(/run 2/)
+  expect(lines[row('Gallery filters') + 1]?.trim()).toBe('│ run 2 · 0 calls')
   expect(await ui.find({ type: 'Text', text: /OTHER AGENTS/ })).toBeUndefined()
 })
 
@@ -517,13 +519,13 @@ test('work found after the first write counts apart, and a list not touched for 
   await writeTodos($, { items: STEPS })
   await writeTodos($, { items: [...STEPS, { content: 'Fix the flaky test', status: 'pending' }] })
   let ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /TODOS · 2 of 4 done · \+1 found/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /updated/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /  2\/4 done · \+1 found$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /list written/ })).toBeUndefined()
   await ui.unmount()
 
   await clock.advance(11 * 60_000)
   ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /· updated 11m/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /· list written 11m ago$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /stale/ })).toBeUndefined()
   await ui.unmount()
 
@@ -543,7 +545,8 @@ test('work found after the first write counts apart, and a list not touched for 
   agents = [{ id: 'a1', type: 'Explore', description: 'Survey', status: 'completed' }]
   await openPane($)
   ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect((await ui.findAll({ type: 'Text', text: /⚠ stale · updated 12m/ })).some(t => t.props.color === 'warning')).toBe(true)
+  expect(await ui.find({ type: 'Text', text: /· list written 12m ago$/ })).toBeDefined()
+  expect((await ui.findAll({ type: 'Text', text: ' ⚠ stale' })).some(t => t.props.color === 'warning')).toBe(true)
 })
 
 test('an issue closed as completed or a merged PR reads done, one closed as not planned or a duplicate skipped; a PR closed unmerged stays open', async ($, on) => {
@@ -579,7 +582,7 @@ test('an issue closed as completed or a merged PR reads done, one closed as not 
   await openPane($)
   expect(asked.sort()).toEqual(Object.keys(states).sort())
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /TODOS · 4 of 6 done/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /  4\/6 done$/ })).toBeDefined()
   await ui.press({ key: 'todos:done' })
   expect(await ui.find({ type: 'Text', text: 'closed on GitHub' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /skip: closed as not planned/ })).toBeDefined()
@@ -602,6 +605,7 @@ test('an agent sits under the step in progress when it was spawned, with its ver
   let ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
   expect((await ui.find({ key: 'agent:a1:toggle' }))?.text).toMatch(/editor {2}Rename atoms/)
   expect(await ui.find({ type: 'Text', text: 'PASS' })).toBeDefined()
+  await ui.press({ key: 'agent:a1:toggle' })
   expect(await ui.find({ type: 'Text', text: /Haiku 5\.5 · low ✓/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /OTHER AGENTS/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /SPEND · Haiku 5\.5 500/ })).toBeDefined()
@@ -751,13 +755,14 @@ test('todos draw as NOW, NEXT and a folded DONE, each item behind an aligned tic
     '○ #560        Queue status line',
     '○ #561        Watch the merge queue',
   ])
-  expect(lines[at(/^DONE/)]).toBe('DONE · 2 [show]')
+  expect(lines[at(/^DONE/)]).toBe('DONE · 2 · agent-kit#7 [show]')
   expect(await ui.find({ key: 'todo:Measure routing:toggle' })).toBeUndefined()
 
   expect(await ui.find({ type: 'Link', text: 'agent-kit#9' })).toMatchObject({ props: { href: 'https://github.com/wedgey/agent-kit/issues/9' } })
   expect(await ui.find({ type: 'Link', text: '#554' })).toMatchObject({ props: { href: 'https://github.com/wedgey/contexory/issues/554' } })
   expect(await ui.find({ type: 'Link', text: '#560' })).toMatchObject({ props: { href: 'https://github.com/wedgey/contexory/pull/560' } })
   expect((await ui.find({ key: 'todo:#554 Rerun failed e2e once + flaky ledger:toggle' }))?.text).toBe('Rerun failed e2e once + flaky ledger')
+  await ui.press({ key: 'agent:r1:toggle' })
   expect(await ui.find({ type: 'Text', text: /Opus 5\.5 · high ✓/ })).toBeDefined()
 
   await ui.press({ key: 'todos:done' })
@@ -983,7 +988,7 @@ test('a new process of the same session restores the stored list; entries older 
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   await startSession($)
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /FEATURE · 0 of 1 done/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /  0\/1 done$/ })).toBeDefined()
   expect(Object.keys(store).sort()).toEqual(['other', 'todos:s1'])
 })
 
@@ -1231,7 +1236,7 @@ const QUEUE_PS = [
 function queueHost(
   on: On,
   answers: Record<string, QueueAnswer> = {},
-  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; lanes?: unknown[]; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string; agents?: { id: string; type: string; description: string; status: AgentStatus }[] } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown'> = {},
+  opts: { isInstalled?: boolean; statuses?: (string | undefined)[]; status?: unknown; lanes?: unknown[]; installs?: Record<string, string>; hasTool?: boolean; stats?: string[]; env?: Record<string, string>; ps?: () => string; agents?: { id: string; type: string; description: string; status: AgentStatus }[]; files?: Record<string, string> } & Pick<Host, 'store' | 'panes' | 'ran' | 'isStoreDown' | 'sh'> = {},
 ) {
   const calls: string[][] = []
   const installs = opts.installs ?? { 'conductor@agent-kit': CONDUCTOR }
@@ -1241,6 +1246,7 @@ function queueHost(
       : {
           '/home/me/.claude/plugins/installed_plugins.json': installed(installs),
           ...(opts.hasTool === false ? {} : Object.fromEntries(Object.values(installs).map(root => [`${root}/skills/conductor/tools/queue.mjs`, '']))),
+          ...opts.files,
         }
   quietHost(on, files, [''], opts.env, undefined, {}, {
     statuses: opts.statuses,
@@ -1249,6 +1255,7 @@ function queueHost(
     panes: opts.panes,
     ran: opts.ran,
     isStoreDown: opts.isStoreDown,
+    sh: opts.sh,
     ...(opts.lanes ? { claude: () => ({ exitCode: 0, stdout: JSON.stringify(opts.lanes) }) } : {}),
     get ps() {
       return opts.ps?.() ?? QUEUE_PS
@@ -1273,12 +1280,15 @@ test('the QUEUE section lists holders with their state and waiters in rank order
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
   const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
   const at = lines.findIndex(l => l.startsWith('QUEUE'))
-  expect(lines.slice(at, at + 7)).toEqual([
-    'QUEUE · tests 2/2 · e2e 1/1 · build 1/1 · load 12 / 8 cores · 8.0G free',
-    '● tests  q-plain pnpm test 4m00s 3.4 cores · 819M [stop]',
-    '● tests  repo pnpm test:changed you idle 1m00s 0.0 cores · 307M [stop]',
-    '● e2e  (process gone) orphan',
-    '◌ build  q-plain pnpm build 30s [stop]',
+  expect(lines.slice(at, at + 10)).toEqual([
+    'QUEUE · box-wide · load 12 / 8 cores · 8.0G free ⚠ busy',
+    '● tests  2/2  q-plain pnpm test',
+    '4m00s · 3.4 cores · 819M [stop]',
+    '● tests  2/2  repo pnpm test:changed you idle',
+    '1m00s · 0.0 cores · 307M [stop]',
+    '● e2e  1/1  (process gone) orphan',
+    '◌ build  1/1  q-plain pnpm build',
+    '30s [stop]',
     '○ #1 tests  rd-441 pnpm typecheck gate waiting 1m05s [top] [↑] [↓]',
     '○ #2 tests  web pnpm build waiting 5s [top] [↑] [↓]',
   ])
@@ -1384,7 +1394,7 @@ test('under 46 columns the QUEUE section is its header and holders, with waiters
   const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
   const at = lines.findIndex(l => l.startsWith('QUEUE'))
   expect(lines.slice(at, at + 6)).toEqual([
-    'QUEUE · tests 2/2 · e2e 1/1 · build 1/1 · load 12 / 8 cores · 8.0G free',
+    'QUEUE · box-wide · load 12 / 8 cores · 8.0G free ⚠ busy',
     '● tests  q-plain pnpm test [■]',
     '● tests  repo pnpm test:changed you idle [■]',
     '● e2e  (process gone) orphan',
@@ -1419,12 +1429,15 @@ test('the real status shapes draw with no made-up zeros: an orphan without a pro
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
   const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
   const at = lines.findIndex(l => l.startsWith('QUEUE'))
-  expect(lines.slice(at, at + 8)).toEqual([
-    'QUEUE · e2e 1/1 · movetest 1/1 · tests 2/2 · load 2 / 8 cores · 16.6G free',
-    '● e2e  (process gone) orphan',
-    '● movetest  tmp sleep 120 idle 1s 0.0 cores · 49M [stop]',
-    '● tests  tmp sh -c while :; do :; done 1m38s 1.0 cores · 49M [stop]',
-    '◌ tests  tmp sleep 31 30s [stop]',
+  expect(lines.slice(at, at + 11)).toEqual([
+    'QUEUE · box-wide · load 2 / 8 cores · 16.6G free',
+    '● e2e  1/1  (process gone) orphan',
+    '● movetest  1/1  tmp sleep 120 idle',
+    '1s · 0.0 cores · 49M [stop]',
+    '● tests  2/2  tmp sh -c while :; do :; done',
+    '1m38s · 1.0 cores · 49M [stop]',
+    '◌ tests  2/2  tmp sleep 31',
+    '30s [stop]',
     '○ #1 movetest  tmp sleep 41 waiting 0s [top] [↑] [↓]',
     '○ #2 movetest  tmp sleep 42 waiting 0s [top] [↑] [↓]',
     '○ #1 tests  tmp sleep 33 waiting 1m04s [top] [↑] [↓]',
@@ -1441,7 +1454,7 @@ test('a free figure the machine could not read is left out of the header; an orp
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 72 } })
   const lines = textOf(await ui.find({ type: 'Box' })).split('\n')
   const at = lines.findIndex(l => l.startsWith('QUEUE'))
-  expect(lines.slice(at, at + 2)).toEqual(['QUEUE · e2e 1/1 · load 1 / 8 cores', '● e2e  tmp pnpm e2e orphan [stop]'])
+  expect(lines.slice(at, at + 3)).toEqual(['QUEUE · box-wide · load 1 / 8 cores', '● e2e  1/1  tmp pnpm e2e orphan', '[stop]'])
 })
 
 const LANE_ITEMS = [
@@ -1520,21 +1533,21 @@ test("an item with a lane shows the lane's state, and expanded, its progress and
   expect(calls).toContainEqual(['agents', '--json', '--all'])
 
   const { ui, lines } = await lanePane($)
-  expect(await ui.find({ type: 'Text', text: '● working' })).toMatchObject({ props: { color: 'suggestion' } })
-  expect(await ui.find({ type: 'Text', text: '⚠ blocked' })).toMatchObject({ props: { color: 'warning' } })
-  expect(await ui.find({ type: 'Text', text: '◌ lane missing' })).toMatchObject({ props: { color: 'inactive' } })
+  expect((await ui.findAll({ type: 'Text', text: '● working' })).some(t => t.props.color === 'suggestion')).toBe(true)
+  expect((await ui.findAll({ type: 'Text', text: '⚠ blocked' })).some(t => t.props.color === 'warning')).toBe(true)
+  expect((await ui.findAll({ type: 'Text', text: '◌ lane missing' })).some(t => t.props.color === 'inactive')).toBe(true)
   const at = lines.findIndex(l => l.includes('Build the releases page'))
   expect(lines.slice(at + 1, at + 5).map(l => l.trim())).toEqual([
-    'lane rd-12 · working · 2m05s · 2/7',
-    '◐ #40 Write the loader',
-    '◐ Wire the table',
-    '○ Open the PR',
+    '│ lane rd-12 · 2/7',
+    '├ ◐ step  #40 Write the loader',
+    '├ ◐ step  Wire the table',
+    '└ ○ next  Open the PR',
   ])
   expect(lines.some(l => l.includes('lane rd-13'))).toBe(false)
   expect(lines.some(l => l.includes('Old run'))).toBe(false)
 
   await ui.press({ key: 'todo:#13 Gallery filters:toggle' })
-  expect(await ui.find({ type: 'Text', text: 'lane rd-13 · blocked · waiting for permission prompt · 30s' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '│ lane rd-13 · waiting for permission prompt' })).toBeDefined()
   await ui.press({ key: 'todo:#12 Build the releases page:toggle' })
   expect(await ui.find({ type: 'Text', text: /lane rd-12/ })).toBeUndefined()
 })
@@ -1549,7 +1562,7 @@ test('a failed or unreadable lane read keeps the last reading', async ($, on) =>
     answer = bad
     await openPane($)
     const { ui } = await lanePane($)
-    expect(await ui.find({ type: 'Text', text: 'lane rd-12 · working · 2m05s · 2/7' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '│ lane rd-12 · 2/7' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '⚠ blocked' })).toBeDefined()
     await ui.unmount()
   }
@@ -1561,7 +1574,7 @@ test("a lane whose list is not saved yet shows no progress figure, never 0/0", a
   await writeTodos($, { items: LANE_ITEMS.slice(0, 1) })
   await openPane($)
   const { ui } = await lanePane($)
-  expect(await ui.find({ type: 'Text', text: 'lane rd-12 · working · 5s' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '│ lane rd-12' })).toBeDefined()
 })
 
 test('under 46 columns a lane item shows only its marker', async ($, on) => {
@@ -1595,8 +1608,8 @@ test('a malformed lane list keeps that lane\'s last reading and never holds up t
   lanes = LANES.map(e => ('name' in e && e.name === 'rd-13' ? { ...e, state: 'done', waitingFor: undefined } : e))
   await openPane($)
   const { ui } = await lanePane($)
-  expect(await ui.find({ type: 'Text', text: 'lane rd-12 · working · 2m05s · 2/7' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '✓ done' })).toMatchObject({ props: { color: 'success' } })
+  expect(await ui.find({ type: 'Text', text: '│ lane rd-12 · 2/7' })).toBeDefined()
+  expect((await ui.findAll({ type: 'Text', text: '✓ lane done' })).some(t => t.props.color === 'success')).toBe(true)
 })
 
 test('an interactive session with the lane\'s name is not the lane', async ($, on) => {
@@ -1642,8 +1655,8 @@ test("another session's names and texts are drawn with their control characters 
   await writeTodos($, { items: [{ content: 'Escape test', status: 'in_progress', lane: name }] })
   await openPane($)
   const { ui, lines } = await lanePane($)
-  expect(await ui.find({ type: 'Text', text: 'lane rd 12 [2J · blocked · waiting for permission prompt [31m · 1s · 0/1' })).toBeDefined()
-  expect(lines.map(l => l.trim())).toContain('◐ Fix the ]0;pwned loader')
+  expect(await ui.find({ type: 'Text', text: '│ lane rd 12 [2J · waiting for permission prompt [31m · 0/1' })).toBeDefined()
+  expect(lines.map(l => l.trim())).toContain('└ ◐ step  Fix the ]0;pwned loader')
   expect(lines.some(l => /[\u0000-\u001f\u007f-\u009f]/.test(l))).toBe(false)
 })
 
@@ -1682,12 +1695,12 @@ test("a lane whose saved list is gone keeps its count while it is the same sessi
   delete store['todos:new-12']
   await openPane($)
   let { ui } = await lanePane($)
-  expect(await ui.find({ type: 'Text', text: 'lane rd-12 · working · 2m05s · 2/7' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '│ lane rd-12 · 2/7' })).toBeDefined()
   await ui.unmount()
   lanes = [laneEntry('rd-12', 'newer-12', NOW - 1000)]
   await openPane($)
   ;({ ui } = await lanePane($))
-  expect(await ui.find({ type: 'Text', text: 'lane rd-12 · working · 1s' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '│ lane rd-12' })).toBeDefined()
 })
 
 test('lanes named like object members read as any other name', async ($, on) => {
@@ -1703,8 +1716,8 @@ test('lanes named like object members read as any other name', async ($, on) => 
   await openPane($)
   const { ui } = await lanePane($)
   expect(await ui.find({ type: 'Text', text: '◌ lane missing' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'lane __proto__ · working · 1s' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '◌ valueOf' })).toMatchObject({ props: { color: 'inactive' } })
+  expect(await ui.find({ type: 'Text', text: '│ lane __proto__' })).toBeDefined()
+  expect((await ui.findAll({ type: 'Text', text: '◌ valueOf' })).some(t => t.props.color === 'inactive')).toBe(true)
 })
 
 const QUEUE_KEY = 'queueReading:'
@@ -1905,7 +1918,7 @@ test('with lanes, the count is tickets only; the orchestrator\'s own steps and a
   await writeTodos($, { items: LANE_ITEMS })
   await openPane($)
   const { lines } = await lanePane($)
-  expect(lines[0]).toMatch(/^TODOS · 0 of 3 done/)
+  expect(lines[1]).toMatch(/  0\/3 tickets$/)
   const at = lines.findIndex(l => l.startsWith('ORCHESTRATOR'))
   expect(at).toBeGreaterThan(lines.findIndex(l => l.includes('Drop the old route')))
   expect(lines.findIndex(l => l.includes('Review the epic'))).toBeGreaterThan(at)
@@ -1930,8 +1943,9 @@ test("a queue run in an agent's worktree names its ticket, and the item shows th
   await spawn($, '#849 lane', 'conductor:lane')
   await openPane($)
   const { lines } = await lanePane($)
-  expect(lines.find(l => l.includes('Ship the queue'))).toMatch(/⧗ e2e slot · 1m11s/)
-  expect(lines.find(l => l.startsWith('● e2e'))).toMatch(/^● e2e {2}#849 lane pnpm e2e/)
+  const held = lines.findIndex(l => l.includes('Ship the queue'))
+  expect(lines.slice(held + 1, held + 3).map(l => l.trim())).toContain('│ ⧗ e2e slot · 1m11s')
+  expect(lines.find(l => l.startsWith('● e2e'))).toMatch(/^● e2e {2}1\/1 {2}#849 lane pnpm e2e/)
   expect(lines.find(l => l.startsWith('○ #1 tests'))).toMatch(/other session pnpm build/)
 })
 
@@ -1941,12 +1955,12 @@ test('an epic counts only its tickets from the first write, before any lane is n
   await writeTodos($, { epic: true, items: LANE_ITEMS.map(({ lane: _, ...i }) => i) })
   await openPane($)
   let { ui, lines } = await lanePane($)
-  expect(lines[0]).toMatch(/^TODOS · 0 of 3 done/)
+  expect(lines[1]).toMatch(/  0\/3 tickets$/)
   expect(lines.some(l => l.startsWith('ORCHESTRATOR'))).toBe(true)
   await ui.unmount()
   await writeTodos($, { items: LANE_ITEMS })
   ;({ lines } = await lanePane($))
-  expect(lines[0]).toMatch(/^TODOS · 0 of 3 done/)
+  expect(lines[1]).toMatch(/  0\/3 tickets$/)
 })
 
 test('a lane that has stopped while its item is open makes a list untouched for 10 minutes read stale; a working lane does not', async ($, on) => {
@@ -1957,14 +1971,13 @@ test('a lane that has stopped while its item is open makes a list untouched for 
   await clock.advance(11 * 60_000)
   await openPane($)
   let { ui, lines } = await lanePane($)
-  expect(lines[0]).toMatch(/updated 11m/)
-  expect(lines[0]).not.toMatch(/stale/)
+  expect(lines[2]).toMatch(/· list written 11m ago$/)
   await ui.unmount()
   state = 'done'
   await clock.advance(60_000)
   await openPane($)
   ;({ lines } = await lanePane($))
-  expect(lines[0]).toMatch(/⚠ stale · updated 12m/)
+  expect(lines[2]).toMatch(/· list written 12m ago ⚠ stale$/)
 })
 
 test("a queue run in a lane's own checkout names the lane's ticket and marks its item; a lane in this session's folder claims nothing", async ($, on) => {
@@ -1988,10 +2001,163 @@ test("a queue run in a lane's own checkout names the lane's ticket and marks its
   })
   await openPane($)
   const { ui, lines } = await lanePane($)
-  expect(lines.find(l => l.includes('Ship the queue'))).toMatch(/⧗ e2e slot · 1m11s/)
-  expect(lines.find(l => l.includes('#850'))).not.toMatch(/⧗/)
+  const held = lines.findIndex(l => l.includes('Ship the queue'))
+  expect(lines.slice(held + 1, held + 3).map(l => l.trim())).toContain('│ ⧗ e2e slot · 1m11s')
+  const next = lines.findIndex(l => l.includes('#850'))
+  expect(lines.slice(next, next + 3).join('\n')).not.toMatch(/⧗/)
   await ui.press({ key: 'todos:done' })
   expect(textOf(await ui.find({ type: 'Box' }))).not.toMatch(/Earlier ticket.*⧗/)
-  expect(lines.find(l => l.startsWith('● e2e'))).toMatch(/^● e2e {2}#849 lane pnpm e2e/)
+  expect(lines.find(l => l.startsWith('● e2e'))).toMatch(/^● e2e {2}1\/1 {2}#849 lane pnpm e2e/)
   expect(lines.find(l => l.startsWith('○ #1 tests'))).toMatch(/repo pnpm build/)
+})
+
+test('the header reads the title as written with its epic link, a bar with the ticket count, and the branch with the list age', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  laneHost(on)
+  const items = [
+    { content: '#835 Audit the entry', status: 'completed' },
+    { content: '#836 Rework the editor', status: 'in_progress', lane: 'rd-12' },
+    { content: '#837 Trigger tests', status: 'pending' },
+    { content: '#838 Version history', status: 'pending' },
+  ]
+  await writeTodos($, { title: 'Create-a-skill audit', link: 'https://github.com/wedgey/contexory/issues/834', epic: true, items })
+  await writeTodos($, { items: [...items, { content: '#900 Found one', status: 'completed' }, { content: '#901 Found two', status: 'pending' }] })
+  await clock.advance(19 * 60_000)
+  await openPane($)
+  const { ui, lines } = await lanePane($, 60)
+  expect(lines.slice(0, 3)).toEqual([
+    'Create-a-skill audit · epic #834',
+    `${'▰'.repeat(6)}${'▱'.repeat(18)}  1/4 tickets · +2 found, 1 done`,
+    'feat/epic · 0 behind main · 0 changed · no PR · list written 19m ago',
+  ])
+  expect(await ui.find({ type: 'Link', text: 'epic #834' })).toMatchObject({ props: { href: 'https://github.com/wedgey/contexory/issues/834' } })
+})
+
+test("a lane's item draws its run as a tree: model and calls, its own steps, and its helpers with older finished ones folded", async ($, on) => {
+  mock.clock(on, { now: NOW })
+  quietHost(on)
+  const agents = [
+    { id: 'l1', type: 'conductor:lane', description: '#12 lane', status: 'running' as AgentStatus },
+    { id: 'r1', type: 'conductor:reviewer', description: 'Review #12', status: 'completed' as AgentStatus, parentId: 'l1' },
+    { id: 'r2', type: 'conductor:implementer', description: 'Fix A', status: 'completed' as AgentStatus, parentId: 'l1' },
+    { id: 'r3', type: 'conductor:implementer', description: 'Fix B', status: 'completed' as AgentStatus, parentId: 'l1' },
+    { id: 'r4', type: 'conductor:implementer', description: 'Fix C', status: 'completed' as AgentStatus, parentId: 'l1' },
+    { id: 'v1', type: 'conductor:verifier', description: 'Verify #12', status: 'running' as AgentStatus, parentId: 'l1' },
+  ]
+  on('agent.list', () => ({ value: agents }))
+  let next = ''
+  on('agent.spawn', () => ({ model: 'opus', agentId: next }))
+  await writeTodos($, { epic: true, items: [{ content: '#12 Build the releases page', status: 'in_progress' }] })
+  for (const a of agents) {
+    next = a.id
+    await spawn($, a.description, a.type)
+  }
+  await runTurn($, 'r1', 'claude-opus-5-5', 'high', 'STATUS ISSUES')
+  await writeTodos($, {
+    agentId: 'l1',
+    items: [
+      { content: 'Map the routes', status: 'completed' },
+      { content: 'Write the loader', status: 'in_progress' },
+      { content: 'Open the PR', status: 'pending' },
+    ],
+  })
+  await openPane($)
+  const { ui, lines } = await lanePane($)
+  const at = lines.findIndex(l => l.includes('Build the releases page'))
+  expect(lines[at]).toMatch(/● working/)
+  const tree = lines.slice(at + 1, at + 9).map(l => l.trim())
+  expect(tree[0]).toBe('│ 0 calls')
+  expect(tree[1]).toBe('├ ◐ step  Write the loader')
+  expect(tree[2]).toBe('├ ○ next  Open the PR')
+  expect(tree[3]).toMatch(/^├ ✓ reviewer {2}Review #12 .*ISSUES/)
+  expect(tree[4]).toMatch(/^├ ✓ implementer {2}Fix B/)
+  expect(tree[5]).toMatch(/^├ ✓ implementer {2}Fix C/)
+  expect(tree[6]).toMatch(/^├ ● verifier {2}Verify #12/)
+  expect(tree[7]).toMatch(/^└ \+1 earlier · show/)
+  expect(lines.some(l => l.includes('Fix A'))).toBe(false)
+  expect(lines.some(l => /Opus 5\.5 · high/.test(l))).toBe(false)
+  await ui.press({ key: 'agent:r1:toggle' })
+  expect(await ui.find({ type: 'Text', text: /Opus 5\.5 · high/ })).toBeDefined()
+  await ui.press({ key: 'todo:#12 Build the releases page:earlier' })
+  expect(await ui.find({ key: 'agent:r2:toggle' })).toBeDefined()
+})
+
+test('DONE folds to its ticket labels, unstarted found work folds apart, and the orchestrator\'s done steps fold', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  laneHost(on)
+  const items = [
+    ...[835, 836, 837, 838, 839, 840, 841, 842].map(n => ({ content: `#${n} Ticket ${n}`, status: 'completed' })),
+    { content: '#843 Now', status: 'in_progress' },
+    { content: 'Map the epic', status: 'completed' },
+    { content: 'Plan lanes', status: 'in_progress' },
+  ]
+  await writeTodos($, { epic: true, items })
+  await writeTodos($, { items: [...items, { content: '#900 Found work', status: 'pending' }, { content: '#901 More found', status: 'pending' }] })
+  await openPane($)
+  const { ui, lines } = await lanePane($)
+  expect(lines).toContain('DONE · 8 · #835 #836 #837 #838 #839 #840 … [show]')
+  expect(lines).toContain('FOUND · 2 open, not in the total [show]')
+  expect(lines.some(l => l.includes('Found work'))).toBe(false)
+  expect(lines).toContain('ORCHESTRATOR · 1 done [show]')
+  expect(lines.some(l => l.includes('Map the epic'))).toBe(false)
+  expect(lines.some(l => l.includes('Plan lanes'))).toBe(true)
+  await ui.press({ key: 'todos:found' })
+  expect(await ui.find({ key: 'todo:#900 Found work:toggle' })).toBeDefined()
+  await ui.press({ key: 'orchestrator:done' })
+  expect(await ui.find({ key: 'todo:Map the epic:toggle' })).toBeDefined()
+})
+
+test("QUEUE is box-wide: two-line holders, another session's run named by that session without a stop, and an empty wait line", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  const [tests, e2e] = QUEUE_FIXTURE.queues
+  const status = {
+    ...QUEUE_FIXTURE,
+    queues: [
+      { ...tests!, holders: [tests!.holders[1]!], waiters: [] },
+      { ...e2e!, holders: [{ slot: 0, pid: 777, cwd: '/repo/.claude/worktrees/agent-zz9', command: 'pnpm e2e', ageMs: 71_000, state: 'busy', cpuPct: 280, memKb: 4_300_000 }] },
+    ],
+  }
+  const meta = '/home/me/.claude/projects/-repo/sess-9/subagents/agent-zz9.meta.json'
+  queueHost(on, {}, {
+    status,
+    lanes: [{ pid: 9, id: 'sess-9', cwd: '/repo', kind: 'interactive', startedAt: 0, sessionId: 'sess-9', name: 'landing-v2', status: 'busy' }],
+    files: { [meta]: JSON.stringify({ agentType: 'conductor:lane', description: '#918 lane' }) },
+    sh: args => (args.join(' ').includes('subagents/agent-') ? { exitCode: 0, stdout: `${meta}\n` } : undefined),
+  })
+  await writeTodos($, { items: [{ content: 'Ship', status: 'in_progress' }] })
+  await openPane($)
+  await openPane($)
+  const { ui, lines } = await lanePane($, 72)
+  const at = lines.findIndex(l => l.startsWith('QUEUE'))
+  expect(lines[at]).toBe('QUEUE · box-wide · load 12 / 8 cores · 8.0G free ⚠ busy')
+  expect(lines).toContain('● e2e  1/1  landing-v2 · #918 lane pnpm e2e')
+  expect(await ui.find({ key: 'queue:e2e:0:stop' })).toBeUndefined()
+  expect(lines.map(l => l.trim())).toContain('1m00s · 0.0 cores · 307M [stop]')
+  expect(lines).toContain('no one waiting')
+})
+
+test("a lane's PR shows on its run line, open and then merged", async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  let pr = 'open  \n'
+  const asked: string[][] = []
+  quietHost(on, {}, [''], undefined, undefined, {}, {
+    gh: args => {
+      asked.push([...args])
+      return args.some(a => a.includes('issues/877')) ? { exitCode: 0, stdout: pr } : undefined
+    },
+  })
+  on('agent.list', () => ({ value: [{ id: 'l1', type: 'conductor:lane', description: '#12 lane', status: 'completed' }] }))
+  on('agent.spawn', () => ({ model: 'opus', agentId: 'l1' }))
+  await writeTodos($, { epic: true, items: [{ content: '#12 Build the releases page', status: 'in_progress' }] })
+  await spawn($, '#12 lane', 'conductor:lane')
+  await runTurn($, 'l1', 'claude-sonnet-5-5', 'medium', 'STATUS PASS\nhttps://github.com/wedgey/contexory/pull/877')
+  await openPane($)
+  let { ui, lines } = await lanePane($)
+  expect(lines.find(l => l.includes('│'))?.trim()).toBe('│ Sonnet 5.5 · 0 calls · PR #877 open')
+  await ui.unmount()
+  pr = 'closed  2026-11-19T10:00:00Z\n'
+  await clock.advance(5 * 60_000)
+  await openPane($)
+  ;({ ui, lines } = await lanePane($))
+  expect(lines.find(l => l.includes('│'))).toMatch(/· PR #877 merged$/)
 })
