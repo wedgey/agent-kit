@@ -487,7 +487,29 @@ test('an agent finds its item by ticket, after a rename too; a rerun of the same
   expect(await ui.find({ type: 'Text', text: /OTHER AGENTS/ })).toBeUndefined()
 })
 
-test('work found after the first write counts apart, and a list not touched for 10 minutes while agents run reads stale', async ($, on) => {
+test('two runs of one brief that are both live both show', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  quietHost(on)
+  on('agent.list', () => ({
+    value: [
+      { id: 'r1', type: 'conductor:reviewer', description: '#13 review', status: 'running' },
+      { id: 'r2', type: 'conductor:reviewer', description: '#13 review', status: 'running' },
+    ],
+  }))
+  let next = ''
+  on('agent.spawn', () => ({ model: 'opus', agentId: next }))
+  await writeTodos($, { items: [{ content: '#13 Gallery filters', status: 'in_progress' }] })
+  for (const id of ['r1', 'r2']) {
+    next = id
+    await spawn($, '#13 review', 'conductor:reviewer')
+  }
+  await openPane($)
+  const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ key: 'agent:r1:toggle' })).toBeDefined()
+  expect(await ui.find({ key: 'agent:r2:toggle' })).toBeDefined()
+})
+
+test('work found after the first write counts apart, and a list not touched for 10 minutes after an agent ended reads stale', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   quietHost(on)
   let agents: { id: string; type: string; description: string; status: AgentStatus }[] = []
@@ -508,25 +530,47 @@ test('work found after the first write counts apart, and a list not touched for 
   agents = [{ id: 'a1', type: 'Explore', description: 'Survey', status: 'running' }]
   await openPane($)
   ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /stale/ })).toBeUndefined()
+  await ui.unmount()
+
+  agents = [{ id: 'a1', type: 'Explore', description: 'Survey', status: 'completed' }]
+  await openPane($)
+  ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
   expect((await ui.findAll({ type: 'Text', text: /⚠ stale · updated 11m/ })).some(t => t.props.color === 'warning')).toBe(true)
 })
 
-test('an item whose GitHub issue is closed reads done, and counts', async ($, on) => {
+test('an issue closed as completed or a merged PR reads done; one closed unmerged or not planned does not', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
-  const asked: string[][] = []
+  const asked: string[] = []
+  const states: Record<string, string> = {
+    'repos/o/r/issues/7': 'closed completed \n',
+    'repos/o/r/issues/8': 'open  \n',
+    'repos/o/r/issues/9': 'closed  2026-11-19T10:00:00Z\n',
+    'repos/o/r/issues/10': 'closed  \n',
+    'repos/o/r/issues/11': 'closed not_planned \n',
+  }
   quietHost(on, {}, [''], undefined, undefined, {}, {
     gh: args => {
-      asked.push([...args])
-      return args[0] === 'api' ? { exitCode: 0, stdout: args[1] === 'repos/o/r/issues/7' ? 'closed\n' : 'open\n' } : { exitCode: 1, stdout: '' }
+      if (args[0] !== 'api') return { exitCode: 1, stdout: '' }
+      asked.push(args[1]!)
+      return { exitCode: 0, stdout: states[args[1]!] ?? '' }
     },
   })
   on('agent.list', () => ({ value: [] }))
-  await writeTodos($, { link: 'https://github.com/o/r/issues/1', items: [{ content: 'Ship it', ticket: 'https://github.com/o/r/issues/7', status: 'in_progress' }, { content: '#8 Next', status: 'pending' }] })
+  await writeTodos($, {
+    link: 'https://github.com/o/r/issues/1',
+    items: [
+      { content: 'Ship it', ticket: 'https://github.com/o/r/issues/7', status: 'in_progress' },
+      { content: '#8 Next', status: 'pending' },
+      { content: '#9 Merged PR', status: 'pending' },
+      { content: '#10 Closed PR', status: 'pending' },
+      { content: '#11 Dropped', status: 'pending' },
+    ],
+  })
   await openPane($)
-  expect(asked).toContainEqual(['api', 'repos/o/r/issues/7', '--jq', '.state'])
-  expect(asked).toContainEqual(['api', 'repos/o/r/issues/8', '--jq', '.state'])
+  expect(asked.sort()).toEqual(Object.keys(states).sort())
   const ui = await $.ui.mount({ plugin: 'session-activity', surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /TODOS · 1 of 2 done/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /TODOS · 2 of 5 done/ })).toBeDefined()
   await ui.press({ key: 'todos:done' })
   expect(await ui.find({ type: 'Text', text: 'closed on GitHub' })).toBeDefined()
 })

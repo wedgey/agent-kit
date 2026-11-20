@@ -323,8 +323,8 @@ export function todoInputError(input: Record<string, unknown>): string | undefin
   return undefined
 }
 
-// Items are never dropped, so the total only grows when work is found; a call naming none of the last
-// list's items, or a new title, starts a new list.
+// Items are never dropped, so the total only grows when work is found. A new title, or a call naming
+// none of the last list's items once all of them are settled, starts a new list.
 export function applyTodos(prev: TodoList | undefined, input: TodoInput, now: number): TodoList {
   const label = (i: Pick<TodoItem, 'content' | 'ticket'>) => ticketOf(i).ticket?.label
   const match = (base: readonly TodoItem[]) => {
@@ -334,15 +334,21 @@ export function applyTodos(prev: TodoList | undefined, input: TodoInput, now: nu
       return at < 0 ? undefined : left.splice(at, 1)[0]
     }
     const byText = input.items.map(i => take(p => p.content === i.content))
-    const pairs = input.items.map((i, n) => byText[n] ?? (label(i) ? take(p => label(p) === label(i)) : undefined))
+    // A ticket on two items of either list would let a new item take a left-out one's place.
+    const isSole = (l: string) => input.items.filter(i => label(i) === l).length === 1 && base.filter(p => label(p) === l).length === 1
+    const pairs = input.items.map((i, n) => {
+      const l = label(i)
+      return byText[n] ?? (l && isSole(l) ? take(p => label(p) === l) : undefined)
+    })
     return { pairs, left }
   }
   const isRetitled = Boolean(prev?.title && input.title && prev.title !== input.title)
   let base = isRetitled ? [] : (prev?.items ?? [])
   let { pairs, left } = match(base)
-  if (input.items.length > 0 && base.length > 0 && pairs.every(p => p === undefined)) ({ pairs, left } = match((base = [])))
-  const items: TodoItem[] = input.items.map(({ content, status, note, ticket, lane }, n) => {
+  if (input.items.length > 0 && base.every(isSettled) && pairs.every(p => p === undefined)) ({ pairs, left } = match((base = [])))
+  const items: TodoItem[] = input.items.map(({ content, status, note, ticket, lane: sent }, n) => {
     const before = pairs[n]
+    const lane = sent ?? before?.lane
     const startedAt = status === 'pending' ? undefined : (before?.startedAt ?? (status === 'in_progress' ? now : undefined))
     const isFound = before ? before.isFound : base.length > 0
     return {

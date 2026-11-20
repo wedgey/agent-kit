@@ -440,6 +440,27 @@ describe('todos', () => {
     expect(applyTodos(first, { items: [{ content: 'C', status: 'pending' }] }, 2).items).toEqual([{ content: 'C', status: 'pending' }])
   })
 
+  test('a call sending only new items adds them while the list has open work', () => {
+    const first = applyTodos(undefined, { items: [{ content: 'A', status: 'completed' }, { content: 'B', status: 'in_progress' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: 'Fix the lint', status: 'pending' }] }, 2)
+    expect(second.items.map(i => i.content)).toEqual(['Fix the lint', 'A', 'B'])
+    expect(todoCounts(second.items)).toEqual({ done: 1, total: 2, found: 1 })
+  })
+
+  test('a ticket matches a renamed item only when one old and one new item share it', () => {
+    const first = applyTodos(undefined, { items: [{ content: '#5 Build', status: 'completed' }, { content: '#5 Ship', status: 'pending' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: '#5 Ship', status: 'in_progress' }, { content: '#5 Fix review', status: 'pending' }] }, 2)
+    expect(second.items.map(i => i.content)).toEqual(['#5 Ship', '#5 Fix review', '#5 Build'])
+    expect(todoCounts(second.items)).toEqual({ done: 1, total: 2, found: 1 })
+  })
+
+  test('an item keeps its lane when a later call leaves the lane out, so the count does not switch back', () => {
+    const first = applyTodos(undefined, { items: [{ content: '#1 A', status: 'in_progress', lane: 'rd-1' }, { content: 'Plan', status: 'completed' }] }, 1)
+    const second = applyTodos(first, { items: [{ content: '#1 A', status: 'completed' }] }, 2)
+    expect(second.items[0]?.lane).toBe('rd-1')
+    expect(todoCounts(second.items)).toEqual({ done: 1, total: 1, found: 0 })
+  })
+
   test('with lanes, only ticket items count toward the total', () => {
     const items = [
       { content: '#1 A', status: 'completed', lane: 'rd-1' },

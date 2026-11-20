@@ -145,6 +145,7 @@ const TODO_DESCRIPTION = [
   'Mark an item in_progress when you start it and completed as soon as it is done; an item whose work ends in a PR is done only when its PR is merge-ready and only the merge itself is left.',
   'Start an item with its ticket, as `#123 Fix the login redirect` (or `owner/repo#9` for another repo), or pass it as `ticket`; every item with a ticket names it.',
   'An agent you spawn is listed under the item whose ticket leads its description (as `#123 review`), else under the item in progress when you spawn it.',
+  'Keep an item\'s text as it was; to reword one without a ticket, mark the old item skipped and add the new one.',
   'A subagent may call this too: its list shows as one line under its own row.',
   'An item whose ticket a background session (a lane) owns passes that session\'s name as `lane`.',
   '`title` heads the list (the kind of task, or the playbook it follows). `link` is the URL of the issue that holds the work state.',
@@ -195,6 +196,7 @@ let queueToolMissing: string | undefined
 let lanesAt = 0
 let prLookup: { branch: string; at: number; pr?: number } | undefined
 let ticketsAt = 0
+let ticketCursor = 0
 
 const metricsOf = async ($: $, id: string, fn: (m: AgentMetrics) => AgentMetrics) =>
   update($, metricsA, all => ({ ...all, [id]: fn(all[id] ?? { toolUses: 0, tokens: 0, activity: [] }) }))
@@ -319,26 +321,35 @@ async function refreshBranch($: $, now: number) {
   await update($, branchA, () => ({ ...health, ...(prLookup?.pr ? { pr: prLookup.pr } : {}) }))
 }
 
-// GitHub's issues endpoint answers for PRs too; a merged PR reads closed.
+// GitHub's issues endpoint answers for PRs too. Only a merged PR or an issue closed as completed is done;
+// a PR closed unmerged or an issue closed as not planned is not.
+const TICKET_STATE = '[.state, .state_reason // "", .pull_request.merged_at // ""] | join(" ")'
+
 async function refreshTickets($: $, now: number) {
   if (now - ticketsAt < PR_EVERY_MS) return
   ticketsAt = now
   const [todos, branch] = await Promise.all([read($, todosA), read($, branchA)])
   const repo = contextRepo(todos.link, branch.repo)
-  const hrefs = todos.items
+  const all = todos.items
     .filter(i => i.status === 'pending' || i.status === 'in_progress')
     .flatMap(i => ticketOf(i, repo).ticket?.href ?? [])
     .filter(href => GITHUB_ISSUE.test(href))
-    .slice(0, MAX_TICKET_READS)
+  // Past the cap, each read starts where the last stopped, so every ticket is read in turn.
+  const from = all.length > MAX_TICKET_READS ? ticketCursor % all.length : 0
+  const hrefs = [...all.slice(from), ...all.slice(0, from)].slice(0, MAX_TICKET_READS)
+  ticketCursor = from + hrefs.length
   const closed: string[] = []
   const open: string[] = []
-  for (const href of hrefs) {
-    const [, repoName, n] = GITHUB_ISSUE.exec(href)!
-    const out = await $.process.run(['gh', 'api', `repos/${repoName}/issues/${n}`, '--jq', '.state'], { timeoutMs: GH_TIMEOUT_MS }).catch(() => undefined)
-    const state = out?.exitCode === 0 ? out.stdout.trim() : undefined
-    if (state === 'closed') closed.push(href)
-    else if (state === 'open') open.push(href)
-  }
+  await Promise.all(
+    hrefs.map(async href => {
+      const [, repoName, n] = GITHUB_ISSUE.exec(href)!
+      const out = await $.process.run(['gh', 'api', `repos/${repoName}/issues/${n}`, '--jq', TICKET_STATE], { timeoutMs: GH_TIMEOUT_MS }).catch(() => undefined)
+      if (out?.exitCode !== 0) return
+      const [state, reason, mergedAt] = out.stdout.trim().split(' ')
+      if (state === 'closed' && (reason === 'completed' || mergedAt)) closed.push(href)
+      else if (state) open.push(href)
+    }),
+  )
   // A failed read keeps what was last read.
   await update($, closedA, prev => [...new Set([...prev.filter(h => !open.includes(h)), ...closed])])
 }
@@ -457,7 +468,8 @@ async function tick($: $) {
   try {
     const now = await $.clock.now()
     const [list, spawns] = await Promise.all([$.agent.list(), read($, spawnsA)])
-    await update($, agentsA, prev => mergeAgents(prev, settleFinished(list, spawns), now))
+    const kept = await update($, agentsA, prev => mergeAgents(prev, settleFinished(list, spawns), now))
+    await update($, agentTodosA, all => Object.fromEntries(Object.entries(all).filter(([id]) => kept.some(a => a.id === id))))
     await update($, shellsA, shells => expireFinished(shells, now, clearAfterMs))
     const shells = await read($, shellsA)
     const orphans = await read($, orphansA)
@@ -1113,7 +1125,11 @@ export const register: Register = (on, options) => {
     const isLaned = hasLanes(items)
     const todoTexts = new Set(items.map(i => i.content))
     // A rename keeps the ticket, so an agent filed by ticket stays under its item.
-    const ticketItems = new Map(items.flatMap(i => (ticketOf(i, repo).ticket ? [[ticketOf(i, repo).ticket!.label, i.content] as const] : [])))
+    const ticketItems = new Map<string, string>()
+    for (const i of items) {
+      const label = ticketOf(i, repo).ticket?.label
+      if (label && (!ticketItems.has(label) || i.status === 'in_progress')) ticketItems.set(label, i.content)
+    }
     const todoOf = (a: AgentRow): string | undefined => {
       const parent = a.parentId ? agents.find(p => p.id === a.parentId) : undefined
       if (parent) return todoOf(parent)
@@ -1122,10 +1138,11 @@ export const register: Register = (on, options) => {
     }
     // The same brief spawned again under one item shows as its latest run.
     const runsOf = (a: AgentRow) => agents.filter(b => b.parentId === a.parentId && b.type === a.type && b.description === a.description && todoOf(b) === todoOf(a))
+    const isLater = (b: AgentRow, a: AgentRow) => b.firstSeenAt > a.firstSeenAt || (b.firstSeenAt === a.firstSeenAt && agents.indexOf(b) > agents.indexOf(a))
     const isRerun = (a: AgentRow): boolean => {
       const parent = a.parentId ? agents.find(p => p.id === a.parentId) : undefined
       if (parent) return isRerun(parent)
-      return todoOf(a) !== undefined && runsOf(a).at(-1) !== a
+      return todoOf(a) !== undefined && !isAgentActive(a.status) && runsOf(a).some(b => isLater(b, a))
     }
     const agentsUnder = (todo: string | undefined) => ordered.filter(a => todoOf(a) === todo && !isRerun(a))
     const otherAgents = agentsUnder(undefined)
@@ -1148,7 +1165,7 @@ export const register: Register = (on, options) => {
       const key = `agent:${a.id}`
       const isOpen = expanded.includes(key)
       const indent = '  '.repeat(depthOf(a))
-      const runs = todoOf(a) === undefined ? 1 : runsOf(a).length
+      const runs = a.parentId || todoOf(a) === undefined ? 1 : runsOf(a).filter(b => !isLater(b, a)).length
       const own = Object.hasOwn(agentTodos, a.id) && agentTodos[a.id]!.items.length > 0 ? laneProgress(agentTodos[a.id]!, repo) : undefined
       const steps = own && [`steps ${own.done}/${own.total}`, ...own.now.map(t => `◐ ${t}`), ...(own.next ? [`○ ${own.next}`] : [])].join(' · ')
       const meta = [
@@ -1341,8 +1358,8 @@ export const register: Register = (on, options) => {
     )
     const counts = todoCounts(items)
     const sinceUpdate = todos.updatedAt === undefined ? 0 : now - todos.updatedAt
-    // Old while work goes on means the list stopped being kept, not that nothing happens.
-    const isStale = agents.some(a => isAgentActive(a.status)) || Object.values(lanes).some(l => !l.isMissing && l.state === 'working')
+    // An agent that ended after the last write means the list stopped being kept, not that nothing happens.
+    const isStale = agents.some(a => a.endedAt !== undefined && a.endedAt > (todos.updatedAt ?? now))
     const isBad = (a: AgentRow) =>
       a.status === 'failed' || (spawns[a.id]?.changedFiles ?? 0) > 0 || ['ISSUES', 'BLOCKED', 'FAIL'].includes(spawns[a.id]?.verdict ?? '')
 
