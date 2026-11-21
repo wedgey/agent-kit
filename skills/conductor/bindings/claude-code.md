@@ -52,7 +52,9 @@ Besides `AGENTS.md`, read `CLAUDE.md` and `.claude/skills/` in the repo.
 
 ## Spawning by role
 
-Spawn each role as its role agent. The conductor plugin ships them from `claude-code-agents/`, and Claude Code scopes each name to the plugin. Each one carries its tier's model and effort, the tools its role may not use, its rules and the report shape, so the brief needs only GOAL, SCOPE, CONTEXT, ACCEPTANCE and GATE.
+Spawn each role as its role agent. The conductor plugin ships them from `claude-code-agents/`, and Claude Code scopes each name to the plugin. Each one carries its tier's model and effort, the tools its role may use, its rules and the report shape, so the brief needs only GOAL, SCOPE, CONTEXT, ACCEPTANCE and GATE.
+
+Each role agent lists its tools rather than the ones it may not use, because every tool and skill listed costs tokens on every turn. On 2026-11-21 a haiku delegate started at 35.8k input tokens with the old deny list and 16.6k with a list like these. `ToolSearch` in the list keeps rare tools such as `Monitor`, `WebFetch` and `SendMessage` deferred until called. Only the lane, implementer and verifier have `Skill`, which alone costs about 11k a turn. The others read a skill's `SKILL.md` with `Read` when the brief names one. No role agent has an MCP server's tools, since a list can name a server (`mcp__vercel`) but has no wildcard. A brief that needs one, such as analytics or deployment data, goes to the fallback type, or the orchestrator fetches the data and puts it in CONTEXT. When a role's transcripts show a tool it needs, add it to its list.
 
 | Role | `subagent_type` | Default tier | Without the role agent |
 |---|---|---|---|
