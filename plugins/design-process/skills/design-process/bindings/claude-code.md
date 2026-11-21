@@ -45,13 +45,9 @@ Pass both `model` and `effort` from the table and keep the spawn's `description`
 
 A drafter's board still below 6 from either reviewer after two fix passes counts as a failed gate. Respawn that direction's drafter with `model: opus` and `effort: high`.
 
-## Why the board drafter starts on `sonnet`
-
-A drafter writes a generator from a canon and a brief, and the two reviewers score every board it draws, so a weak board is caught and goes back as a fix pass. Drafters write about 100k tokens each, likely a large share of a round's cost, and `sonnet` costs less per token than `opus`. The saving holds only while fix passes per board stay near the normal three, since each extra pass is rescored by both reviewers. This is a trial from 2026-11-21. If more than one drafter in a round escalates under [Escalation](#escalation), or boards need more than three passes, revert: set the drafter's `model` back to `opus` in `claude-code-agents/drafter.md` and in the table.
-
 ## Why the senior reviewer runs on `fable`
 
-Per Artificial Analysis's index and Anthropic's pricing, read 2026-11-17: `fable` at `low` scores 54, above `opus` at `high` (52), for about the same output cost. A review reads a few dozen tiles and writes a short report, so its higher input price matters little there. `fable` is kept off every role that writes boards or tickets. Those roles write about 100k tokens each and build large caches, which would cost about twice as much on `fable` as on `opus`.
+Per Artificial Analysis's index and Anthropic's pricing, read 2026-11-17: `fable` at `low` scores 54, above `opus` at `high` (52), for about the same output cost. A review reads a few dozen tiles and writes a short report, so its higher input price matters little there. `fable` is kept off every role that writes boards or tickets. Those roles write about 100k tokens each and build large caches, which would cost about twice as much on `fable`.
 
 On a Max plan, `fable` draws on the weekly limit faster than `opus` and is capped at half of it. A Pro plan needs paid credits for it. When `fable` is unavailable or its cap is reached, spawn the senior reviewer with `model: opus` and `effort: high`, and tell the owner in one line. The second reviewer stays on `sonnet`, so the two still differ.
 
