@@ -10,7 +10,7 @@ The plugin ships one agent per role from `claude-code-agents/`. Claude Code scop
 |---|---|---|---|---|---|
 | Explorer | `design-process:explorer` | `haiku` | `low` | no | `sonnet`, `low` |
 | Researcher | `design-process:researcher` | `sonnet` | `medium` | screenshots and its own picks file | `opus`, `medium` |
-| Board drafter | `design-process:drafter` | `opus` | `medium` | its own `gen/<Prefix>.cjs` and boards | `opus`, `high` |
+| Board drafter | `design-process:drafter` | `sonnet` | `medium` | its own `gen/<Prefix>.cjs` and boards | `opus`, `high` |
 | Fixer | `design-process:fixer` | `sonnet` | `low` | the named boards | a fresh `design-process:drafter` with the canon |
 | Screenshot capturer | `design-process:screenshot-capturer` | `haiku` | `low` | shots, tiles, sheets and crops | `sonnet`, `low` |
 | Senior reviewer | `design-process:reviewer` | `fable` | `low` | no | `fable`, `medium` |
@@ -42,6 +42,10 @@ The explorer and both reviewers cannot edit or write files, but they still have 
 ## Escalation
 
 Pass both `model` and `effort` from the table and keep the spawn's `description`, so the retry reads as the same piece of work. A per-spawn `model` replaces the agent's model, but the agent's `effort` stays unless you pass one.
+
+## Why the board drafter starts on `sonnet`
+
+A drafter writes a generator from a canon and a brief, and the two reviewers score every board it draws, so a weak board is caught and goes back as a fix pass. Each drafter writes about 100k tokens, so the drafters are a large share of a round's cost, and `sonnet` costs less per token than `opus`. This is a trial from 2026-11-21. A drafter that needs more escalates to `opus` at `high`, as the table says. If most drafters in a round need that escalation, set the drafter's `model` back to `opus` in `claude-code-agents/drafter.md` and in the table.
 
 ## Why the senior reviewer runs on `fable`
 

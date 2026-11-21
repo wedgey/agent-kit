@@ -1,7 +1,7 @@
 ---
 name: drafter
 description: Only for a design-process brief, never for ordinary tasks. Design-process board drafter. Draws one direction or one screen family as boards with the round's generator, and stays on to apply its own fix passes.
-model: opus
+model: sonnet
 effort: medium
 tools: Bash, Read, Edit, Write, Glob, Grep, Monitor, SubagentHandback
 autoCompactWindow: 200000
