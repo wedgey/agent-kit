@@ -1,5 +1,5 @@
 ---
-status: lane agent may spawn delegates, per ADR 0017. Role agents list the tools they may use, per ADR 0019
+status: lane agent may spawn delegates, per ADR 0017. The explorer, reviewer and editor list their tools, per ADR 0019
 ---
 
 # Each delegate role is a defined agent

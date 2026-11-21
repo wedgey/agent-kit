@@ -3,7 +3,6 @@ name: lane
 description: Only for a conductor epic's lane brief, never for ordinary tasks. Conductor's lane. Runs one ticket's whole playbook in its own worktree, writing the code itself, to a merge-ready PR.
 model: sonnet
 effort: medium
-tools: Bash, Read, Glob, Grep, ToolSearch, Monitor, TaskStop, SendMessage, SubagentHandback, WebFetch, WebSearch, Artifact, Edit, Write, NotebookEdit, Skill, Agent, ListAgents, mcp__session-activity__todos, TodoWrite
 autoCompactWindow: 120000
 ---
 

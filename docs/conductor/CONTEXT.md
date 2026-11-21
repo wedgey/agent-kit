@@ -101,7 +101,7 @@ The mapping, for one harness, from tiers to concrete models and efforts, and fro
 _Avoid_: Adapter, config, provider file
 
 **Role agent**:
-An agent definition a binding ships for one delegate role, carrying the role's default tier, the tools it may use, its rules and the report shape.
+An agent definition a binding ships for one delegate role, carrying the role's default tier, its tools, its rules and the report shape.
 _Avoid_: Tier agent, custom agent, subagent type
 
 **Doctor**:
