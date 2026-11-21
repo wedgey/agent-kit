@@ -10,8 +10,8 @@ The plugin ships one agent per role from `claude-code-agents/`. Claude Code scop
 |---|---|---|---|---|---|
 | Explorer | `design-process:explorer` | `haiku` | `low` | no | `sonnet`, `low` |
 | Researcher | `design-process:researcher` | `sonnet` | `medium` | screenshots and its own picks file | `opus`, `medium` |
-| Board drafter | `design-process:drafter` | `opus` | `medium` | its own `gen/<Prefix>.cjs` and boards | `opus`, `high` |
-| Fixer | `design-process:fixer` | `sonnet` | `low` | the named boards | a fresh `design-process:drafter` with the canon |
+| Board drafter | `design-process:drafter` | `sonnet` | `medium` | its own `gen/<Prefix>.cjs` and boards | `opus`, `high` |
+| Fixer | `design-process:fixer` | `sonnet` | `low` | the named boards | a fresh `design-process:drafter` with the canon, `opus`, `medium` |
 | Screenshot capturer | `design-process:screenshot-capturer` | `haiku` | `low` | shots, tiles, sheets and crops | `sonnet`, `low` |
 | Senior reviewer | `design-process:reviewer` | `fable` | `low` | no | `fable`, `medium` |
 | Second reviewer | `design-process:second-reviewer` | `sonnet` | `medium` | no | `sonnet`, `high` |
@@ -42,6 +42,8 @@ The explorer and both reviewers cannot edit or write files, but they still have 
 ## Escalation
 
 Pass both `model` and `effort` from the table and keep the spawn's `description`, so the retry reads as the same piece of work. A per-spawn `model` replaces the agent's model, but the agent's `effort` stays unless you pass one.
+
+A drafter's board still below 6 from either reviewer after two fix passes counts as a failed gate. Respawn that direction's drafter with `model: opus` and `effort: high`.
 
 ## Why the senior reviewer runs on `fable`
 
