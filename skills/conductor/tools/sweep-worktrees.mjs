@@ -4,6 +4,10 @@
  * Removes the worktrees and branches that finished delegates leave behind. It only ever removes
  * what the remote already holds, so a lost worktree costs a reinstall and its gitignored files.
  *
+ * A worktree's look environment — the dev server and browser session a lane's quick-look recipe
+ * declares in <temp>/<worktree name>-look.env — dies with the worktree. Its processes do not keep
+ * the worktree in use, and a removal kills them by pid, never by a name a pattern could misread.
+ *
  *   sweep-worktrees.mjs [--dry-run] [--background]
  *
  * Works on the repo holding the current folder. Prints one line per worktree and branch it acted on
@@ -12,7 +16,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +97,77 @@ export function anyProcessIn(dir, proc = "/proc") {
   return pids.some((pid) => /^\d+$/.test(pid) && within(quietly(() => readlinkSync(`${proc}/${pid}/cwd`)) ?? "", dir));
 }
 
+/** The look environment a recipe declared for a worktree, or null: PORT and the browser session it names. */
+export function parseLookEnv(text) {
+  const port = /(?:^|\n)\s*declare\s+\S*\s*PORT="?(\d+)"?/.exec(text)?.[1] ?? null;
+  if (port === null) return null;
+  const session = /--session[= ]([^\s"]+)/.exec(text)?.[1] ?? null;
+  return { port: Number(port), session };
+}
+
+const LOOK_ENV_DIRS = [...new Set([os.tmpdir(), "/var/tmp"])];
+
+export function readLookEnv(worktree, read = (file) => readFileSync(file, "utf8")) {
+  for (const dir of LOOK_ENV_DIRS) {
+    const file = path.join(dir, `${path.basename(worktree)}-look.env`);
+    const text = quietly(() => read(file));
+    if (text !== null) return { ...parseLookEnv(text), file };
+  }
+  return null;
+}
+
+const runSs = (port) => execFileSync("ss", ["-ltnpH", `sport = :${port}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+
+/** The pid listening on the look port, null when nothing does or `ss` cannot say. */
+export function listenerPid(port, listen = runSs) {
+  const text = quietly(() => listen(port));
+  const pid = text && /pid=(\d+)/.exec(text)?.[1];
+  return pid ? Number(pid) : null;
+}
+
+/** Field 4 of /proc/<pid>/stat, past a comm that may hold spaces: the parent pid. */
+export function procPpid(pid, proc = "/proc") {
+  const stat = quietly(() => readFileSync(`${proc}/${pid}/stat`, "utf8"));
+  return stat ? Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]) : null;
+}
+
+/**
+ * The topmost process of the look environment's own tree: from the port listener, the last ancestor
+ * whose working directory stays inside the worktree, so a kill lands on the `pnpm dev` that owns the
+ * tree and not on the harness above it. Null when the listener is gone or runs elsewhere, which
+ * leaves the worktree's other processes counting as in use.
+ */
+export function envOwner(worktree, port, { proc = "/proc", listen = runSs, ppid = procPpid } = {}) {
+  const pid = listenerPid(port, listen);
+  if (pid === null) return null;
+  if (!within(quietly(() => readlinkSync(`${proc}/${pid}/cwd`)) ?? "", worktree)) return null;
+  let top = pid;
+  for (let up = 0; up < 20; up++) {
+    const parent = ppid(top, proc);
+    if (parent === null || parent <= 1) break;
+    if (!within(quietly(() => readlinkSync(`${proc}/${parent}/cwd`)) ?? "", worktree)) break;
+    top = parent;
+  }
+  return top;
+}
+
+/** Processes inside the worktree beyond the look environment's tree, which is what "in use" means. */
+export function processesBeyondEnv(dir, top, proc = "/proc") {
+  const pids = quietly(() => readdirSync(proc));
+  if (!pids?.includes("self")) return true;
+  const ofEnv = (pid) => {
+    for (let up = 0; up < 20 && pid > 1; up++) {
+      if (pid === top) return true;
+      pid = procPpid(pid, proc);
+      if (pid === null) return false;
+    }
+    return false;
+  };
+  return pids.some((pid) => /^\d+$/.test(pid) && within(quietly(() => readlinkSync(`${proc}/${pid}/cwd`)) ?? "", dir) && !(top !== null && ofEnv(Number(pid))));
+}
+
+const runBrowserClose = (session) => execFileSync("agent-browser", ["--session", session, "close"], { encoding: "utf8", stdio: ["ignore", "ignore", "ignore"], timeout: 30_000 });
+
 const runDocker = (...args) => execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
 
 // A container bind-mounting a removed worktree comes back from its next restart with empty folders
@@ -109,7 +184,7 @@ export function dockerMounts(docker = runDocker) {
 
 const isAncestor = (root, commit, trunk) => trunk !== null && quietly(() => git(root, "merge-base", "--is-ancestor", commit, trunk)) !== null;
 
-export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProcStart, inUse = anyProcessIn, mounts = dockerMounts, out = console.log } = {}) {
+export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProcStart, inUse = anyProcessIn, mounts = dockerMounts, look = readLookEnv, owner = envOwner, beyond = processesBeyondEnv, kill = (pid) => process.kill(pid, "SIGTERM"), browserClose = runBrowserClose, out = console.log } = {}) {
   if (!existsSync(path.join(root, WORKTREES))) return;
   if (!dryRun) quietly(() => git(root, "fetch", "--quiet", "origin"));
   const trunk = quietly(() => git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"));
@@ -140,9 +215,11 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
         continue;
       }
       const lock = lockState(now.lock, procStart);
+      const env = look(w.path);
+      const top = env !== null ? owner(w.path, env.port) : null;
       const { remove, why } = verdict({
         lock,
-        inUse: mounted === null || inUse(w.path) || mounted.some((m) => within(m, w.path)),
+        inUse: mounted === null || (inUse(w.path) && beyond(w.path, top)) || mounted.some((m) => within(m, w.path)),
         dirty: status !== "",
         head: now.head,
         prs: found,
@@ -156,6 +233,8 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
       const line = `${w.path}, branch ${w.branch ?? "(detached)"} at ${now.head}: ${why}`;
       if (dryRun) {
         out(`would remove ${line}`);
+        if (env !== null && top !== null) out(`would kill look env pid ${top} on port ${env.port}`);
+        if (env !== null && env.session !== null) out(`would close browser session ${env.session}`);
         continue;
       }
       if (lock === "stale") git(root, "worktree", "unlock", w.path);
@@ -167,6 +246,17 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
         throw error;
       }
       out(`removed ${line}`);
+      if (env !== null) {
+        // The removal, not the kill, decides: a worktree the remove refuses keeps its server too.
+        if (top !== null) {
+          kill(top);
+          out(`killed look env pid ${top} on port ${env.port}`);
+        }
+        if (env.session !== null) {
+          out(quietly(() => browserClose(env.session)) !== null ? `closed browser session ${env.session}` : `kept browser session ${env.session}: close failed`);
+        }
+        for (const file of [env.file, env.file.replace(/\.env$/, ".log")]) quietly(() => rmSync(file));
+      }
       // Naming the head refuses a branch that moved during the remove, so a late commit keeps its ref.
       if (w.branch && w.branch !== trunkBranch && quietly(() => git(root, "update-ref", "-d", `refs/heads/${w.branch}`, now.head)) === null) out(`kept branch ${w.branch}: could not delete it`);
     } catch (error) {
