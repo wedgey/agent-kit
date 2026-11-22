@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { anyProcessIn, dockerMounts, ghPrs, linuxProcStart, lockState, parseWorktrees, sweep, verdict, parseLookEnv, listenerPid, procPpid, envOwner, processesBeyondEnv } from "../../skills/conductor/tools/sweep-worktrees.mjs";
+import { anyProcessIn, dockerMounts, ghPrs, linuxProcStart, lockState, parseWorktrees, sweep, verdict, procPpid, rootedListeners, treeTop, processesBeyond } from "../../skills/conductor/tools/sweep-worktrees.mjs";
 
 const HOUR = 3_600_000;
 const facts = (over = {}) => ({ lock: "none", inUse: false, dirty: false, head: "aaa", prs: [], onTrunk: false, ageMs: 2 * HOUR, ...over });
@@ -456,88 +456,79 @@ function procTable(dir, procs) {
   return dir;
 }
 
-describe("a worktree's look environment", () => {
-  it("reads the port and the browser session the recipe declared, and nothing without a port", () => {
-    expect(parseLookEnv('declare -x PORT="4321"\ndeclare -x B="agent-browser --session agent-done"')).toEqual({ port: 4321, session: "agent-done" });
-    expect(parseLookEnv('declare -- PORT="4321"')).toEqual({ port: 4321, session: null });
-    expect(parseLookEnv('declare -x S="agent-done"')).toBeNull();
-  });
-
-  it("finds the port's listener, and answers null when ss cannot say", () => {
-    expect(listenerPid(4321, () => 'LISTEN 0 5 *:4321 users:(("node",pid=4321,fd=20))')).toBe(4321);
-    expect(listenerPid(4321, () => "LISTEN 0 5 *:4321")).toBeNull();
-    expect(listenerPid(4321, () => { throw new Error("no ss"); })).toBeNull();
-  });
-
+describe("a worktree's servers", () => {
   it("reads a parent pid past a comm with spaces, and answers null for a gone pid", () => {
     expect(procPpid(process.pid)).toBe(process.ppid);
     expect(procPpid(99999999)).toBeNull();
   });
 
-  it("kills the topmost process inside the worktree, and never one that runs elsewhere", () => {
+  it("counts a listener only when it runs from inside the worktree, whatever started it", () => {
+    const wt = realpathSync(mkdtempSync(path.join(os.tmpdir(), "sweep-env-")));
+    const proc = procTable(mkdtempSync(path.join(os.tmpdir(), "sweep-proc-")), { 30: { cwd: wt, ppid: 20 }, 40: { cwd: "/", ppid: 1 } });
+    const listen = () => "pid=30 pid=40";
+    expect(rootedListeners(wt, { proc, listen })).toEqual([30]);
+    expect(rootedListeners(wt, { proc, listen: () => { throw new Error("no ss"); } })).toEqual([]);
+  });
+
+  it("kills the topmost process inside the worktree, and never the harness above it", () => {
     const wt = realpathSync(mkdtempSync(path.join(os.tmpdir(), "sweep-env-")));
     const proc = procTable(mkdtempSync(path.join(os.tmpdir(), "sweep-proc-")), {
       10: { ppid: 1 },            // the harness above, outside the worktree
       20: { cwd: wt, ppid: 10 },  // pnpm dev
       30: { cwd: wt, ppid: 20 },  // next dev, the listener
     });
-    const listen = () => "pid=30";
-    expect(envOwner(wt, 4321, { proc, listen, ppid: (pid) => procPpid(pid, proc) })).toBe(20);
-    const outside = procTable(mkdtempSync(path.join(os.tmpdir(), "sweep-proc-")), { 30: { cwd: "/", ppid: 20 }, 20: { cwd: wt, ppid: 1 } });
-    expect(envOwner(wt, 4321, { proc: outside, listen, ppid: (pid) => procPpid(pid, outside) })).toBeNull();
+    const ppid = (pid) => procPpid(pid, proc);
+    expect(treeTop(30, wt, { proc, ppid })).toBe(20);
   });
 
-  it("counts only processes beyond the environment's tree as using the worktree", () => {
+  it("counts only processes beyond the servers' trees as using the worktree", () => {
     const wt = realpathSync(mkdtempSync(path.join(os.tmpdir(), "sweep-env-")));
-    const onlyEnv = procTable(mkdtempSync(path.join(os.tmpdir(), "sweep-proc-")), { 20: { cwd: wt, ppid: 1 }, 30: { cwd: wt, ppid: 20 } });
-    expect(processesBeyondEnv(wt, 20, onlyEnv)).toBe(false);
+    const onlyServers = procTable(mkdtempSync(path.join(os.tmpdir(), "sweep-proc-")), { 20: { cwd: wt, ppid: 1 }, 30: { cwd: wt, ppid: 20 } });
+    expect(processesBeyond(wt, [20], onlyServers)).toBe(false);
     const withGuest = procTable(mkdtempSync(path.join(os.tmpdir(), "sweep-proc-")), { 20: { cwd: wt, ppid: 1 }, 40: { cwd: wt, ppid: 1 } });
-    expect(processesBeyondEnv(wt, 20, withGuest)).toBe(true);
-    expect(processesBeyondEnv(wt, 20, path.join(onlyEnv, "missing"))).toBe(true);
+    expect(processesBeyond(wt, [20], withGuest)).toBe(true);
+    expect(processesBeyond(wt, [20], path.join(onlyServers, "missing"))).toBe(true);
   });
 
-  it("removes a merged worktree its dev server holds, kills the server by pid, closes the session and the declaration", () => {
+  it("removes a merged worktree its server holds, kills the server by pid, and closes the session named for it", () => {
     const root = repo();
     const { wt, head } = lane(root, "agent-done");
-    const env = path.join(os.tmpdir(), "agent-done-look.env");
-    writeFileSync(env, 'declare -x PORT="4321"\ndeclare -x B="agent-browser --session agent-done"');
-    writeFileSync(path.join(os.tmpdir(), "agent-done-dev.log"), "");
     const killed = [];
     const closed = [];
     const lines = run(root, { "agent-done": [{ state: "MERGED", headRefOid: head }] }, {
       inUse: () => true,
       beyond: () => false,
-      owner: () => 4321,
+      listeners: () => [4321],
+      top: () => 4321,
       kill: (pid) => killed.push(pid),
       browserClose: (session) => closed.push(session),
     });
-    expect([existsSync(wt), existsSync(env), killed, closed]).toEqual([false, false, [4321], ["agent-done"]]);
-    expect(lines.join("\n")).toContain("killed look env pid 4321");
+    expect([existsSync(wt), killed, closed]).toEqual([false, [4321], ["agent-done"]]);
+    expect(lines.join("\n")).toContain("killed server pid 4321");
+    expect(lines.join("\n")).toContain("closed browser session agent-done");
   });
 
   it("keeps the server of a worktree it keeps, and reports a kill it did not make under a dry run", () => {
     const root = repo();
     const open = lane(root, "agent-open");
-    const env = path.join(os.tmpdir(), "agent-open-look.env");
-    writeFileSync(env, 'declare -x PORT="4322"\ndeclare -x B="agent-browser --session agent-open"');
     const killed = [];
     const lines = run(root, { "agent-open": [{ state: "OPEN", headRefOid: open.head }] }, {
-      owner: () => 4322,
+      listeners: () => [4322],
+      top: () => 4322,
       kill: (pid) => killed.push(pid),
       browserClose: () => "",
     });
-    expect([existsSync(open.wt), existsSync(env), killed]).toEqual([true, true, []]);
+    expect([existsSync(open.wt), killed]).toEqual([true, []]);
     const done = lane(root, "agent-dry");
-    writeFileSync(path.join(os.tmpdir(), "agent-dry-look.env"), 'declare -x PORT="4323"\ndeclare -x B="agent-browser --session agent-dry"');
     const dry = run(root, { "agent-dry": [{ state: "MERGED", headRefOid: done.head }] }, {
-      owner: () => 4323,
+      listeners: () => [4323],
+      top: () => 4323,
       kill: (pid) => killed.push(pid),
       browserClose: () => "",
       dryRun: true,
     });
-    expect(dry.join("\n")).toContain("would kill look env pid 4323");
+    expect(dry.join("\n")).toContain("would kill server pid 4323");
     expect(dry.join("\n")).toContain("would close browser session agent-dry");
     expect(killed).toEqual([]);
-    rmSync(path.join(os.tmpdir(), "agent-dry-look.env"));
   });
 });
