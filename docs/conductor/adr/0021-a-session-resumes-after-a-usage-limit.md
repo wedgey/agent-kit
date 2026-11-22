@@ -1,0 +1,11 @@
+# A session resumes after a usage limit
+
+A usage limit cuts the turn of every agent alive at that moment: lanes, reviewers, verifiers and the orchestrator. On 2026-11-10 to 21 three epics were cut 44, 26 and 19 times, and recovery waited on the coordinator noticing the reset, 80 to 135 minutes late, and when the coordinator itself was cut, on the operator asking whether anything was stalled.
+
+The first cut considered a hook-spawned timer that would message the session at reset. Rejected: no channel reaches a stopped session from outside it. The CLI lists sessions but sends nothing, a print-mode resume runs beside the live session instead of waking it, and a Stop hook cannot outlive its own timeout waiting for a reset hours away. Two primitives do wake a stopped session, both proven in these transcripts: the completion notice of a background task it started, and a message from another session.
+
+So the session that is awake arms the wake. A Stop hook records each cut in `<temp>/conductor-limit-resume/<session>.json` — the transcript, the byte offset of the limit entry, and the parsed reset time, arming nothing it cannot read and a zone it cannot convert. Any later stop that is not a limit cut deletes the file, because the session resumed on its own. The orchestrator, on learning of a cut from a lane's completion notice or its own transcript, runs `limit-resume.mjs` as one tracked background task: it sleeps until the earliest declared reset, drops every session whose own writing shows past its limit entry, and exits naming the rest. Its completion notice wakes the orchestrator, which resumes each name by message and runs the waiter again if another cut is still declared.
+
+The resume message says to continue from where the session stopped and not to ask. Asking is the one way this design still stalls: a question to the operator parks the session again, and a message sent while a dialog waits queues behind it. That rule is prose, and prose can be ignored; the mechanical half does not depend on it, because a question the resumed session asks is answered by an operator who is present.
+
+The floor is today's behavior. A cut orchestrator with no live lane to notice it stays stopped until the operator pokes it, exactly as now; the state folder only makes that recovery one look wide instead of one transcript search deep.
