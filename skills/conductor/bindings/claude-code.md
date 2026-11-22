@@ -30,6 +30,10 @@ Claude Code has one model family. Spawn reviewers and verifiers fresh at their o
 | isolate | `Agent` with `isolation: "worktree"` | Tell the delegate to `git worktree add` its own path and stay inside it |
 | clean worktrees | `node <skill dir>/tools/sweep-worktrees.mjs`. See [Cleaning up worktrees](#cleaning-up-worktrees) | `git worktree remove` each finished worktree, never with `--force` |
 
+## Looks
+
+Where the repo offers a look tool, that is the look under [look before the heavy check](../principles/look-before-the-heavy-check.md): `agent-browser` for browser-facing repos, against a dev server the worktree keeps. Where the repo has none, the look is whatever observation it does offer — `curl` and the returned HTML, one targeted unit test, a log line — and a missing look tool never promotes the heavyweight check back into the iteration loop.
+
 ## The queue on Bash
 
 The plugin's mod queues a heavy `Bash` command as `node <plugin>/skills/conductor/tools/queue.mjs run --queue=<q> -- bash -c '<command>'`. It asks the session's permission check about the command as typed and about that queued form. When both are allowed outright (`bypassPermissions`, or rules that allow both), it rewrites the command in place, so type heavy commands plainly and pass `run_in_background: true`. When the typed command is denied, it goes on unchanged and is denied by its own rule. Otherwise the mod denies the call and names the queued form. Run exactly that, with `run_in_background: true`, and the person approves the real queued command. A queued form whose inner command a rule denies is denied too, so allowing `queue.mjs run` allows nothing a rule forbids. In every mode, a foreground heavy command on a full queue is denied with the holders named, so rerun it with `run_in_background: true`. A duplicate of a run already queued or running from the same folder is denied with that run's age and place. Wait for its notice when this session started it. A separate `PreToolUse` hook denies wait loops, so that check holds even where mods do not load.
