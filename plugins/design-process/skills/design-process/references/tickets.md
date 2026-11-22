@@ -31,6 +31,9 @@ Write it once and give it to every drafting agent. It holds:
 - **Repo rules** each issue must restate: test-first, lint, typecheck, e2e and proof media, i18n
   keys, import boundaries, icon and component limits, tokens only, and the flag or ship-live
   policy. Read them from AGENTS.md or CONTRIBUTING.
+- **How to screenshot the built app**: the command that captures a route at a given viewport, with
+  any auth or seed step it needs. The ticket may be picked up by a session that knows neither the
+  design rounds nor this repo — restate the command in every ticket's Match proof line.
 - **The reference logs** (`<work>/refs/`), so each issue can cite the products behind its boards.
 - **The standards** from `references/rounds.md`, which each issue's Done when restates.
 - **The issue template** below, the placeholder forms, the file format and the full ticket list.
@@ -69,7 +72,8 @@ Part of {{EPIC}}          (omit when there is no EPIC.md)
 
 **Boards:** `<Board>` (wins), `<Board>` (body) on the [answer page](<url>), round *<round>*.
 Read exact CSS with the artifact server's `read_file` tool: slug `<slug>`, path `boards/<Board>.html`.
-The page is private; ask the repo owner for access.
+The page is private; ask the repo owner for access. The images in this issue are the spec:
+download and read them before writing code, whatever session picks this up.
 
 **Route:** `<route>` · **Replaces:** `<current files>`
 
@@ -86,9 +90,11 @@ The page is private; ask the repo owner for access.
 ## Data                (fields and the existing query or action; anything the backend must add, said plainly)
 ## Out of scope        (what neighbouring tickets own)
 ## Done when
-- [ ] Matches the board at 1440 and 1280 (overlay the screenshot; differences only from real data)
+- [ ] Match proof in the PR: a table pairing each board image with a screenshot of the built route
+      at 1440 and 1280, and a line naming every difference (only real data may differ).
+      Shoot with: <the brief's screenshot command>
 - [ ] …screen-specific checks…
-- [ ] Tablet and phone match their boards
+- [ ] Tablet and phone match their boards (rows in the same table)
 - [ ] Meets the standards: WCAG 2.2 AA (contrast, focus, targets, labels), every state drawn or named
 - [ ] Only foundation tokens and primitives; no one-off colour, radius or type size
 - [ ] …the repo's own done rules from the brief's Repo rules list (for example i18n, e2e, PR media)…
@@ -115,7 +121,8 @@ If the repo has a past epic, read it and follow its format.
 ## 5. Check, publish, report
 
 1. Spot-check a few tickets and crops yourself. Check that the values match the HTML, the markers
-   land on the right things, and no superseded chrome has crept in.
+   land on the right things, no superseded chrome has crept in, and every Match proof line names
+   the repo's real screenshot command.
 2. Write `<work>/tickets/config.json`:
    `{ "repo", "owner", "project", "milestones": {"M1": ["Title", ["01","02"]]}, "upload" }`.
    `upload` is a command that hosts one image and prints its URL as the last line. The script
