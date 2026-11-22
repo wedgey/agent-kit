@@ -4,6 +4,10 @@
  * Removes the worktrees and branches that finished delegates leave behind. It only ever removes
  * what the remote already holds, so a lost worktree costs a reinstall and its gitignored files.
  *
+ * A worktree's servers die with it. A process tree rooted in the worktree that listens on a port,
+ * whatever started it and whatever repo it serves, does not keep the worktree in use, and a removal
+ * SIGTERMs each such tree by pid and closes an agent-browser session named after the worktree.
+ *
  *   sweep-worktrees.mjs [--dry-run] [--background]
  *
  * Works on the repo holding the current folder. Prints one line per worktree and branch it acted on
@@ -93,6 +97,59 @@ export function anyProcessIn(dir, proc = "/proc") {
   return pids.some((pid) => /^\d+$/.test(pid) && within(quietly(() => readlinkSync(`${proc}/${pid}/cwd`)) ?? "", dir));
 }
 
+const runSs = () => execFileSync("ss", ["-ltnpH"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+
+/** Field 4 of /proc/<pid>/stat, past a comm that may hold spaces: the parent pid. */
+export function procPpid(pid, proc = "/proc") {
+  const stat = quietly(() => readFileSync(`${proc}/${pid}/stat`, "utf8"));
+  return stat ? Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]) : null;
+}
+
+/**
+ * The pids listening on a port whose own working directory sits inside the worktree, whatever
+ * started them: a spent worktree's servers, in any repo, with no recipe declaring them. A listener
+ * running from elsewhere never counts, so a shared box's unrelated servers stay untouched.
+ */
+export function rootedListeners(worktree, { proc = "/proc", listen = runSs } = {}) {
+  const text = quietly(() => listen());
+  if (text === null) return [];
+  const pids = [...new Set([...text.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1])))];
+  return pids.filter((pid) => within(quietly(() => readlinkSync(`${proc}/${pid}/cwd`)) ?? "", worktree));
+}
+
+/**
+ * The topmost process of a listener's own tree: the last ancestor whose working directory stays
+ * inside the worktree, so a kill lands on the `pnpm dev` that owns the tree and not on the harness
+ * above it.
+ */
+export function treeTop(pid, worktree, { proc = "/proc", ppid = procPpid } = {}) {
+  let top = pid;
+  for (let up = 0; up < 20; up++) {
+    const parent = ppid(top, proc);
+    if (parent === null || parent <= 1) break;
+    if (!within(quietly(() => readlinkSync(`${proc}/${parent}/cwd`)) ?? "", worktree)) break;
+    top = parent;
+  }
+  return top;
+}
+
+/** Processes inside the worktree beyond the given trees, which is what "in use" means. */
+export function processesBeyond(dir, tops, proc = "/proc") {
+  const pids = quietly(() => readdirSync(proc));
+  if (!pids?.includes("self")) return true;
+  const ofTree = (pid) => tops.some((top) => {
+    for (let up = 0; up < 20 && pid > 1; up++) {
+      if (pid === top) return true;
+      pid = procPpid(pid, proc);
+      if (pid === null) return false;
+    }
+    return false;
+  });
+  return pids.some((pid) => /^\d+$/.test(pid) && within(quietly(() => readlinkSync(`${proc}/${pid}/cwd`)) ?? "", dir) && !ofTree(Number(pid)));
+}
+
+const runBrowserClose = (session) => execFileSync("agent-browser", ["--session", session, "close"], { encoding: "utf8", stdio: ["ignore", "ignore", "ignore"], timeout: 30_000 });
+
 const runDocker = (...args) => execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
 
 // A container bind-mounting a removed worktree comes back from its next restart with empty folders
@@ -109,7 +166,7 @@ export function dockerMounts(docker = runDocker) {
 
 const isAncestor = (root, commit, trunk) => trunk !== null && quietly(() => git(root, "merge-base", "--is-ancestor", commit, trunk)) !== null;
 
-export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProcStart, inUse = anyProcessIn, mounts = dockerMounts, out = console.log } = {}) {
+export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProcStart, inUse = anyProcessIn, mounts = dockerMounts, listeners = rootedListeners, top = treeTop, beyond = processesBeyond, kill = (pid) => process.kill(pid, "SIGTERM"), browserClose = runBrowserClose, out = console.log } = {}) {
   if (!existsSync(path.join(root, WORKTREES))) return;
   if (!dryRun) quietly(() => git(root, "fetch", "--quiet", "origin"));
   const trunk = quietly(() => git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"));
@@ -140,9 +197,10 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
         continue;
       }
       const lock = lockState(now.lock, procStart);
+      const tops = [...new Set(listeners(w.path).map((pid) => top(pid, w.path)))];
       const { remove, why } = verdict({
         lock,
-        inUse: mounted === null || inUse(w.path) || mounted.some((m) => within(m, w.path)),
+        inUse: mounted === null || (inUse(w.path) && beyond(w.path, tops)) || mounted.some((m) => within(m, w.path)),
         dirty: status !== "",
         head: now.head,
         prs: found,
@@ -156,6 +214,8 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
       const line = `${w.path}, branch ${w.branch ?? "(detached)"} at ${now.head}: ${why}`;
       if (dryRun) {
         out(`would remove ${line}`);
+        for (const pid of tops) out(`would kill server pid ${pid} in it`);
+        out(`would close browser session ${path.basename(w.path)}`);
         continue;
       }
       if (lock === "stale") git(root, "worktree", "unlock", w.path);
@@ -167,6 +227,14 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
         throw error;
       }
       out(`removed ${line}`);
+      // The removal, not the kill, decides: a worktree the remove refuses keeps its servers too.
+      for (const pid of tops) {
+        kill(pid);
+        out(`killed server pid ${pid} in it`);
+      }
+      const session = path.basename(w.path);
+      // No line when no session answers: a worktree that never looked has none.
+      if (quietly(() => browserClose(session)) !== null) out(`closed browser session ${session}`);
       // Naming the head refuses a branch that moved during the remove, so a late commit keeps its ref.
       if (w.branch && w.branch !== trunkBranch && quietly(() => git(root, "update-ref", "-d", `refs/heads/${w.branch}`, now.head)) === null) out(`kept branch ${w.branch}: could not delete it`);
     } catch (error) {

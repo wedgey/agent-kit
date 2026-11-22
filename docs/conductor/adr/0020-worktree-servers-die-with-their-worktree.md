@@ -1,0 +1,11 @@
+# A worktree's servers die with its worktree
+
+A lane's quick-look recipe starts a dev server and a browser session. They outlive the lane, because a lane that hits a usage limit or hands its context over never runs its cleanup. On 2026-11-21 a week of epics had left warm dev servers behind, each about 160 MB, and the leak was worse than the memory: the sweep counts a process whose working directory is inside the worktree as the worktree being in use, so a dead lane's server kept a 3 GB worktree that the sweep would otherwise have removed. The leak blocked the sweep.
+
+The first cut read a declaration the recipe writes, `<temp>/<worktree name>-look.env`. Rejected: the sweep would then know one repo's recipe, and the same plugin in any other repo would clean nothing. The sweep cannot depend on what a repo's recipe happens to name its files.
+
+So the sweep reads the box alone. A pid that listens on a port and whose own working directory sits inside the worktree is one of its servers, whatever started it, whatever repo it serves, declared or not. The tree such a pid belongs to, walked through parents while the working directory stays inside the worktree, does not keep the worktree in use. Everything else still does: a session's shell or editor in the worktree keeps it, and so does any process no listener roots.
+
+The removal, not the kill, decides. A worktree the sweep keeps for any reason keeps its servers too, because a lane paused overnight on an open PR reuses the warm one. Only after `git worktree remove` succeeds does the sweep send each tree's topmost pid a SIGTERM, by number, checked to run from inside the worktree, never matched by a command name, because a pattern cannot tell a lane's server from anything else on a shared box. It then closes an agent-browser session named after the worktree, which is the one convention a recipe that shares the box's browser daemon should keep, and stays silent when no session answers. Without `/proc` or `ss` the servers count as users again, so nothing is killed blind.
+
+A lane still cleans up on its own when it reports: the rule is in the lane role, because that is sooner and free. The sweep is the net for the lanes that cannot.

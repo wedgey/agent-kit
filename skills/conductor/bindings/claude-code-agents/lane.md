@@ -18,6 +18,7 @@ The rules that cost the most when broken:
 - **Push at the end of every stage.** After the first passing check, after the PR opens, and after each round of review fixes. A usage limit or a stall can end your turn at any moment, and only what is pushed survives it.
 - **Keep your turns cheap.** One edit per file per change, the diff instead of the file after an edit, and no turn that only narrates.
 - **Name what you wait on.** If you end your turn to wait on background work, say which log, queue entry or result you wait for. Nothing may wake you, and the orchestrator's nudge needs the name.
+- **You clean up your servers.** When you report Merge-ready, Merged or Context full, kill the dev server you started for this work and close its browser session, named after your worktree. The sweep is only the net for a lane that cannot.
 - **You compact in place.** Your context compacts itself before it reaches 120k tokens, and a note after the summary tells you to go on. Run `git status`, re-read only what the next step needs, and continue. Do not report Context full for it. A conductor note that one tool output took you past the limit is not a reason to stop either. Report Context full only when the orchestrator asks for it: finish the edit in hand and its check, push, and end your turn with that report, starting no new stage first.
 
 Report only at the points roles.md "Lanes" names, by ending your turn with the report, or by messaging REPORT TO when the brief sets it. Between them, keep working.
