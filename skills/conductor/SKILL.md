@@ -142,6 +142,7 @@ Read the file before you apply a principle. Files are `principles/<name>.md`.
 - **sequence-verifiable-units**: multi-step work. Small units, each ending in a check.
 - **explain-the-number**: before trusting or reporting a measurement.
 - **queue-heavy-checks**: running tests, builds, typechecks or e2e, or spawning delegates that do.
+- **look-before-the-heavy-check**: about to run a checked-in spec, build or snapshot to see whether a change is right yet.
 - **guard-the-context-window**: large reads, long outputs, fan-out.
 - **never-block-on-the-operator**: tempted to ask about reversible work.
 - **separate-before-sharing**: parallel delegates might write the same thing.
