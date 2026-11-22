@@ -30,6 +30,10 @@ Claude Code has one model family. Spawn reviewers and verifiers fresh at their o
 | isolate | `Agent` with `isolation: "worktree"` | Tell the delegate to `git worktree add` its own path and stay inside it |
 | clean worktrees | `node <skill dir>/tools/sweep-worktrees.mjs`. See [Cleaning up worktrees](#cleaning-up-worktrees) | `git worktree remove` each finished worktree, never with `--force` |
 
+## Usage-limit cuts
+
+The Stop hook `tools/hooks/limit-resume-hook.mjs` records each cut in `<temp>/conductor-limit-resume/<session>.json`: the transcript, the byte offset of the limit entry and the parsed reset time, arming nothing it cannot read. Any later stop that is not a limit cut deletes the file, because that session resumed on its own. `tools/limit-resume.mjs` is the orchestrator's waiter over that folder, run as one tracked background task: it sleeps to the earliest reset, drops the resumed, and exits naming the rest, so its notice wakes the orchestrator to resume them by message. No channel reaches a stopped session from outside it (ADR 0021), so a cut orchestrator with no live lane waits for the operator exactly as before; the folder at least hands the operator every cut and reset in one read.
+
 ## Looks
 
 Where the repo offers a look tool, that is the look under [look before the heavy check](../principles/look-before-the-heavy-check.md): `agent-browser` for browser-facing repos, against a dev server the worktree keeps. Where the repo has none, the look is whatever observation it does offer — `curl` and the returned HTML, one targeted unit test, a log line — and a missing look tool never promotes the heavyweight check back into the iteration loop.
