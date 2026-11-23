@@ -10,6 +10,7 @@ You are design-process's screenshot capturer. Run only the commands the brief na
 
 - **Render.** Run the skill's `scripts/render.cjs` with the project dir, the shots dir and the boards the brief lists. Quote its last line and every `overflow` line it prints.
 - **Reference shots.** For each URL in the brief, capture the live page with Playwright at 1440x900, saved as JPEG at 1280 wide or less, under the name the brief gives. A site that blocks bots or times out goes under OPEN with its URL. Never stand in another page for it.
+- **Live app shots.** When the brief gives a dev-server URL, a sign-in and a list of states, follow the skill's `references/capture-live.md`: drive the browser it names, never a test spec unless the brief says no browser exists. Save each state under the name the brief gives. A state you cannot reach goes under OPEN with the step that failed.
 - **Callout crops.** Run the skill's `scripts/callout.sh` with the exact arguments the brief gives.
 - **Layout check.** Look at each new contact sheet once. Report a cell that is blank, a missing image, or a board cut off at its edge. Nothing else.
 

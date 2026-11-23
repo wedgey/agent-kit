@@ -10,6 +10,8 @@ navigation. Every phase runs. The handoff is large: an epic, milestones and a pr
 - **Inventory every route** with an explorer delegate. List each screen with its purpose, its main
   objects and its current file. This list is the screen list. It becomes the Every screen board
   list and the ticket list.
+- **Shoot the anchor screens as they ship** (`references/capture-live.md`), so every direction is
+  judged against the real thing.
 - **Pick 3 anchor screens**: the ones that carry the product's main loop, such as the main object's
   page, the main correction or editing action, and publishing.
 - Create the answer page (`references/answer-page.md`) and a project memory named `<product>-redesign-direction`.
