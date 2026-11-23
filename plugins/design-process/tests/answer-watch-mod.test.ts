@@ -18,7 +18,7 @@ function harness(on: On, entries: Record<string, unknown> = {}) {
     const a = e.args as { collection?: string; path?: string; limit?: number }
     if (e.tool === 'db_list') w.limits.push(a.limit)
     const text = e.tool === 'db_list'
-      ? [JSON.stringify({ count: 1 }), '<untrusted-document-x>', ...(w.db[a.collection!] ?? []).map(r => JSON.stringify({ id: r.id, data: r.data, version: 1 })), '</untrusted-document-x>'].join('\n')
+      ? [JSON.stringify({ count: 1 }), '<untrusted-document-x>', ...(w.db[a.collection!] ?? []).map(r => JSON.stringify({ id: r.id, data: r.data, version: 1, updatedAt: r.updatedAt })), '</untrusted-document-x>'].join('\n')
       : w.round[a.path!] ? [JSON.stringify({ exists: true }), JSON.stringify(w.round[a.path!])].join('\n') : JSON.stringify({ exists: false })
     return { value: { content: [{ type: 'text', text }], isError: false } } as never
   })
@@ -95,6 +95,45 @@ describe('the answer watch', () => {
     await watch($)
     await clock.advance(20_000)
     expect(w.submitted).toHaveLength(1)
+  })
+
+  test('re-arming after the 6 h expiry does not report owner rows Claude already answered', async ($, on) => {
+    const clock = mock.clock(on, { now: 7 * HOUR })
+    const w = harness(on, { 'answer-watch:s-me': { slug: SLUG, round: 'r1', screens: [1], armedAt: 0, seen: {} } })
+    const at = (m: number) => new Date(Date.UTC(2026, 10, 23, 8, m)).toISOString()
+    const row = (id: string, data: Row, m: number) => ({ id, data, updatedAt: at(m) })
+    w.db['rounds/r1/threads/1/msgs'] = [
+      row('o1', { from: 'owner', text: 'q', sentAt: 1 }, 51),
+      row('o2', { from: 'owner', kind: 'redraw', text: 'r', sentAt: 2 }, 56),
+      row('c1', { from: 'claude', text: 'done', board: 'C1v2', sentAt: 99_999 }, 60),
+    ]
+    await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true } as never)
+    await clock.advance(10_000)
+    expect(w.submitted.at(-1)).toContain('6 hours passed')
+    const before = w.submitted.length
+    await watch($)
+    await clock.advance(20_000)
+    expect(w.submitted).toHaveLength(before)
+    w.db['rounds/r1/threads/1/msgs'].push(row('o3', { from: 'owner', text: 'one more', sentAt: 3 }, 61))
+    await clock.advance(10_000)
+    expect(w.submitted).toHaveLength(before + 1)
+    expect(w.submitted.at(-1)).toContain('msgs/o3')
+    expect(w.submitted.at(-1)).not.toContain('msgs/o1')
+  })
+
+  test('a fresh arm still wakes on owner rows no claude row has followed, and on answers', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    w.db['rounds/r1/threads/1/msgs'] = [
+      { id: 'c1', data: { from: 'claude', text: 'a', sentAt: 1 }, updatedAt: '2026-11-23T08:50:00Z' },
+      { id: 'o1', data: { from: 'owner', text: 'q', sentAt: 2 }, updatedAt: '2026-11-23T08:51:00Z' },
+    ]
+    w.db['rounds/r1/answers'] = [answer('u1', { sentAt: 5 })]
+    await watch($)
+    await clock.advance(10_000)
+    expect(w.submitted).toHaveLength(1)
+    expect(w.submitted[0]).toContain('msgs/o1')
+    expect(w.submitted[0]).toContain('answers/u1')
   })
 
   test('a stop during an in-flight submit is not undone when the submit fails', async ($, on) => {
