@@ -9,7 +9,7 @@ and behaviour.
 - Read DESIGN.md, PRODUCT.md (or the README), AGENTS.md, the UI kit, and the issue or brief that
   asked for the feature. Quote the owner's goal and constraints in the plan.
 - Read the neighbouring screens the feature joins, in code and in the running app. Screenshot them
-  at 1440: every board starts from the real chrome around the feature.
+  at 1440 (`references/capture-live.md`): every board starts from the real chrome around the feature.
 - **Write the screen list**: every screen, dialog and state the feature adds or changes, with its
   entry points from existing screens.
 - **Pick 2–3 anchor screens**: where the feature's main task happens and where a user first meets it.

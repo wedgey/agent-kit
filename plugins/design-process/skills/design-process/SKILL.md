@@ -31,6 +31,7 @@ Read these when you reach the step that needs them:
 - `references/rounds.md`: the decision board, concept boards, research, colour and the reviewer loop.
 - `references/answer-page.md`: the answer page, its database, the board files, the generator, render and publish.
 - `references/tickets.md`: the handoff. The precedence brief, the issue template, drafting and publishing.
+- `references/capture-live.md`: shooting the running app's current screens in a browser, with seeded or mocked data.
 - `bindings/<harness>.md`: the only place a model or tool is named. Read yours before the first spawn.
 - `assets/answer-page/`: the page template and an example `round.json`.
 - `scripts/`: `render.cjs` (boards to PNGs, review tiles, contact sheets and the page's JPGs), `colour.cjs` (sRGB gamut and WCAG checks), `callout.sh`

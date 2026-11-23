@@ -11,9 +11,9 @@ the flow at a time.
   editor → tests → add to an agent) and **the round shape** (default: findings, then three fixes).
 - **Inventory** (explorer): every screen, dialog, sheet and state in the flow, with its route, its
   files and the gates or flags that change it. Save as `inventory.md`.
-- **Capture the live flow** (screenshot-capturer or a throwaway e2e spec, never committed). Seed one
-  realistic data set through the test fixtures, shoot each screen at 1440 in its own step so one
-  failure does not stop the rest, and read every PNG back. Re-shoot with the canon data once it is
+- **Capture the live flow** by driving a browser against the local dev server
+  (`references/capture-live.md`; a throwaway spec only when no browser exists). Seed one realistic
+  data set, shoot each screen at 1440, and read every PNG back. Re-shoot with the canon data once it is
   written; a blank "Untitled" run hides real findings.
 - **Findings log** (`findings.md`): per screen, numbered findings with severity (H blocks or
   misleads · M slows or confuses · L polish) and the standard each breaks in brackets. These are
