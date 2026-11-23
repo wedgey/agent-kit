@@ -11,7 +11,7 @@ const MAX_ERRORS = 90; // 15 minutes of outage at POLL_MS
 export const DESCRIPTION =
   "Call this once after you publish a design round to an artifact: it polls the artifact's database every 10 s and wakes this session when the owner sends answers or a chat message, " +
   "and stops by itself when rounds/<round>.status is \"handled\", after 6 h, or with stop: true. Arming again for another round replaces the watch. " +
-  "Database layout it reads: rounds/<round>/answers/<uid>, rounds/<round>/threads/<n>/msgs/<msgId> (a row with from \"claude\" never wakes you).";
+  "Database layout it reads: rounds/<round>/answers/<uid>, rounds/<round>/threads/<n>/msgs/<msgId> (a row with from \"claude\", a kind \"status\" acknowledgement included, never wakes you).";
 
 const SCHEMA = {
   type: "object",
@@ -56,7 +56,7 @@ async function rowsOf($, slug, collection) {
   const text = await callDb($, "db_list", { slug, collection, limit: 1000 });
   return jsonLines(text)
     .filter((o) => typeof o.id === "string" && o.data && typeof o.data === "object")
-    .map((o) => ({ path: `${collection}/${o.id}`, data: o.data, stamp: String(o.data.sentAt ?? o.version ?? o.updatedAt) }));
+    .map((o) => ({ collection, path: `${collection}/${o.id}`, data: o.data, stamp: String(o.data.sentAt ?? o.version ?? o.updatedAt), at: Date.parse(o.updatedAt) }));
 }
 
 /** The round row's status, or undefined when it does not exist yet. */
@@ -68,6 +68,7 @@ async function statusOf($, slug, round) {
 export const wakeText = (w, rows) =>
   `The owner replied on the design round page. Artifact ${w.slug}, round ${w.round}. New rows: ${rows.map((r) => (r.data.kind === "redraw" ? `${r.path} (redraw)` : r.path)).join(", ")}. ` +
   `Read them with the claude-artifacts db tools (db_get on each path) and act on them per the design-process skill: a redraw row always gets a redraw. ` +
+  `Before you work on a thread, write its kind "status" row with replyTo (references/answer-page.md), so the page shows you are on it. ` +
   `When the round is handled, set rounds/${w.round}.status to "handled" so this watch stops.`;
 
 const stoppedText = (w, why) =>
@@ -92,6 +93,14 @@ async function poll($, w) {
   if ((await statusOf($, w.slug, w.round)) === "handled") return stopIfCurrent(`round ${w.round} is handled`);
   const collections = [`rounds/${w.round}/answers`, ...w.screens.map((n) => `rounds/${w.round}/threads/${n}/msgs`)];
   const rows = (await Promise.all(collections.map((c) => rowsOf($, w.slug, c)))).flat();
+  if (w.baseline && current === w) {
+    // A fresh arm knows nothing it has seen, so an owner row a claude row already followed (by the server's updatedAt) is not new.
+    const answeredAt = {};
+    for (const r of rows) if (r.data.from === "claude" && Number.isFinite(r.at)) answeredAt[r.collection] = Math.max(answeredAt[r.collection] ?? -Infinity, r.at);
+    for (const r of rows) if (r.data.from !== "claude" && r.at <= answeredAt[r.collection]) w.seen[r.path] = r.stamp;
+    w.baseline = false;
+    await $.store.set(w.key, w);
+  }
   const fresh = rows.filter((r) => r.data.from !== "claude" && w.seen[r.path] !== r.stamp);
   if (current !== w || !fresh.length) return;
   const before = { ...w.seen };
@@ -158,7 +167,8 @@ export const register = (on) => {
       if (current?.slug === slug && current.round === round) await stop($);
       return { result: `Answer watch for round ${round} stopped.` };
     }
-    const w = { key: await keyOf($), slug, round, screens: threadsOf(e.screens), armedAt: await $.clock.now(), seen: current?.slug === slug && current.round === round ? current.seen : {} };
+    const same = current?.slug === slug && current.round === round;
+    const w = { key: await keyOf($), slug, round, screens: threadsOf(e.screens), armedAt: await $.clock.now(), seen: same ? current.seen : {}, baseline: !same };
     await $.store.set(w.key, w);
     start($, w);
     return { result: `Watching round ${round} of ${slug}: answers and ${w.screens.length} threads, every 10 s. You are woken when the owner replies; the watch stops when rounds/${round}.status is "handled", after 6 h, or with stop: true.` };

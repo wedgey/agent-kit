@@ -78,4 +78,6 @@ Conductor's tests need Node 24 and nothing else. Node does not expand a folder, 
 node --test 'tests/conductor/*.test.mjs'
 tests/conductor/mod-test.sh    # the Bash mod's hooks, tests/conductor/*.test.ts, under claude plugin test
 CONDUCTOR_BANNED='<regex>' tools/check-conductor.sh   # also checks the design-process skill
+node --test plugins/design-process/tests/answer-page/chat.test.mjs   # the answer page's chat logic
+plugins/design-process/tests/mod-test.sh   # the design-process mods, under claude plugin test
 ```
