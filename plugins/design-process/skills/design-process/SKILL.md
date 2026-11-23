@@ -161,8 +161,10 @@ they like parts of several, the next round blends those parts and adds new ones.
 8. **Report to the owner.** Give the page's link and one line per direction, your recommendation, and
    what you did not check, such as user testing or colour-blindness simulation. The scores and the
    question are on the page. Then stop: the watcher wakes you when they write or send.
-9. **Answer from the page.** Reply in a screen's chat in words, or redraw when a change is settled
-   and visual or the owner pressed Redraw. When the answers arrive, mark the round handled and go on.
+9. **Answer from the page.** First write a `kind: "status"` row in each thread you take up, so the
+   page shows you are on it. Then reply in a screen's chat in words, or redraw when a change is settled
+   and visual or the owner pressed Redraw. Every claude row carries `replyTo` and a time taken from the
+   shell (`references/answer-page.md`, Each round). When the answers arrive, mark the round handled and go on.
 
 ## Working practice
 

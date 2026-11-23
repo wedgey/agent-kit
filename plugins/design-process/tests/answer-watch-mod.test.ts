@@ -201,7 +201,7 @@ describe('the answer watch', () => {
     const clock = mock.clock(on)
     const w = harness(on)
     await watch($)
-    w.db['rounds/r1/threads/1/msgs'] = [answer('m1', { from: 'claude', text: 'done', sentAt: 5 })]
+    w.db['rounds/r1/threads/1/msgs'] = [answer('m1', { from: 'claude', text: 'done', sentAt: 5 }), answer('m2', { from: 'claude', kind: 'status', text: 'Working on a redraw', sentAt: 6 })]
     await clock.advance(30_000)
     expect(w.submitted).toEqual([])
   })
@@ -214,6 +214,7 @@ describe('the answer watch', () => {
     await clock.advance(10_000)
     expect(w.submitted).toHaveLength(1)
     expect(w.submitted[0]).toContain('rounds/r1/threads/1/msgs/m1 (redraw)')
+    expect(w.submitted[0]).toContain('kind "status" row')
   })
 
   test('rows arriving together wake once', async ($, on) => {

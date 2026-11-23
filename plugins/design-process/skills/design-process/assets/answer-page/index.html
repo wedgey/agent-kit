@@ -221,7 +221,21 @@
   .msg.owner{align-self:flex-end;background:var(--sec)}
   .msg.claude{align-self:flex-start;background:var(--tint)}
   .msg .who{display:block;font-size:12px;font-weight:600;color:var(--muted)}
-  .msg.typing{color:var(--brand);font-style:italic}
+  .msg .txt{display:block;white-space:pre-wrap}
+  .msg.owner.rq{background:#fff;border:1px dashed var(--fg)}
+  .msg.claude.status{background:none;border:1px dashed var(--line2);color:var(--muted);font-size:12px;padding:4px 10px}
+  .msg.claude.new{box-shadow:inset 3px 0 0 var(--brand)}
+  .tstate{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:var(--brand);margin-top:6px}
+  .tstate[hidden]{display:none}
+  .tstate.stuck{color:var(--warn)}
+  .tstate .spin{width:12px;height:12px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;flex:none}
+  .tstate.stuck .spin{border-style:dotted;border-right-color:currentColor}
+  @media (prefers-reduced-motion:no-preference){.tstate .spin{animation:tspin 1s linear infinite}.tstate.stuck .spin{animation:none}}
+  @keyframes tspin{to{transform:rotate(1turn)}}
+  .tstate .tago{color:var(--muted);font-weight:400}
+  .tdet>.tstate,.tdet>.tjump{margin-left:12px;margin-right:12px}
+  .tjump{align-self:center;margin-top:6px;font-weight:600;border-color:var(--brand);color:var(--brand)}
+  .unread{display:inline-block;background:var(--brand);color:#fff;border-radius:999px;padding:0 8px;font-size:12px;font-weight:600;line-height:20px}
   .msgs .empty{font-size:12px;color:var(--muted)}
   .msgs .stale{font-size:13px;border:1px dashed var(--muted);border-radius:8px;padding:8px 10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
   .msgs .redraw{font:inherit;font-weight:600;min-height:44px;padding:0 14px;border-radius:8px;border:0;background:var(--fg);color:#fff;cursor:pointer}
@@ -234,7 +248,8 @@
   .vdraw :focus-visible{outline-color:var(--brand)}
   .vdraw h3{font-size:14px;font-weight:650}
   .vdhead{display:flex;align-items:center;justify-content:space-between;gap:8px}
-  .vdraw .msgs{max-height:none;flex:1}
+  .vdraw .msgs{max-height:none;flex:0 1 auto;min-height:0}
+  #vtform{margin-top:auto}#vstate{margin-bottom:auto}#vstate:not([hidden])+#vtform{margin-top:0}
   .vdraw .cta{margin-top:10px}
   .vstage:has(.vdraw:not([hidden])) .vpan{right:360px}
   @media (max-width:999px){
@@ -321,6 +336,7 @@
 </div>
 
 <div class="sr" id="live" aria-live="polite"></div>
+<div class="sr" id="chatlive" aria-live="polite"></div>
 <div class="sbar" id="sbar">
   <div><b id="sbn" style="font-size:13px"></b><div class="hint" id="sbh"></div></div>
   <button class="cta" id="send2" disabled>Send</button>
@@ -353,6 +369,8 @@
       </div>
       <div id="vdchat" style="display:flex;flex-direction:column;gap:8px;flex:1;min-height:0">
         <ol class="msgs" id="vmsgs" aria-live="polite"></ol>
+        <button type="button" class="ghost tjump" id="vjump" hidden>↓ New reply</button>
+        <div class="tstate" id="vstate" hidden><span class="spin" aria-hidden="true"></span><span><span class="tline"></span><span class="tago"></span></span></div>
         <form class="tform" id="vtform"></form>
       </div>
     </section></div>
@@ -365,6 +383,62 @@
   </div>
 </div>
 
+<script id="chat-logic">
+/* A screen's thread, as pure functions (tests/answer-page/chat.test.mjs runs this block on its own).
+   A row is {id, from:"owner"|"claude", kind?:"redraw"|"status", text, board?, sentAt?, replyTo?, seen?}.
+   seen is when this browser first saw the row, kept across reloads: a writer's clock can be wrong, this
+   page's own cannot run ahead of itself, so a row never sorts later than the moment it arrived. */
+const Chat = (() => {
+  const timeOf = r => {
+    const s = typeof r.sentAt === "number" && isFinite(r.sentAt) ? r.sentAt : Date.parse(String(r.id).slice(0, 24));
+    return Math.min(isFinite(s) ? s : Infinity, typeof r.seen === "number" ? r.seen : Infinity);
+  };
+  /* A claude row sorts after the row it answers (replyTo), and after the last owner row this page had when the
+     reply arrived (after), whatever its clock says. */
+  function order(rows){
+    const byId = new Map(rows.map(r => [r.id, r])), k = new Map();
+    const key = r => {
+      if (k.has(r.id)) return k.get(r.id);
+      k.set(r.id, timeOf(r));
+      for (const id of r.from === "claude" ? [r.replyTo, r.after] : []) {
+        const p = id && byId.get(id);
+        if (p && p !== r) k.set(r.id, Math.max(k.get(r.id), key(p) + 1));
+      }
+      return k.get(r.id);
+    };
+    return [...rows].sort((a, b) => { const x = key(a), y = key(b); return x < y ? -1 : x > y ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+  }
+  /* What the owner is still waiting for, or null. A claude answer (any claude row but a status) closes the owner's
+     open messages. A redraw closes only on a row with a board, a row whose replyTo names it, or a row with no replyTo.
+     A status row is Claude's acknowledgement: the wait goes on, but the owner knows the session woke. */
+  function pending(t){
+    let open = [], ack = null;
+    for (const r of t) {
+      if (r.from === "owner") open.push(r);
+      else if (r.kind === "status") { if (open.length) ack = r; }
+      else {
+        open = open.filter(o => o.kind === "redraw" && !r.board && r.replyTo && r.replyTo !== o.id);
+        if (!open.length) ack = null;
+      }
+    }
+    return open.length ? { redraw: open.some(o => o.kind === "redraw"), since: timeOf(open[0]), acked: !!ack, ack: ack ? ack.text : "" } : null;
+  }
+  const STUCK_MIN = 5;
+  // The status line under a thread: line changes only when the state does, so a live region reads it once.
+  function stateOf(p, n, now){
+    if (!p) return null;
+    const min = Math.max(0, Math.floor((now - p.since) / 60000)), ago = min < 1 ? "just now" : `${min} min`;
+    const line = p.acked
+      ? (p.redraw ? `Claude is redrawing screen ${n}. Drawing and two reviews take several minutes; the new option appears here.` : "Claude is working on a reply.")
+      : min >= STUCK_MIN ? "No sign of Claude yet. The session may be busy or paused: check Claude Code."
+      : p.redraw ? "Redraw requested. Waiting for Claude to pick it up…" : "Sent. Waiting for Claude to pick it up…";
+    return { line, ago, busy: p.acked, stuck: !p.acked && min >= STUCK_MIN };
+  }
+  const answers = t => t.filter(r => r.from === "claude" && r.kind !== "status");
+  const unread = (t, read) => answers(t).filter(r => !read[r.id]);
+  return { order, pending, stateOf, unread, answers, timeOf };
+})();
+</script>
 <script>
 /* round.json: everything the page draws. Board files: boards/<board>.html, thumbs/<board>.jpg, full/<board>.jpg,
    where a direction's board for screen n is <key><n> (stop 0 is the concept board <key>0, stop N+1 the states board).
@@ -391,7 +465,9 @@
    helpExtra text added to the viewer's "What's clickable" help
    Database (claude.use("db"), claude.use("user")):
    rounds/<id>/answers/<uid>   written by Send: {picks:{<n>:{board}|{other}}, note, sentAt} or {answer:"research again", note, sentAt}
-   rounds/<id>/threads/<n>/msgs/<msgId>   {from:"owner"|"claude", kind?:"redraw", text, board?, sentAt}; msgId sorts by time.
+   rounds/<id>/threads/<n>/msgs/<msgId>   {from:"owner"|"claude", kind?:"redraw"|"status", text, board?, sentAt, replyTo?}.
+       kind "redraw" is the owner's Redraw button; kind "status" is Claude's interim "on it" row. replyTo is the owner
+       row a claude row answers. Rows sort by sentAt, never later than this browser first saw them (Chat.order).
        A claude row with board adds that board as an option for screen n. Segments alternate collection/doc, so msgs sits
        between the screen and the row.
    rounds/<id>   {status:"open"|"handled"} written by Claude; handled locks the page.
@@ -495,13 +571,17 @@ function setup(r){
     ${(r.clashes || []).map((c, i) => c.screens[0] === s.n ? `<div class="clash" role="status" data-c="${i}" hidden></div>` : "").join("")}
     <details class="tdet" data-s="${s.n}"><summary>Chat with Claude about screen ${s.n} <span class="tn"></span></summary>
       <ol class="msgs" data-s="${s.n}" aria-live="polite" aria-label="Chat about screen ${s.n}"></ol>
+      <button type="button" class="ghost tjump" data-s="${s.n}" hidden>↓ New reply</button>
+      <div class="tstate" data-s="${s.n}" hidden><span class="spin" aria-hidden="true"></span><span><span class="tline"></span><span class="tago"></span></span></div>
       <form class="tform" data-s="${s.n}">${formHTML(s.n)}</form>
     </details>
   </div>`).join("");
   document.querySelectorAll("[data-open-from]").forEach(d => d.open = innerWidth >= +d.dataset.openFrom);
   $("send").lastElementChild.textContent = MAC ? "⌘↩" : "Ctrl+↩";
   $("boot").hidden = true; $("app").hidden = false;
+  loadMem();
   SCREENS.forEach(s => drawThread(s.n));
+  setInterval(() => SCREENS.forEach(s => drawState(s.n)), 30000);
   render();
 }
 
@@ -628,7 +708,12 @@ const leadText = el => {
   for (let t; (t = w.nextNode());) if (t.data.trim()) return t.data.replace(/\s+/g, " ").trim();
   return el.dataset.goto;
 };
-function toast(t){ $("vtoast").textContent = t; $("vtoast").hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $("vtoast").hidden = true, 2400); }
+function toast(t, act){
+  $("vtoast").textContent = t; $("vtoast").hidden = false; clearTimeout(toastTimer);
+  if (act) { const b = document.createElement("button"); b.className = "linkbtn"; b.textContent = act.label; b.onclick = () => { $("vtoast").hidden = true; act.run(); }; $("vtoast").append(" ", b); }
+  const hide = () => { if ($("vtoast").contains(document.activeElement)) toastTimer = setTimeout(hide, 2000); else $("vtoast").hidden = true; };
+  toastTimer = setTimeout(hide, act ? 8000 : 2400);
+}
 function frame(id){
   if (frames[id]) return frames[id];
   const f = document.createElement("div"); f.className = "vframe"; f.style.height = hOf(id) + "px";
@@ -665,7 +750,7 @@ function openViewer(id){
   if (again) { if (innerWidth < NARROW) drawMode = ""; show(opt, p.n); return $("vttl").focus(); }
   opener = document.activeElement; dirL = opt; stop = p.n; needHead = true;
   if (!inSet(cmpSet, dirL)) cmpSet = pairFor(stop, dirL);
-  for (const el of document.body.children) if (el !== $("viewer") && el !== $("live")) el.inert = true;
+  for (const el of document.body.children) if (el !== $("viewer") && el !== $("live") && el !== $("chatlive")) el.inert = true;
   $("viewer").classList.add("open"); document.body.style.overflow = "hidden";
   drawViewer(); $("vclose").focus();
 }
@@ -832,32 +917,134 @@ document.addEventListener("input", e => {
   render();
 });
 document.addEventListener("submit", e => { if (e.target.matches(".tform")) { e.preventDefault(); postMsg(e.target); } });
-const msgHTML = m => `<li class="msg ${m.from}"><span class="who">${m.from === "owner" ? "You" : "Claude"}</span>${esc(m.text)}${m.board
-  ? `<br><button class="ghost" data-open="${esc(m.board)}">Try ${esc(baseOf(m.board) + m.n)} <span class="v2">${esc(suffixOf(m.board))}</span> ⤢</button>` : ""}</li>`;
-const threadOf = n => [...(tmap[n]?.values() || [])].sort((a, b) => a.id < b.id ? -1 : 1);
+const msgHTML = m => {
+  const who = m.from === "owner" ? (m.kind === "redraw" ? "You · asked for a redraw" : "You")
+    : m.kind === "status" ? "Claude · status" : m.board ? `Claude · new option ${esc(baseOf(m.board) + m.n)} ${esc(suffixOf(m.board))}` : "Claude";
+  return `<li class="msg ${m.from}${m.kind === "redraw" ? " rq" : m.kind === "status" ? " status" : ""}${m.unread ? " new" : ""}"><span class="who">${who}</span><span class="txt">${esc(m.text.trim())}</span>${m.board
+    ? `<button class="ghost" data-open="${esc(m.board)}">Try ${esc(baseOf(m.board) + m.n)} <span class="v2">${esc(suffixOf(m.board))}</span> ⤢</button>` : ""}</li>`;
+};
+/* Chat memory, per browser and round: when each row was first seen, the owner row each live reply arrived after
+   (both for Chat.order), and which replies were read. A first visit counts every reply already there as read.
+   Storage can be blocked in the frame: then it lasts the visit. */
+const mem = { seen: {}, after: {}, read: {} }, ingested = {};
+let memKey = "", memNew = true, memTimer = 0;
+function loadMem(){
+  memKey = `design-process-chat:${location.pathname}:${ID}`;
+  try { const m = JSON.parse(localStorage.getItem(memKey)); if (m?.seen && m?.read) { Object.assign(mem, m, { after: m.after || {} }); memNew = false; } } catch {}
+}
+const flushMem = () => { clearTimeout(memTimer); memTimer = 0; try { localStorage.setItem(memKey, JSON.stringify(mem)); } catch {} };
+function saveMem(){ clearTimeout(memTimer); memTimer = setTimeout(flushMem, 300); }
+addEventListener("pagehide", () => { if (memTimer) flushMem(); });
+const threadOf = n => Chat.order([...(tmap[n]?.values() || [])]);
+const unreadOf = n => Chat.unread(threadOf(n), mem.read);
+const atBottom = ol => ol.scrollHeight - ol.scrollTop - ol.clientHeight < 24;
+const viewerOpen = () => $("viewer").classList.contains("open");
+// The list of screen n the owner can see now, if any: the viewer's panel, or the open thread under the screen.
+function shownList(n){
+  if (document.hidden) return null;
+  if (viewerOpen()) return drawMode === "chat" && stop === n ? $("vmsgs") : null;
+  const ol = document.querySelector(`.tdet[data-s="${n}"][open] .msgs`), r = ol?.getBoundingClientRect();
+  const sb = $("sbar").getBoundingClientRect(), floor = sb.height && sb.top < innerHeight ? sb.top : innerHeight;
+  return r && r.top < floor && r.bottom > 0 && r.bottom <= floor + 2 ? ol : null;
+}
+const listOpen = n => viewerOpen() ? drawMode === "chat" && stop === n : !!document.querySelector(`.tdet[data-s="${n}"][open]`);
+const setHTML = (el, h) => { if (el.innerHTML !== h) el.innerHTML = h; };
+function announce(t){ $("chatlive").textContent = t; }
 // Appends rather than redraws, so the live region announces only the new message.
 function drawThread(n){
-  const t = threadOf(n), last = t.at(-1), lastClaude = t.findLast(m => m.from === "claude");
-  const reading = last?.from === "owner", stale = !!lastClaude && !lastClaude.board;
+  const t = threadOf(n), lastClaude = Chat.answers(t).at(-1), p = Chat.pending(t);
+  const stale = !p && !!lastClaude && !lastClaude.board;
+  const tail = stale ? `<li class="stale">The boards don't show this chat yet. <button type="button" class="redraw" data-s="${n}"${live() && !handled ? "" : " disabled"}>Redraw as a new option</button></li>`
+    : t.length ? "" : `<li class="empty">No messages yet. Ask about this screen or say what to change. Claude redraws a board when a change is clear; press Redraw any time to ask for one.</li>`;
   const sig = i => t.slice(0, i).map(m => m.id).join("|");
   document.querySelectorAll(`.msgs[data-s="${n}"]`).forEach(ol => {
-    ol.querySelectorAll(".typing,.empty,.stale").forEach(x => x.remove());
-    const have = +(ol.dataset.n || 0);
-    if (have && (have > t.length || ol.dataset.sig !== sig(have))) { ol.innerHTML = ""; ol.dataset.n = 0; }
-    for (let i = +(ol.dataset.n || 0); i < t.length; i++) ol.insertAdjacentHTML("beforeend", msgHTML({ ...t[i], n }));
+    const bottom = atBottom(ol), have = +(ol.dataset.n || 0);
+    if (have && (have > t.length || ol.dataset.sig !== sig(have))) { ol.innerHTML = ""; ol.dataset.n = 0; ol.dataset.tail = ""; }
+    const from = +(ol.dataset.n || 0), added = t.slice(from);
+    if (added.length || ol.dataset.tail !== tail) {
+      ol.querySelectorAll(".empty,.stale").forEach(x => x.remove());
+      for (const m of added) ol.insertAdjacentHTML("beforeend", msgHTML({ ...m, n, unread: !mem.read[m.id] && m.from === "claude" && m.kind !== "status" }));
+      if (tail) ol.insertAdjacentHTML("beforeend", tail);
+      ol.dataset.tail = tail;
+    }
     ol.dataset.n = t.length; ol.dataset.sig = sig(t.length);
-    ol.insertAdjacentHTML("beforeend", reading ? `<li class="msg claude typing">Claude is reading…</li>`
-      : stale ? `<li class="stale">The boards don't show this chat yet. <button type="button" class="redraw" data-s="${n}"${live() && !handled ? "" : " disabled"}>Redraw as a new option</button></li>`
-      : t.length ? "" : `<li class="empty">No messages yet. Ask about this screen or say what to change. Claude redraws a board when a change is clear; press Redraw any time to ask for one.</li>`);
-    ol.scrollTop = ol.scrollHeight;
+    if (from === 0 || bottom || added.some(m => m.from === "owner")) ol.scrollTop = ol.scrollHeight;
   });
-  document.querySelectorAll(`.tdet[data-s="${n}"] .tn`).forEach(x => x.textContent = t.length ? `· ${t.length} message${t.length > 1 ? "s" : ""}` : "");
-  if ($("viewer").classList.contains("open") && n === stop) drawChatBtn();
+  drawState(n);
+  checkRead(); drawUnread();
+}
+// The line under a thread while the owner waits. Its text changes only with the state; the minutes tick beside it.
+// The list's own live region reads the owner's message and Claude's status rows, so only "no sign of Claude" is announced.
+function drawState(n){
+  const st = Chat.stateOf(Chat.pending(threadOf(n)), n, Date.now());
+  document.querySelectorAll(`.tstate[data-s="${n}"]`).forEach(el => {
+    el.hidden = !st;
+    if (!st) { el.dataset.line = ""; return; }
+    if (el.dataset.line !== st.line) {
+      if (st.stuck && el.parentElement.querySelector(".msgs") === shownList(n)) announce(st.line);
+      el.dataset.line = st.line; el.querySelector(".tline").textContent = st.line;
+    }
+    el.querySelector(".tago").textContent = ` · ${st.ago === "just now" ? "sent just now" : st.ago}`;
+    el.classList.toggle("stuck", st.stuck);
+  });
+}
+// A reply is read once its thread is on screen, scrolled to the end, in a visible tab.
+function checkRead(){
+  let changed = false;
+  for (const s of SCREENS || []) {
+    const ol = shownList(s.n);
+    if (ol && atBottom(ol)) for (const r of unreadOf(s.n)) { mem.read[r.id] = 1; changed = true; }
+  }
+  if (changed) saveMem();
+}
+function drawUnread(){
+  for (const s of SCREENS) {
+    const c = threadOf(s.n).length, u = unreadOf(s.n).length;
+    document.querySelectorAll(`.tdet[data-s="${s.n}"] .tn`).forEach(x => setHTML(x, (c ? `· ${c} message${c > 1 ? "s" : ""}` : "") + (u ? ` <span class="unread">${u} new</span>` : "")));
+    if (!u) document.querySelectorAll(`.msgs[data-s="${s.n}"] .msg.new`).forEach(x => x.classList.remove("new"));
+  }
+  document.querySelectorAll(".tjump").forEach(b => {
+    const ol = b.parentElement.querySelector(".msgs"), n = +ol.dataset.s;
+    const h = !(n && unreadOf(n).length && !atBottom(ol));
+    if (b.hidden !== h) b.hidden = h;
+  });
+  if (viewerOpen()) drawChatBtn();
+}
+let readFrame = 0;
+const readSoon = () => { readFrame ||= requestAnimationFrame(() => { readFrame = 0; if (SCREENS) { checkRead(); drawUnread(); } }); };
+document.addEventListener("scroll", readSoon, true);
+document.addEventListener("toggle", readSoon, true);
+document.addEventListener("visibilitychange", readSoon);
+document.addEventListener("click", e => {
+  const b = e.target.closest(".tjump"); if (!b) return;
+  const ol = b.parentElement.querySelector(".msgs"); ol.scrollTop = ol.scrollHeight; readSoon();
+});
+// A reply the owner cannot see yet: announce it, and in the viewer offer to go to its screen.
+function notify(n, fresh){
+  if (!unreadOf(n).length) return;
+  const text = `Claude replied about screen ${n}${fresh.some(x => x.board) ? " with a new option" : ""}.`;
+  const ol = shownList(n);
+  if (!listOpen(n) && !viewerOpen()) announce(text);
+  if (viewerOpen() && !ol) toast(text, { label: `Open screen ${n}'s chat`, run: () => { show(baseOf(dirL), n); openDraw("chat"); } });
 }
 // Rows are untrusted: only owner and claude senders, a board only if it names this screen's direction.
-function ingest(n, rows){
-  const m = tmap[n] ||= new Map();
-  for (const r of rows) m.set(r.id, { id: r.id, from: r.from === "claude" ? "claude" : "owner", kind: r.kind, text: String(r.text ?? ""), board: typeof r.board === "string" ? r.board : "", sentAt: r.sentAt });
+// A snapshot from cache may be partial, so the first full one is still the first visit's baseline.
+function ingest(n, rows, cached){
+  const m = tmap[n] ||= new Map(), now = Date.now(), first = !ingested[n], fresh = [];
+  const lastOwner = first ? "" : threadOf(n).findLast(x => x.from === "owner")?.id || "";
+  if (!cached) ingested[n] = true;
+  for (const r of rows) {
+    const had = m.get(r.id), from = r.from === "claude" ? "claude" : "owner";
+    const seen = had?.seen ?? mem.seen[r.id] ?? now;
+    mem.seen[r.id] ??= seen;
+    const x = { id: r.id, from, kind: from === "owner" ? (r.kind === "redraw" ? "redraw" : "") : (r.kind === "status" ? "status" : ""),
+      text: String(r.text ?? ""), board: typeof r.board === "string" ? r.board : "", sentAt: r.sentAt, replyTo: typeof r.replyTo === "string" ? r.replyTo : "", seen,
+      after: had?.after ?? mem.after[r.id] ?? "" };
+    if (!had && from === "claude" && !x.after && lastOwner && mem.after[r.id] == null) x.after = mem.after[r.id] = lastOwner;
+    if (!had && from === "claude" && !x.kind && !mem.read[x.id]) { if (first && memNew) mem.read[x.id] = 1; else fresh.push(x); }
+    m.set(r.id, x);
+  }
+  saveMem();
   let ask = "", added = false;
   for (const x of threadOf(n)) {
     if (x.from === "owner" && !x.kind) ask = x.text;
@@ -871,11 +1058,13 @@ function ingest(n, rows){
     }
   }
   drawThread(n); if (added) render();
+  if (fresh.length) notify(n, fresh);
 }
 async function addOwner(n, extra, text){
   if (!live()) return false;
   const id = new Date().toISOString() + "-" + Math.random().toString(36).slice(2, 6), msg = { from: "owner", ...extra, text, sentAt: Date.now() };
-  (tmap[n] ||= new Map()).set(id, { id, ...msg }); drawThread(n);
+  mem.seen[id] = msg.sentAt; saveMem();
+  (tmap[n] ||= new Map()).set(id, { id, kind: "", board: "", replyTo: "", ...msg, seen: msg.sentAt }); drawThread(n);
   try { await db.doc(`rounds/${ID}/threads/${n}/msgs/${id}`).set(msg); return true; }
   catch { tmap[n].delete(id); drawThread(n); return false; }
 }
@@ -887,17 +1076,18 @@ async function postMsg(form){
 }
 document.addEventListener("click", e => { const b = e.target.closest(".redraw"); if (b) addOwner(+b.dataset.s, { kind: "redraw" }, "Redraw with these changes"); });
 function drawChatBtn(){
-  const c = threadOf(stop).length;
+  const c = threadOf(stop).length, u = stop >= 1 && stop <= N ? unreadOf(stop).length : 0;
   $("vchat").hidden = stop < 1 || stop > N;
-  $("vchat").innerHTML = `Chat<span class="long"> about screen ${stop}</span>${c ? ` · ${c}` : ""}`;
+  setHTML($("vchat"), `Chat<span class="long"> about screen ${stop}</span>${u ? ` <span class="unread">${u} new</span>` : c ? ` · ${c}` : ""}`);
   $("vchat").setAttribute("aria-expanded", String(drawMode === "chat"));
 }
 function drawDraw(){
   if (stop < 1 || stop > N) drawMode = "";
   $("vdraw").hidden = !drawMode;
   if ($("vdraw").dataset.s !== String(stop) && stop >= 1 && stop <= N) {
-    $("vdraw").dataset.s = $("vmsgs").dataset.s = $("vtform").dataset.s = stop;
-    $("vmsgs").innerHTML = ""; $("vmsgs").dataset.n = 0; $("vmsgs").setAttribute("aria-label", `Chat about screen ${stop}`);
+    $("vdraw").dataset.s = $("vmsgs").dataset.s = $("vtform").dataset.s = $("vstate").dataset.s = stop;
+    $("vstate").dataset.line = "";
+    $("vmsgs").innerHTML = ""; $("vmsgs").dataset.n = 0; $("vmsgs").dataset.tail = ""; $("vmsgs").setAttribute("aria-label", `Chat about screen ${stop}`);
     $("vtform").innerHTML = formHTML(stop, "vtf");
     $("vothert").value = other[stop] || ""; $("vothererr").textContent = "";
     drawThread(stop);
@@ -909,7 +1099,7 @@ function drawDraw(){
   const on = !none && picks[stop] === "X";
   $("votherok").textContent = sent ? "Sent: picks locked" : on ? `✓ Your answer for screen ${stop} · Unpick` : `Use this as my answer for screen ${stop}`;
   $("votherok").disabled = sent;
-  syncForms();
+  syncForms(); readSoon();
 }
 function openDraw(mode){ drawMode = mode; drawViewer(); (mode === "chat" ? $("vtform").querySelector("textarea") : $("vothert")).focus(); }
 function closeDraw(){ const was = drawMode; drawMode = ""; drawViewer(); $(was === "chat" ? "vchat" : "vother")?.focus(); }
@@ -953,7 +1143,7 @@ async function connect(){
     if (!restored) { restored = true; const d = dataOf(s); if (d && (d.picks || d.answer)) restore(d); }
     render();
   }, off);
-  SCREENS.forEach(s => db.collection(`rounds/${ID}/threads/${s.n}/msgs`).onSnapshot(c => ingest(s.n, rowsOf(c)), () => {}));
+  SCREENS.forEach(s => db.collection(`rounds/${ID}/threads/${s.n}/msgs`).onSnapshot(c => ingest(s.n, rowsOf(c), !!c?.metadata?.fromCache), () => {}));
 }
 
 (async () => {

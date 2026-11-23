@@ -11,7 +11,7 @@ const MAX_ERRORS = 90; // 15 minutes of outage at POLL_MS
 export const DESCRIPTION =
   "Call this once after you publish a design round to an artifact: it polls the artifact's database every 10 s and wakes this session when the owner sends answers or a chat message, " +
   "and stops by itself when rounds/<round>.status is \"handled\", after 6 h, or with stop: true. Arming again for another round replaces the watch. " +
-  "Database layout it reads: rounds/<round>/answers/<uid>, rounds/<round>/threads/<n>/msgs/<msgId> (a row with from \"claude\" never wakes you).";
+  "Database layout it reads: rounds/<round>/answers/<uid>, rounds/<round>/threads/<n>/msgs/<msgId> (a row with from \"claude\", a kind \"status\" acknowledgement included, never wakes you).";
 
 const SCHEMA = {
   type: "object",
@@ -68,6 +68,7 @@ async function statusOf($, slug, round) {
 export const wakeText = (w, rows) =>
   `The owner replied on the design round page. Artifact ${w.slug}, round ${w.round}. New rows: ${rows.map((r) => (r.data.kind === "redraw" ? `${r.path} (redraw)` : r.path)).join(", ")}. ` +
   `Read them with the claude-artifacts db tools (db_get on each path) and act on them per the design-process skill: a redraw row always gets a redraw. ` +
+  `Before you work on a thread, write its kind "status" row with replyTo (references/answer-page.md), so the page shows you are on it. ` +
   `When the round is handled, set rounds/${w.round}.status to "handled" so this watch stops.`;
 
 const stoppedText = (w, why) =>
