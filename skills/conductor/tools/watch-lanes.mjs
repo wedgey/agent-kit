@@ -16,7 +16,7 @@
  * { event: "box-slow", lanes, box } when two or more stall or park in one look, { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
  */
 
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync, existsSync, realpathSync } from "node:fs";
 import { availableParallelism, freemem, loadavg } from "node:os";
 import { basename } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -146,7 +146,8 @@ export async function watchLanes({ look, sleep, maxLooks, maxErrors = 5 }) {
 }
 
 /* c8 ignore start -- process wiring */
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const entry = process.argv[1] && existsSync(process.argv[1]) ? realpathSync(process.argv[1]) : "";
+if (entry === realpathSync(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2);
   const paths = args.filter((a) => !a.startsWith("--"));
   const flag = (name, fallback) => {

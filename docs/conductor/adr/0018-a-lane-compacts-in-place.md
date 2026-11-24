@@ -1,3 +1,7 @@
+---
+status: the lane window is 140000, compacting at about 107k, per ADR 0022
+---
+
 # A lane compacts in place
 
 ADR 0011 had a lane hand over at its context limit: it pushed, wrote a Context full report, and the orchestrator stopped it and dispatched a fresh lane from that report. Each handover cost a stop, a new dispatch, a fresh lane re-reading its reading list and the code, and an orchestrator turn to relay the report, and it lost whatever the report left out. The orchestrator itself had already stopped paying that price: under ADR 0015 it compacts its own session with what it must keep and a prompt that resumes it.

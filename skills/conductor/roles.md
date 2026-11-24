@@ -8,18 +8,20 @@ Playbooks name roles. This table gives each role its tier. Your binding gives ea
 | explorer | bulk-read | Reads files, logs, docs and history. Returns pointers, never conclusions | Every pointer resolves and every quote exists |
 | implementer | strong-code | Writes code from a brief that leaves design choices open. Failing test first where the repo has a test harness | Tests and typecheck, then a reviewer |
 | editor | mechanical | Applies a brief with nothing left to decide, or runs a command and reports the result | Lint, typecheck, tests, or a diff limited to the named files |
-| reviewer | frontier | Reads a diff against the intent and the repo's standards, without running it | None. Judgment |
+| reviewer | strong-code for a small routine diff, frontier otherwise | Reads a diff against the intent and the repo's standards, without running it | None. Judgment |
 | verifier | strong-code when its check is mechanical, frontier when it judges | Runs the change on the real artifact and reports pass or fail with evidence | None. Judgment |
 | lane | strong-code, or frontier for a ticket that needs design | Runs one ticket's whole playbook, writing its main chain itself, to a merge-ready PR | Its own checks, then its reviewer and verifier, which run at their own tier |
 
 ## Tiers
 
-- **frontier**: judgment no command can check. Design, review, verdicts.
+- **frontier**: judgment no command can check. Design, review that is not small and routine, verdicts.
 - **strong-code**: code across function boundaries from a loose brief.
 - **mechanical**: work the brief fully specifies.
 - **bulk-read**: reading and condensing.
 
 A verifier's check is mechanical when the ticket names it: a named end-to-end spec passes on the real artifact and its screenshots show what the acceptance lists. That verifier runs at strong-code. A verifier that judges, such as the epic's own verifier, one on a ticket that needs design, or one with no named check, runs at frontier. One verifier runs per PR, at merge-ready, not one per iteration.
+
+A review runs at strong-code when the diff is small and routine: at most 300 lines inserted plus deleted in `git diff --shortstat <base>...HEAD`, not counting lockfiles and generated files, no change to authentication, security, payments, data migrations or concurrency, and not a ticket that needs design. A re-review after fixes counts only the diff since the head it last reviewed. Every other review runs at frontier.
 
 A role may run on mechanical or bulk-read only behind its gate, and the orchestrator reruns that gate before accepting the result. If a task has no gate, give it to a role on strong-code or above.
 

@@ -13,6 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
+import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const FAILED = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"]);
@@ -106,7 +107,8 @@ function lookAt(prRef, repo) {
   };
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const entry = process.argv[1] && existsSync(process.argv[1]) ? realpathSync(process.argv[1]) : "";
+if (entry === realpathSync(fileURLToPath(import.meta.url))) {
   const [prRef, ...rest] = process.argv.slice(2);
   const flag = (name, fallback) => rest.find((a) => a.startsWith(`--${name}=`))?.split("=")[1] || fallback;
   if (!prRef) {

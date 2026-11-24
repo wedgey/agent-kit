@@ -13,7 +13,7 @@
  * time: a new cut replaces the old waiter, whose own exit is then only noise.
  */
 
-import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, statSync, existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -53,7 +53,8 @@ export async function waitForReset(dir, { read = readFileSync, list = readdirSyn
 }
 
 /* c8 ignore start -- process wiring */
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const entry = process.argv[1] && existsSync(process.argv[1]) ? realpathSync(process.argv[1]) : "";
+if (entry === realpathSync(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   const interval = Number(/--interval=(\d+)/.exec(process.argv.slice(2).join(" "))?.[1] ?? 30);
   if (args[0]) process.stdout.write(JSON.stringify(await waitForReset(args[0], { interval })));

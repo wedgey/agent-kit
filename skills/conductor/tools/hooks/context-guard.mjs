@@ -14,11 +14,13 @@ import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { BYPASS_ENV } from "./classify.mjs";
 import { bypassed } from "./hook-io.mjs";
+import { isDirectInvocation } from "../queue.mjs";
 
+// The lane agent's autoCompactWindow (lane.md) compacts about 33k below itself and must stay under this limit.
+// Lowering either number makes every lane compaction draw a note, and nothing reports it.
 export const DEFAULT_LIMIT = 120_000;
 export const DEFAULT_SESSION_LIMIT = 150_000;
 export const STEP = 50_000;
@@ -123,6 +125,11 @@ const LANE_AGENT = "conductor:lane";
 const LANE_ACTION =
   `One tool output took you past it before your compaction could run. You compact in place, so go on with the step in hand. ` +
   `Do not report Context full. Keep each tool output short: tail logs and read files by line range.`;
+// design-process ADR 0003 gives these a 200k window on purpose; the delegate limit would end their work at 120k.
+const OWN_WINDOW_LIMITS = new Map([
+  ["design-process:drafter", 200_000],
+  ["design-process:fixer", 200_000],
+]);
 // Names the mod's tool despite ADR 0002; ADR 0015 says why.
 const HANDOVER_TOOL = "mcp__conductor__handover";
 // A lane run as its own session has no agent_id either, so the session note must route it to its report.
@@ -141,7 +148,9 @@ const PROMPT_ACTION =
 export function contextNote(input, env, read = readTail, memory = fileMemory()) {
   const own = sessionTranscript(input);
   const path = own ?? delegateTranscript(input);
-  const limit = own ? limitFrom(env.CONDUCTOR_SESSION_CONTEXT_LIMIT, DEFAULT_SESSION_LIMIT) : limitFrom(env.CONDUCTOR_CONTEXT_LIMIT, DEFAULT_LIMIT);
+  const limit = own
+    ? limitFrom(env.CONDUCTOR_SESSION_CONTEXT_LIMIT, DEFAULT_SESSION_LIMIT)
+    : (OWN_WINDOW_LIMITS.get(input?.agent_type) ?? limitFrom(env.CONDUCTOR_CONTEXT_LIMIT, DEFAULT_LIMIT));
   if (!path || !limit || bypassed("", env, BYPASS_ENV)) return null;
   let now, before;
   try {
@@ -167,7 +176,7 @@ export function contextNote(input, env, read = readTail, memory = fileMemory()) 
 }
 
 /* c8 ignore start -- process wiring */
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectInvocation(process.argv[1], import.meta.url)) {
   let out = null;
   try {
     out = contextNote(JSON.parse(readFileSync(0, "utf8")), process.env);

@@ -16,7 +16,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -253,7 +253,8 @@ export function sweep(root, { dryRun = false, prs = ghPrs, procStart = linuxProc
 }
 
 /* c8 ignore start -- process wiring */
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const entry = process.argv[1] && existsSync(process.argv[1]) ? realpathSync(process.argv[1]) : "";
+if (entry === realpathSync(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2);
   const common = quietly(() => git(process.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir"));
   if (!common) process.exit(0);

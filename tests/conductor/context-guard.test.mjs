@@ -82,6 +82,14 @@ describe("the context guard, a PostToolUse and UserPromptSubmit hook for delegat
     expect(out).toMatch(/push your branch.*Context full/);
   });
 
+  it("holds design-process's drafter and fixer to their own 200k window, not the 120k delegate limit", () => {
+    for (const agent_type of ["design-process:drafter", "design-process:fixer"]) {
+      expect(guard({ ...session([turn("m1", 110_000), result(), turn("m2", 138_000)]), agent_type }, {})).toBeNull();
+      expect(note(guard({ ...session([turn("m1", 190_000), result(), turn("m2", 205_000)]), agent_type }, {}))).toMatch(/205k tokens, past the limit of 200k/);
+    }
+    expect(note(guard({ ...session([turn("m1", 110_000), result(), turn("m2", 138_000)]), agent_type: "design-process:reviewer" }, {}))).toMatch(/138k/);
+  });
+
   it("speaks again at each further step past the limit", () => {
     const mem = memory();
     expect(note(guard(session([turn("m1", 110_000), result(), turn("m2", 121_000)]), {}, mem))).toMatch(/121k/);
