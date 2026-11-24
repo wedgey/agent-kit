@@ -6,11 +6,11 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import { BYPASS_ENV, BYPASS_HINT } from "./classify.mjs";
 import { bypassed } from "./hook-io.mjs";
 import { waitLoopReason } from "./wait-loop.mjs";
+import { isDirectInvocation } from "../queue.mjs";
 
 export function waitLoopDecision(input, env) {
   const command = input?.tool_name === "Bash" ? input.tool_input?.command : null;
@@ -20,7 +20,7 @@ export function waitLoopDecision(input, env) {
 }
 
 /* c8 ignore start -- process wiring */
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectInvocation(process.argv[1], import.meta.url)) {
   let out = null;
   try {
     out = waitLoopDecision(JSON.parse(readFileSync(0, "utf8")), process.env);

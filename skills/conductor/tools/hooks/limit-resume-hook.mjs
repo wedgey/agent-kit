@@ -15,7 +15,8 @@
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+
+import { isDirectInvocation } from "../queue.mjs";
 
 export const LIMIT_PATTERN = /hit your (?:5-hour|weekly|daily) limit\b[^]*?resets (\d{1,2}):(\d{2})(am|pm)?(?:\s+\((UTC|[A-Za-z/]+)\))?/;
 
@@ -69,7 +70,7 @@ export function limitStop(input, { read = (file, start, length) => readFileSync(
 }
 
 /* c8 ignore start -- process wiring */
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectInvocation(process.argv[1], import.meta.url)) {
   try { limitStop(JSON.parse(readFileSync(0, "utf8"))); } catch {}
   process.exit(0);
 }

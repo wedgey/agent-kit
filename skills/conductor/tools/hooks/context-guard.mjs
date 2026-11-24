@@ -14,10 +14,10 @@ import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { BYPASS_ENV } from "./classify.mjs";
 import { bypassed } from "./hook-io.mjs";
+import { isDirectInvocation } from "../queue.mjs";
 
 export const DEFAULT_LIMIT = 120_000;
 export const DEFAULT_SESSION_LIMIT = 150_000;
@@ -167,7 +167,7 @@ export function contextNote(input, env, read = readTail, memory = fileMemory()) 
 }
 
 /* c8 ignore start -- process wiring */
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectInvocation(process.argv[1], import.meta.url)) {
   let out = null;
   try {
     out = contextNote(JSON.parse(readFileSync(0, "utf8")), process.env);
