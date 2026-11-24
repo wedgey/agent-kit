@@ -19,7 +19,7 @@ Claude Code has one model family. Spawn reviewers and verifiers fresh at their o
 
 | Verb | Mechanism | Fallback |
 |---|---|---|
-| spawn | `Agent` tool with `prompt` (the brief), `description` and `subagent_type`. Add `model` and `effort` only to escalate or on the fallback path | None. Always available |
+| spawn | `Agent` tool with `prompt` (the brief), `description` and `subagent_type`. Add `model` and `effort` only to escalate, when roles.md Tiers puts the work on another tier than the role's default, or on the fallback path | None. Always available |
 | fork | `Agent` with `subagent_type: "fork"`. Inherits the conversation, system prompt, model and prompt cache | If fork is unavailable, spawn with a full brief |
 | continue | `SendMessage` to the delegate's id | Spawn fresh with the consolidated scope |
 | ask | `AskUserQuestion` with options | In `-p` mode the tool is absent. Ask in plain text, list the options, and stop |
@@ -73,7 +73,7 @@ The explorer, reviewer and editor list the tools they may use, because every too
 | verifier | `conductor:verifier` | strong-code | `general-purpose` |
 | lane | `conductor:lane` | strong-code | `general-purpose` |
 
-A verifier that judges, per roles.md Tiers, such as the epic's own verifier, gets `model: opus` and `effort: high` on its spawn. On 2026-11-10, verifiers on `opus` were the largest cost of an epic's five-hour window, at 22%, while most of them only ran a named spec and compared screenshots.
+A verifier that judges, per roles.md Tiers, such as the epic's own verifier, gets `model: opus` and `effort: high` on its spawn. A small routine review, per roles.md Tiers, gets `model: sonnet` and `effort: medium` on its spawn. A spawn that forgets it gets the frontier review, which costs money rather than review quality. On 2026-11-23, 41 reviews on `opus` were 10% of a day's spend, $40.50 of $421 at API prices, and the same tokens on `sonnet` cost half ($2/$10 against $4/$20 per million). On 2026-11-10, verifiers on `opus` were the largest cost of an epic's five-hour window, at 22%, while most of them only ran a named spec and compared screenshots.
 
 To escalate, pass both `model` and `effort` from the tier table, and keep the spawn's `description` unchanged so the retry reads as the same piece of work. A per-spawn `model` replaces the agent's model, but the agent's `effort` stays unless you pass one.
 
