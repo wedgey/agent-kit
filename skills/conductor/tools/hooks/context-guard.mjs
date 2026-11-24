@@ -19,6 +19,8 @@ import { BYPASS_ENV } from "./classify.mjs";
 import { bypassed } from "./hook-io.mjs";
 import { isDirectInvocation } from "../queue.mjs";
 
+// The lane agent's autoCompactWindow (lane.md) compacts about 33k below itself and must stay under this limit.
+// Lowering either number makes every lane compaction draw a note, and nothing reports it.
 export const DEFAULT_LIMIT = 120_000;
 export const DEFAULT_SESSION_LIMIT = 150_000;
 export const STEP = 50_000;
