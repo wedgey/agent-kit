@@ -14,7 +14,7 @@
  * Prints one JSON line, { events }, and exits 0. Events: { event: "stalled", lane, state, quietMinutes, box },
  * { event: "parked", lane, quietMinutes, box } for a lane that ended its turn without a report and never woke,
  * { event: "finished", lane, log, exit, quietMinutes, box } for a parked lane once every named log written after it parked
- * ends on `EXIT <n>` and has been still for FINISHED_MINUTES (log and exit are the last to finish),
+ * ends on `EXIT <n>` and has been still for FINISHED_MINUTES (log and exit are the first that failed, else the last named),
  * { event: "box-slow", lanes, box } when two or more stall or park in one look (finished lanes are never grouped), { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
  */
 
@@ -70,7 +70,7 @@ function readTail(path, size, length) {
 }
 
 // An absolute path in the lane's last message, which roles.md "Lanes" has it write when it parks.
-const LOG_PATH = /(?<![^\s("'`])\/[\w.@+-]+(?:\/[\w.@+-]+)*\.(?:log|output|txt)(?![\w.]*\w)/g;
+const LOG_PATH = /(?<![\w.~$/-])\/[\w.@+-]+(?:\/[\w.@+-]+)*\.(?:log|output|txt)(?![\w.]*\w)/g;
 const EXIT_LINE = /(?:^|\n)EXIT (-?\d+)\s*$/;
 // The log must be still this long, so output that a child of the job writes after EXIT holds the nudge.
 const FINISHED_MINUTES = 2;
@@ -121,11 +121,12 @@ export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now, b
     const before = logs.get(log);
     if (woke || before?.mtimeMs !== stat.mtimeMs || before?.size !== stat.size) {
       logs.set(log, { mtimeMs: stat.mtimeMs, size: stat.size, since: t });
-      return stat.mtimeMs <= parkedMs ? undefined : null;
+      return null;
     }
-    if (stat.mtimeMs <= parkedMs) return undefined;
-    if (t - before.since < FINISHED_MINUTES * 60_000) return null;
     const exit = readTail(log, stat.size, Math.min(stat.size, 4096)).match(EXIT_LINE);
+    // A log that ended before the lane parked is an old run; one still open is a job that may be silent mid-run.
+    if (stat.mtimeMs <= parkedMs) return exit ? undefined : null;
+    if (t - before.since < FINISHED_MINUTES * 60_000) return null;
     return exit ? Number(exit[1]) : null;
   };
   let lastLook = null;
@@ -159,7 +160,7 @@ export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now, b
       if (before.state === "parked") {
         const written = before.logs.map((log) => ({ log, exit: finished(log, stat.mtimeMs, t, false) })).filter((d) => d.exit !== undefined);
         if (written.length && written.every((d) => d.exit !== null)) {
-          found.push({ event: "finished", lane, ...written.at(-1), quietMinutes: quiet });
+          found.push({ event: "finished", lane, ...(written.find((d) => d.exit !== 0) ?? written.at(-1)), quietMinutes: quiet });
           continue;
         }
       }

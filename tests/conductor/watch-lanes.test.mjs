@@ -235,7 +235,8 @@ describe("looking at lanes, on the watch's own clock", () => {
 
     it("reports a finished lane on its own, never folded into box-slow with a lane that stalled in the same look", () => {
       const { log, c } = setup({ logLines: ["EXIT 0"] });
-      const stuck = file([said(tool), got(result)]);
+      const stuck = join(mkdtempSync(join(tmpdir(), "watch-lanes-")), "lane-b.output");
+      writeFileSync(stuck, [said(tool), got(result)].join("\n") + "\n");
       const look = lookAtLanes([log.replace("e2e.log", "lane-a.output"), stuck], { quietMinutes: 2, intervalMs: minute, now: c.now, box });
       look();
       c.advance(1);
@@ -243,8 +244,40 @@ describe("looking at lanes, on the watch's own clock", () => {
       c.advance(1);
       expect(look()).toEqual([
         { event: "finished", lane: "lane-a", log, exit: 0, quietMinutes: 2, box: box() },
-        { event: "stalled", lane: "lane-a", state: "owes-reply", quietMinutes: 2, box: box() },
+        { event: "stalled", lane: "lane-b", state: "owes-reply", quietMinutes: 2, box: box() },
       ]);
+    });
+  });
+
+  describe("a lane parked on two logs", () => {
+    const two = (first, second, secondAt) => {
+      const dir = mkdtempSync(join(tmpdir(), "watch-lanes-"));
+      const [a, b] = [join(dir, "e2e.log"), join(dir, "ci.log")];
+      const lane = join(dir, "lane-a.output");
+      writeFileSync(lane, [got(result), said({ type: "text", text: `Waiting on ${a} and ${b}.` })].join("\n") + "\n");
+      writeFileSync(a, first + "\n");
+      writeFileSync(b, second + "\n");
+      const at = (m) => new Date(Date.UTC(2026, 0, 1, 0, m));
+      utimesSync(lane, at(0), at(0));
+      utimesSync(a, at(1), at(1));
+      utimesSync(b, at(secondAt), at(secondAt));
+      const c = clock();
+      return { a, c, look: lookAtLanes([lane], { quietMinutes: 30, intervalMs: minute, now: c.now, box }) };
+    };
+
+    it("reports the log that failed, not the last one named", () => {
+      const { a, c, look } = two("EXIT 1", "EXIT 0", 2);
+      look();
+      c.advance(2);
+      expect(look()).toEqual([{ event: "finished", lane: "lane-a", log: a, exit: 1, quietMinutes: 2, box: box() }]);
+    });
+
+    it("holds while a named log has no EXIT, even one silent since before the lane parked", () => {
+      const { c, look } = two("EXIT 0", "stage 3 of 5", -1);
+      for (let i = 0; i < 5; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
     });
   });
 
@@ -254,6 +287,7 @@ describe("looking at lanes, on the watch's own clock", () => {
     expect(at("see `/tmp/a/e2e.log`, then")).toEqual(["/tmp/a/e2e.log"]);
     expect(at("see ~/logs/e2e.log or $TMPDIR/x/e2e.log")).toEqual([]);
     expect(at("see /tmp/e2e.log.1")).toEqual([]);
+    expect(at("Waiting on **/tmp/x/e2e.log**")).toEqual(["/tmp/x/e2e.log"]);
   });
 
   it("blames the box when a parked lane and a stalled one go quiet in the same look", () => {
