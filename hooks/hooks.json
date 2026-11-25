@@ -11,6 +11,11 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/conductor/tools/hooks/wait-loop-hook.mjs\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/conductor/tools/hooks/look-gate-hook.mjs\"",
+            "timeout": 15
           }
         ]
       }
