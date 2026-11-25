@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,10 +92,58 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     expect(context(call(E2E))).toMatch(/no look/);
   });
 
-  it("treats a retry of the same tree within two minutes as the same run", () => {
+  it("gives a retry of the same tree within two minutes the same answer, so a denied call cannot be retried past it", () => {
     call(E2E);
     clock -= 9 * 60_000;
     expect(call(E2E)).toBeNull();
+    write("src/app.ts", "b");
+    expect(call(E2E, { CONDUCTOR_LOOK_GATE: "deny" }).hookSpecificOutput.permissionDecision).toBe("deny");
+    clock -= 9 * 60_000;
+    expect(call(E2E, { CONDUCTOR_LOOK_GATE: "deny" }).hookSpecificOutput.permissionDecision).toBe("deny");
+    clock -= 9 * 60_000;
+    call("agent-browser snapshot");
+    clock -= 9 * 60_000;
+    expect(call(E2E, { CONDUCTOR_LOOK_GATE: "deny" })).toBeNull();
+  });
+
+  it("counts agent-browser only as a command run, and credits a look and a run in one command", () => {
+    call(E2E);
+    call("grep -r agent-browser docs");
+    write("src/app.ts", "b");
+    expect(context(call(E2E))).toMatch(/no look/);
+    write("src/app.ts", "c");
+    expect(call(`agent-browser open http://localhost:3000 && ${E2E}`)).toBeNull();
+    write("src/app.ts", "d");
+    expect(context(call(E2E))).toMatch(/no look/);
+  });
+
+  it("forgets a run older than twelve hours, as when a lane's worktree path is reused", () => {
+    call(E2E);
+    write("src/app.ts", "b");
+    clock += 12 * 3_600_000;
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("does not count the last run's own log as a change", () => {
+    call(E2E);
+    write("e2e.log", "  ✘  1 login works\n  1 failed");
+    write("e2e/login.spec.ts", "fixed test");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("reads the stdout log, after a leading cd", () => {
+    call("cd e2e && pnpm test:e2e:chromium login.spec.ts 2> err.log > out.log");
+    write("e2e/err.log", "  1 failed");
+    write("e2e/out.log", "Refusing to start: 812 MB available");
+    write("src/app.ts", "b");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("recovers from a corrupt private index", () => {
+    call(E2E);
+    for (const f of readdirSync(stateDir).filter((f) => f.endsWith(".index"))) writeFileSync(join(stateDir, f), "junk");
+    write("src/app.ts", "b");
+    expect(context(call(E2E))).toMatch(/no look/);
   });
 
   it("passes a command that carries E2E_NO_LOOK", () => {
@@ -127,5 +175,6 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     write("src/app.ts", "b");
     expect(JSON.parse(run(input).stdout).hookSpecificOutput.additionalContext).toMatch(/no look/);
     expect(run("nope")).toMatchObject({ status: 0, stdout: "" });
+    expect(run(JSON.stringify({ tool_name: "Bash", tool_input: { command: E2E }, cwd: tmpdir() }))).toMatchObject({ status: 0, stdout: "" });
   });
 });
