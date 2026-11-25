@@ -77,6 +77,7 @@ PLAYBOOK    the playbook it runs: feature, bug-fix or refactoring
 BASE        current origin/<trunk>, or the branch of the one merge-ready PR it stacks on
 BRANCH      the branch to work on. An escalated lane names the branch its first lane pushed
 SETUP       the repo's documented command that prepares a fresh worktree, if it has one
+LOOK        how to look at the running change while iterating, from the binding's look tool: the repo's command that starts it and what to check. Otherwise the cheapest observation the repo offers
 DESIGN      "needs design" when the epic flagged it, with what is still open. Otherwise "specified"
 LAND        the operator's request to land that covers this ticket, quoted. Otherwise "no"
 REPORT TO   only for a lane run as a separate session: the orchestrator's session name, to message
@@ -87,7 +88,7 @@ ACCEPTANCE  the ticket's acceptance, ending in its end-to-end check
 
 A lane follows its playbook with these changes:
 
-- **BASE wins.** It creates BRANCH from BASE, not from trunk, whatever the start of a task and opening-a-pr say. It fetches BASE from `origin` rather than checking out a branch another worktree holds. An escalated lane whose BRANCH already exists fetches it and continues from `origin/<BRANCH>`. It runs SETUP before its first check.
+- **BASE wins.** It creates BRANCH from BASE, not from trunk, whatever the start of a task and opening-a-pr say. It fetches BASE from `origin` rather than checking out a branch another worktree holds. An escalated lane whose BRANCH already exists fetches it and continues from `origin/<BRANCH>`. It runs SETUP before its first check. It iterates with LOOK and runs a checked-in spec or build only to lock in what a look settled, except a bug fix, whose failing check comes first, per [look before the heavy check](principles/look-before-the-heavy-check.md).
 - **It writes the main chain.** A ticket is one dependent chain, so the lane implements it itself, per Delegation in SKILL.md, and never hands the next piece of that chain to an implementer. It spawns explorers for large reads, implementers only for side workstreams that run in parallel with its own work on files it is not touching, and always a fresh reviewer and verifier.
 - **One verdict per PR.** It spawns its verifier once the reviewer's findings are fixed, so the verdict covers the head that goes up, at the tier from [Tiers](#tiers). A later push needs a new verdict only when it changes the behaviour the last one covered.
 - **It pushes at every stage's end.** After the first passing check, after the PR opens and after each round of fixes. A usage limit or a stall can end its turn at any point, and only a pushed branch survives that.

@@ -5,7 +5,7 @@ const LANE = "conductor:lane";
 
 export const KEEP =
   "This is a conductor lane compacting in place to keep its turns cheap. It goes on working after the summary, so keep what it needs to continue, word for word where it names ids, paths, branches or SHAs: " +
-  "every line of its lane brief whole (TICKET, BASE, BRANCH, PLAYBOOK, LAND, REPORT TO, SETUP, LANE, CONTEXT and any other); " +
+  "every line of its lane brief whole (TICKET, BASE, BRANCH, PLAYBOOK, LAND, REPORT TO, SETUP, LOOK, LANE, CONTEXT and any other); " +
   "its worktree path, its branch, its last pushed head, and any commits not yet pushed or edits not yet committed; its PR's URL; " +
   "the playbook step in hand and the next step; what is done; each decision with its reason; what is open; the files it touched; " +
   "the delegates, background commands, queue entries and watches still running, with their ids; and every message the orchestrator sent. " +
