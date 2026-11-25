@@ -10,7 +10,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
@@ -33,7 +33,7 @@ export const MESSAGE =
   "This reruns an e2e spec with no look since its last run in this worktree. Look at the failing step first: drive it with agent-browser against the dev server this worktree keeps warm, and rerun the spec once the look shows the fix. If a look cannot help, prefix the command with E2E_NO_LOOK=\"<reason>\".";
 
 export const FIRST_RUN_MESSAGE =
-  "This is the first e2e run in this worktree, it has changes beyond e2e specs, and no agent-browser look is recorded. Start the dev server, look at the change with agent-browser, then run the spec once to lock in what the look showed. If a look cannot help, prefix the command with E2E_NO_LOOK=\"<reason>\".";
+  "No agent-browser look is recorded in this worktree, and it has changes beyond e2e specs. Start the dev server, look at the change with agent-browser, then run the spec once to lock in what the look showed. If a look cannot help, prefix the command with E2E_NO_LOOK=\"<reason>\".";
 
 const isE2e = (segments, command) => findUnqueuedHeavy(command)?.queue === "e2e" || segments.some((s) => classifyQueued(s) === "e2e");
 
@@ -81,9 +81,18 @@ function readState(file) {
   }
 }
 
+/** A log path relative to the worktree top, resolved through symlinks so a symlinked cwd still matches. */
+function inTree(top, log) {
+  try {
+    return relative(top, realpathSync(log));
+  } catch {
+    return relative(top, log);
+  }
+}
+
 function changedSince(top, last, tree) {
   try {
-    const log = last.log ? relative(top, last.log) : null;
+    const log = last.log ? inTree(top, last.log) : null;
     return git(top, ["diff", "--name-only", last.tree, tree]).split("\n").filter((f) => f && f !== log);
   } catch {
     return [];
@@ -100,7 +109,7 @@ function changedFromBase(top, tree, logs) {
         return git(top, ["merge-base", "HEAD", "origin/main"]);
       }
     })();
-    const skip = logs.filter(Boolean).map((l) => relative(top, l));
+    const skip = logs.filter(Boolean).map((l) => inTree(top, l));
     return git(top, ["diff", "--name-only", base, tree]).split("\n").filter((f) => f && !skip.includes(f));
   } catch {
     return null;
@@ -152,7 +161,7 @@ export function lookGateDecision(input, env, { stateDir = join(tmpdir(), "conduc
   } else {
     const changed = changedSince(top, last, tree);
     specOnly = changed.length > 0 && changed.every((f) => SPEC.test(f));
-    warned = !(looked || specOnly || last.specOnly || neverReachedATest(last.log) || escaped);
+    warned = !(looked || escaped || (!last.warned && (specOnly || last.specOnly || neverReachedATest(last.log))));
   }
   writeFileSync(file, JSON.stringify({ lastRun: { tree, at: now, specOnly, warned, first, log }, lookAt: null }));
   return warned ? output(mode, first ? FIRST_RUN_MESSAGE : MESSAGE) : null;

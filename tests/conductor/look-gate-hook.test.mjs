@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,17 +53,17 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
   it("warns on a first run with changes beyond specs and no look, and passes it after a look", () => {
     write("src/app.ts", "b");
     const out = call(E2E, { CONDUCTOR_LOOK_GATE: "deny" });
-    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/first e2e run.*Start the dev server.*agent-browser.*E2E_NO_LOOK=/);
-    expect(context(call(E2E))).toMatch(/first e2e run/);
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/No agent-browser look is recorded.*Start the dev server.*agent-browser.*E2E_NO_LOOK=/);
+    expect(context(call(E2E))).toMatch(/No agent-browser look is recorded/);
     call("agent-browser snapshot");
     expect(call(E2E)).toBeNull();
   });
 
   it("gives a retry of a warned first run the first-run message", () => {
     write("src/new.ts", "n");
-    expect(context(call(E2E))).toMatch(/first e2e run/);
+    expect(context(call(E2E))).toMatch(/No agent-browser look is recorded/);
     clock -= 9 * 60_000;
-    expect(context(call(E2E))).toMatch(/first e2e run/);
+    expect(context(call(E2E))).toMatch(/No agent-browser look is recorded/);
   });
 
   it("passes a first run after a look", () => {
@@ -82,9 +82,9 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
 
   it("keeps warning a first run that failed before any test, until a look", () => {
     write("src/app.ts", "b");
-    expect(context(call(E2E))).toMatch(/first e2e run/);
+    expect(context(call(E2E))).toMatch(/No agent-browser look is recorded/);
     write("e2e.log", "pnpm: command not found");
-    expect(context(call(E2E))).toMatch(/first e2e run/);
+    expect(context(call(E2E))).toMatch(/No agent-browser look is recorded/);
     call("agent-browser snapshot");
     expect(call(E2E)).toBeNull();
   });
@@ -98,6 +98,24 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     expect(call(E2E, deny).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
+  it("keeps denying a denied rerun after a spec touch, until a look", () => {
+    const deny = { CONDUCTOR_LOOK_GATE: "deny" };
+    call(E2E);
+    write("src/app.ts", "b");
+    expect(call(E2E, deny).hookSpecificOutput.permissionDecision).toBe("deny");
+    write("e2e/login.spec.ts", "touched");
+    expect(call(E2E, deny).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(call(E2E, deny).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("skips the log of a run made through a symlinked cwd", () => {
+    const link = join(temp(), "link");
+    symlinkSync(repo, link);
+    write("e2e.log", "left from an earlier run");
+    clock += 1;
+    expect(lookGateDecision({ tool_name: "Bash", tool_input: { command: E2E }, cwd: link }, {}, { stateDir, now: clock })).toBeNull();
+  });
+
   it("does not count the logs as changes on a first run", () => {
     write("e2e.log", "left from an earlier run");
     expect(call(E2E)).toBeNull();
@@ -107,7 +125,7 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     call("agent-browser snapshot");
     clock += 12 * 3_600_000;
     write("src/app.ts", "b");
-    expect(context(call(E2E))).toMatch(/first e2e run/);
+    expect(context(call(E2E))).toMatch(/No agent-browser look is recorded/);
   });
 
   it("reads a state file written with the old lookSince flag", () => {
@@ -130,10 +148,12 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
   });
 
   it("measures a first run against origin/HEAD's merge-base, so committed work counts", () => {
-    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    git("update-ref", "refs/remotes/origin/trunk", "HEAD");
+    git("update-ref", "-d", "refs/remotes/origin/main");
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk");
     write("src/app.ts", "b");
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-aqm", "code");
-    expect(context(call(E2E))).toMatch(/first e2e run/);
+    expect(context(call(E2E))).toMatch(/No agent-browser look is recorded/);
   });
 
   it("warns on a plain rerun with nothing changed, and on the queued form", () => {
@@ -208,7 +228,7 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     call(E2E);
     write("src/app.ts", "b");
     clock += 12 * 3_600_000;
-    expect(context(call(E2E))).toMatch(/first e2e run/);
+    expect(context(call(E2E))).toMatch(/No agent-browser look is recorded/);
   });
 
   it("does not count the last run's own log as a change", () => {
