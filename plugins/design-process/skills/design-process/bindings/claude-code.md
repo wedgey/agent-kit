@@ -19,7 +19,7 @@ The plugin ships one agent per role from `claude-code-agents/`. Claude Code scop
 
 The two reviewers run on different models on purpose. Never put both on the same one.
 
-Never spawn `general-purpose` for a design role without the role's `model` and `effort` (see [Without the plugin](#without-the-plugin)). It inherits the session's model, so every researcher and drafter runs on the most expensive model with the largest context. In one landing-page project in November 2026, 140 of 141 delegates ran that way, read 3,093 screenshots between them, and grew to 250k to 290k tokens each.
+Never spawn `general-purpose` for a design role without the role's `model` and `effort` (see [Without the plugin](#without-the-plugin)). It inherits the session's model, so every researcher and drafter runs on the most expensive model with the largest context.
 
 The orchestrator stays on the session's model. Run the session on `opus`, not `opus[1m]`. The 1M window lets the orchestrator's own context grow far past the point where each turn gets expensive.
 
@@ -45,9 +45,9 @@ Pass both `model` and `effort` from the table and keep the spawn's `description`
 
 A drafter's board still below 6 from either reviewer after two fix passes counts as a failed gate. Respawn that direction's drafter with `model: opus` and `effort: high`.
 
-## Why the senior reviewer runs on `fable`
+## The senior reviewer on `fable`
 
-Per Artificial Analysis's index and Anthropic's pricing, read 2026-11-17: `fable` at `low` scores 54, above `opus` at `high` (52), for about the same output cost. A review reads a few dozen tiles and writes a short report, so its higher input price matters little there. `fable` is kept off every role that writes boards or tickets. Those roles write about 100k tokens each and build large caches, which would cost about twice as much on `fable`.
+Only the senior reviewer runs on `fable`. Never put it on a role that writes boards or tickets, because their large outputs and caches cost about twice as much there.
 
 On a Max plan, `fable` draws on the weekly limit faster than `opus` and is capped at half of it. A Pro plan needs paid credits for it. When `fable` is unavailable or its cap is reached, spawn the senior reviewer with `model: opus` and `effort: high`, and tell the owner in one line. The second reviewer stays on `sonnet`, so the two still differ.
 
