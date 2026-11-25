@@ -54,7 +54,7 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     write("src/app.ts", "b");
     const out = call(E2E, { CONDUCTOR_LOOK_GATE: "deny" });
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/first e2e run.*Start the dev server.*agent-browser.*E2E_NO_LOOK=/);
-    expect(context(call(E2E))).toMatch(/no look since its last run/);
+    expect(context(call(E2E))).toMatch(/first e2e run/);
     call("agent-browser snapshot");
     expect(call(E2E)).toBeNull();
   });
@@ -72,9 +72,49 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     expect(call(E2E)).toBeNull();
   });
 
-  it("passes a first run whose changes are only specs", () => {
+  it("passes a first run whose changes are only specs, and the fix run after it", () => {
     write("e2e/login.spec.ts", "red first");
     write("e2e/new.spec.ts", "n");
+    expect(call(E2E)).toBeNull();
+    write("src/app.ts", "the fix");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("keeps warning a first run that failed before any test, until a look", () => {
+    write("src/app.ts", "b");
+    expect(context(call(E2E))).toMatch(/first e2e run/);
+    write("e2e.log", "pnpm: command not found");
+    expect(context(call(E2E))).toMatch(/first e2e run/);
+    call("agent-browser snapshot");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("keeps denying a denied first run after a spec touch, until a look", () => {
+    const deny = { CONDUCTOR_LOOK_GATE: "deny" };
+    write("src/app.ts", "b");
+    expect(call(E2E, deny).hookSpecificOutput.permissionDecision).toBe("deny");
+    write("e2e/login.spec.ts", "touched");
+    expect(call(E2E, deny).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(call(E2E, deny).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("does not count the logs as changes on a first run", () => {
+    write("e2e.log", "left from an earlier run");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("forgets a look older than twelve hours", () => {
+    call("agent-browser snapshot");
+    clock += 12 * 3_600_000;
+    write("src/app.ts", "b");
+    expect(context(call(E2E))).toMatch(/first e2e run/);
+  });
+
+  it("reads a state file written with the old lookSince flag", () => {
+    write("src/app.ts", "b");
+    call("agent-browser snapshot");
+    const file = join(stateDir, readdirSync(stateDir).find((f) => f.endsWith(".json")));
+    writeFileSync(file, JSON.stringify({ lookSince: true }));
     expect(call(E2E)).toBeNull();
   });
 
@@ -90,7 +130,7 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
   });
 
   it("measures a first run against origin/HEAD's merge-base, so committed work counts", () => {
-    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "work", "--allow-empty");
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
     write("src/app.ts", "b");
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-aqm", "code");
     expect(context(call(E2E))).toMatch(/first e2e run/);

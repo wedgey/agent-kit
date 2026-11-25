@@ -90,8 +90,8 @@ function changedSince(top, last, tree) {
   }
 }
 
-/** Whether the tree differs from the base branch in any file that is not an e2e spec. Git failure counts as no. */
-function changesBeyondSpecs(top, tree) {
+/** The files that differ between the tree and the base branch, minus the given logs; null when git cannot say. */
+function changedFromBase(top, tree, logs) {
   try {
     const base = (() => {
       try {
@@ -100,9 +100,10 @@ function changesBeyondSpecs(top, tree) {
         return git(top, ["merge-base", "HEAD", "origin/main"]);
       }
     })();
-    return git(top, ["diff", "--name-only", base, tree]).split("\n").some((f) => f && !SPEC.test(f));
+    const skip = logs.filter(Boolean).map((l) => relative(top, l));
+    return git(top, ["diff", "--name-only", base, tree]).split("\n").filter((f) => f && !skip.includes(f));
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -129,7 +130,7 @@ export function lookGateDecision(input, env, { stateDir = join(tmpdir(), "conduc
   const key = join(stateDir, createHash("sha1").update(top).digest("hex"));
   const file = `${key}.json`;
   const state = readState(file);
-  if (look) state.lookSince = true;
+  if (look) Object.assign(state, { lookAt: now, lookSince: undefined });
   if (!e2e) {
     writeFileSync(file, JSON.stringify(state));
     return null;
@@ -137,15 +138,23 @@ export function lookGateDecision(input, env, { stateDir = join(tmpdir(), "conduc
 
   const tree = workingTree(top, `${key}.index`);
   const last = state.lastRun && now - state.lastRun.at < STALE_MS ? state.lastRun : null;
+  const looked = state.lookAt != null ? now - state.lookAt < STALE_MS : state.lookSince === true;
   const escaped = command.includes(ESCAPE);
-  if (last?.tree === tree && now - last.at < SAME_RUN_MS && !state.lookSince && !escaped) return last.warned ? output(mode, last.first ? FIRST_RUN_MESSAGE : MESSAGE) : null;
-  const changed = last ? changedSince(top, last, tree) : [];
-  const specOnly = changed.length > 0 && changed.every((f) => SPEC.test(f));
-  const first = !last;
-  const warned = first
-    ? !(state.lookSince || escaped) && changesBeyondSpecs(top, tree)
-    : !(state.lookSince || specOnly || last.specOnly || neverReachedATest(last.log) || escaped);
-  writeFileSync(file, JSON.stringify({ lastRun: { tree, at: now, specOnly, warned, first, log: logTarget(segments, command, cwd) }, lookSince: false }));
+  const log = logTarget(segments, command, cwd);
+  if (last?.tree === tree && now - last.at < SAME_RUN_MS && !looked && !escaped) return last.warned ? output(mode, last.first ? FIRST_RUN_MESSAGE : MESSAGE) : null;
+  // A warned first run stays a first run until a look: the denied command never ran, so a rerun's exemptions do not apply.
+  const first = !last || (last.first && last.warned);
+  let specOnly, warned;
+  if (first) {
+    const files = changedFromBase(top, tree, [log, state.lastRun?.log]) ?? [];
+    specOnly = files.length > 0 && files.every((f) => SPEC.test(f));
+    warned = !(looked || escaped) && files.some((f) => !SPEC.test(f));
+  } else {
+    const changed = changedSince(top, last, tree);
+    specOnly = changed.length > 0 && changed.every((f) => SPEC.test(f));
+    warned = !(looked || specOnly || last.specOnly || neverReachedATest(last.log) || escaped);
+  }
+  writeFileSync(file, JSON.stringify({ lastRun: { tree, at: now, specOnly, warned, first, log }, lookAt: null }));
   return warned ? output(mode, first ? FIRST_RUN_MESSAGE : MESSAGE) : null;
 }
 
