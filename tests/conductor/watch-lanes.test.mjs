@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -163,6 +163,59 @@ describe("looking at lanes, on the watch's own clock", () => {
       c.advance(1);
     }
     expect(look()).toEqual([{ event: "parked", lane: "lane-a", quietMinutes: 4, box: box() }]);
+  });
+
+  describe("a lane parked on a log that has finished", () => {
+    const setup = ({ logLines, logAfterPark = true, quietMinutes = 15 }) => {
+      const dir = mkdtempSync(join(tmpdir(), "watch-lanes-"));
+      const log = join(dir, "e2e.log");
+      const lane = join(dir, "lane-a.output");
+      writeFileSync(lane, [got(result), said({ type: "text", text: `Waiting on the e2e run (log ${log}).` })].join("\n") + "\n");
+      writeFileSync(log, logLines.join("\n") + "\n");
+      const parkedAt = new Date("2026-01-01T00:00:00Z");
+      utimesSync(lane, parkedAt, parkedAt);
+      const logAt = new Date(parkedAt.getTime() + (logAfterPark ? 1 : -1) * minute);
+      utimesSync(log, logAt, logAt);
+      const c = clock();
+      return { log, c, look: lookAtLanes([lane], { quietMinutes, intervalMs: minute, now: c.now, box }) };
+    };
+
+    it("reports it finished once the log it names has ended on EXIT and stayed still for 2 minutes", () => {
+      const { log, c, look } = setup({ logLines: ["3 passed", "EXIT 0"] });
+      expect(look()).toEqual([]);
+      c.advance(1);
+      expect(look()).toEqual([]);
+      c.advance(1);
+      expect(look()).toEqual([{ event: "finished", lane: "lane-a", log, exit: 0, quietMinutes: 2, box: box() }]);
+    });
+
+    it("leaves it parked while the job still runs, whatever the log says so far", () => {
+      const { c, look } = setup({ logLines: ["1 failed", "retrying"], quietMinutes: 3 });
+      for (let i = 0; i < 6; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+      expect(look()[0].event).toBe("parked");
+    });
+
+    it("ignores an EXIT written before the lane parked, which a queued rerun appending to the same log leaves at its end", () => {
+      const { c, look } = setup({ logLines: ["EXIT 1"], logAfterPark: false, quietMinutes: 3 });
+      for (let i = 0; i < 6; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+      expect(look()[0].event).toBe("parked");
+    });
+
+    it("waits while the log still grows after EXIT, as when a child of the job keeps writing", () => {
+      const { log, c, look } = setup({ logLines: ["EXIT 0"] });
+      look();
+      c.advance(1);
+      appendFileSync(log, "server: ready\n");
+      expect(look()).toEqual([]);
+      c.advance(1);
+      expect(look()).toEqual([]);
+    });
   });
 
   it("blames the box when a parked lane and a stalled one go quiet in the same look", () => {

@@ -13,6 +13,8 @@
  *
  * Prints one JSON line, { events }, and exits 0. Events: { event: "stalled", lane, state, quietMinutes, box },
  * { event: "parked", lane, quietMinutes, box } for a lane that ended its turn without a report and never woke,
+ * { event: "finished", lane, log, exit, quietMinutes, box } for a parked lane whose named log ended on `EXIT <n>` after it parked
+ * and has been still for FINISHED_MINUTES,
  * { event: "box-slow", lanes, box } when two or more stall or park in one look, { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
  */
 
@@ -67,6 +69,26 @@ function readTail(path, size, length) {
   return buffer.toString("utf8");
 }
 
+// An absolute path in the lane's last message, which roles.md "Lanes" has it write when it parks.
+const LOG_PATH = /\/[\w.@+-]+(?:\/[\w.@+-]+)*\.(?:log|output|txt)\b/g;
+const EXIT_LINE = /(?:^|\n)EXIT (-?\d+)\s*$/;
+// The log must be still this long, so output that a child of the job writes after EXIT holds the nudge.
+const FINISHED_MINUTES = 2;
+
+/** The log paths the lane's last assistant message names. */
+export function namedLogs(text) {
+  const lines = text.split("\n").reverse();
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry?.type !== "assistant" || !entry.message) continue;
+      const said = blocksOf(entry).filter((b) => b?.type === "text").map((b) => b.text).join("\n");
+      return [...new Set(said.match(LOG_PATH) ?? [])];
+    } catch {}
+  }
+  return [];
+}
+
 /** The lane's turn state, widening the read until an entry with a message fits. Single entries reach megabytes. */
 export function lastEntryState(path, start = TAIL_BYTES, size = statSync(path).size) {
   for (let length = Math.min(start, size); ; length = Math.min(length * 4, size)) {
@@ -87,6 +109,24 @@ const machine = () => ({ load1: Math.round(loadavg()[0] * 10) / 10, cores: avail
 
 export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now, box = machine }) {
   const seen = new Map();
+  const logs = new Map();
+  // A named log that ended on EXIT after the lane parked, unchanged for FINISHED_MINUTES of the watch's looks.
+  const finished = (log, parkedMs, t, woke) => {
+    let stat;
+    try {
+      stat = statSync(log);
+    } catch {
+      return null;
+    }
+    const before = logs.get(log);
+    if (woke || before?.mtimeMs !== stat.mtimeMs || before?.size !== stat.size) {
+      logs.set(log, { mtimeMs: stat.mtimeMs, size: stat.size, since: t });
+      return null;
+    }
+    if (stat.mtimeMs <= parkedMs || t - before.since < FINISHED_MINUTES * 60_000) return null;
+    const exit = readTail(log, stat.size, Math.min(stat.size, 4096)).match(EXIT_LINE);
+    return exit ? Number(exit[1]) : null;
+  };
   let lastLook = null;
   let started = null;
   return () => {
@@ -108,16 +148,26 @@ export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now, b
       const before = seen.get(path);
       if (woke || before?.mtimeMs !== stat.mtimeMs || before?.size !== stat.size) {
         seen.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, since: t });
+        for (const log of namedLogs(readTail(path, stat.size, Math.min(stat.size, TAIL_BYTES)))) finished(log, stat.mtimeMs, t, true);
         continue;
       }
       const quiet = Math.floor((t - before.since) / 60_000);
-      if (quiet < quietMinutes) continue;
+      if (quiet < Math.min(quietMinutes, FINISHED_MINUTES)) continue;
       before.state ??= lastEntryState(path, TAIL_BYTES, stat.size);
+      if (before.state === "parked") {
+        before.logs ??= namedLogs(readTail(path, stat.size, Math.min(stat.size, TAIL_BYTES)));
+        const done = before.logs.map((log) => ({ log, exit: finished(log, stat.mtimeMs, t, false) })).find((d) => d.exit !== null);
+        if (done) {
+          found.push({ event: "finished", lane, ...done, quietMinutes: quiet });
+          continue;
+        }
+      }
+      if (quiet < quietMinutes) continue;
       const factor = QUIET_FACTOR[before.state];
       if (!factor || quiet < quietMinutes * factor) continue;
       found.push(before.state === "parked" ? { event: "parked", lane, quietMinutes: quiet } : { event: "stalled", lane, state: before.state, quietMinutes: quiet });
     }
-    const stalled = found.filter((f) => f.event === "stalled" || f.event === "parked");
+    const stalled = found.filter((f) => f.event === "stalled" || f.event === "parked" || f.event === "finished");
     if (!stalled.length) return found;
     // Lanes going quiet together point at the box, and replacing them would only add load to it.
     const load = box();
