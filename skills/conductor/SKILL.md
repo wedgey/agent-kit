@@ -127,7 +127,11 @@ Write for a person who has not seen the work.
 
 ## Comments in code
 
-None by default. Write one only when a plausible future edit would break something that nothing reports: an ordering that must hold, a limit that must not move, a workaround for something outside our control. Say what breaks, in two or three lines, in the present tense. A stricter repo rule wins.
+None by default. Write one only when a plausible future edit would break something that nothing reports: an ordering that must hold, a limit that must not move, a workaround for something outside our control. Say what breaks, in two or three lines, in the present tense. Leave out dates, ticket numbers, observed versions and how the code came to be. They belong in the commit message. A version the code requires or a workaround covers is a condition, so keep it. A stricter repo rule wins.
+
+## Instruction files
+
+When you write or edit skills, playbooks, bindings, agent definitions or a repo's agent rules (`AGENTS.md` and the instruction files your binding names), say only what to do. That means what the agent does, when, and with what. Leave out dates, observed versions, measurements, quoted evidence and the history of a decision. Put them in the repo's decision records if it keeps them, otherwise in the commit message and PR body. Keep a reason only when the agent needs it to handle a case the rule does not name, and then in one line. Never send the agent to a record to learn why. Move an existing note of this kind out when you edit its line anyway. A stricter repo rule wins.
 
 ## Principles
 
