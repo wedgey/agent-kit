@@ -1,10 +1,10 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { expect } from "./expect.mjs";
 
-import { lastEntryState, lookAtLanes, turnState, watchLanes } from "../../skills/conductor/tools/watch-lanes.mjs";
+import { lastEntryState, lookAtLanes, namedLogs, turnState, watchLanes } from "../../skills/conductor/tools/watch-lanes.mjs";
 
 const said = (...blocks) => JSON.stringify({ type: "assistant", message: { content: blocks } });
 const got = (...blocks) => JSON.stringify({ type: "user", message: { content: blocks } });
@@ -163,6 +163,131 @@ describe("looking at lanes, on the watch's own clock", () => {
       c.advance(1);
     }
     expect(look()).toEqual([{ event: "parked", lane: "lane-a", quietMinutes: 4, box: box() }]);
+  });
+
+  describe("a lane parked on a log that has finished", () => {
+    const setup = ({ logLines, logAfterPark = true, quietMinutes = 15 }) => {
+      const dir = mkdtempSync(join(tmpdir(), "watch-lanes-"));
+      const log = join(dir, "e2e.log");
+      const lane = join(dir, "lane-a.output");
+      writeFileSync(lane, [got(result), said({ type: "text", text: `Waiting on the e2e run (log ${log}).` })].join("\n") + "\n");
+      writeFileSync(log, logLines.join("\n") + "\n");
+      const parkedAt = new Date("2026-01-01T00:00:00Z");
+      utimesSync(lane, parkedAt, parkedAt);
+      const logAt = new Date(parkedAt.getTime() + (logAfterPark ? 1 : -1) * minute);
+      utimesSync(log, logAt, logAt);
+      const c = clock();
+      return { log, c, look: lookAtLanes([lane], { quietMinutes, intervalMs: minute, now: c.now, box }) };
+    };
+
+    it("reports it finished once the log it names has ended on EXIT and stayed still for 2 minutes", () => {
+      const { log, c, look } = setup({ logLines: ["3 passed", "EXIT 0"] });
+      expect(look()).toEqual([]);
+      c.advance(1);
+      expect(look()).toEqual([]);
+      c.advance(1);
+      expect(look()).toEqual([{ event: "finished", lane: "lane-a", log, exit: 0, quietMinutes: 2, box: box() }]);
+    });
+
+    it("leaves it parked while the job still runs, whatever the log says so far", () => {
+      const { c, look } = setup({ logLines: ["1 failed", "retrying"], quietMinutes: 3 });
+      for (let i = 0; i < 6; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+      expect(look()[0].event).toBe("parked");
+    });
+
+    it("ignores an EXIT written before the lane parked, which a queued rerun appending to the same log leaves at its end", () => {
+      const { c, look } = setup({ logLines: ["EXIT 1"], logAfterPark: false, quietMinutes: 3 });
+      for (let i = 0; i < 6; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+      expect(look()[0].event).toBe("parked");
+    });
+
+    it("waits while the log is still written after EXIT, as when a child of the job keeps writing", () => {
+      const { log, c, look } = setup({ logLines: ["EXIT 0"] });
+      look();
+      c.advance(1);
+      const touched = new Date("2026-01-01T00:05:00Z");
+      utimesSync(log, touched, touched);
+      for (let i = 0; i < 3; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+      expect(look()[0].event).toBe("finished");
+    });
+
+    it("waits until every log it names that was written after it parked has ended on EXIT", () => {
+      const { log, c, look } = setup({ logLines: ["EXIT 0"], quietMinutes: 30 });
+      const other = log.replace("e2e.log", "ci.log");
+      writeFileSync(log.replace("e2e.log", "lane-a.output"), [got(result), said({ type: "text", text: `Waiting on ${log} and ${other}.` })].join("\n") + "\n");
+      utimesSync(log.replace("e2e.log", "lane-a.output"), new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+      writeFileSync(other, "running\n");
+      utimesSync(other, new Date("2026-01-01T00:02:00Z"), new Date("2026-01-01T00:02:00Z"));
+      for (let i = 0; i < 4; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+    });
+
+    it("reports a finished lane on its own, never folded into box-slow with a lane that stalled in the same look", () => {
+      const { log, c } = setup({ logLines: ["EXIT 0"] });
+      const stuck = join(mkdtempSync(join(tmpdir(), "watch-lanes-")), "lane-b.output");
+      writeFileSync(stuck, [said(tool), got(result)].join("\n") + "\n");
+      const look = lookAtLanes([log.replace("e2e.log", "lane-a.output"), stuck], { quietMinutes: 2, intervalMs: minute, now: c.now, box });
+      look();
+      c.advance(1);
+      look();
+      c.advance(1);
+      expect(look()).toEqual([
+        { event: "finished", lane: "lane-a", log, exit: 0, quietMinutes: 2, box: box() },
+        { event: "stalled", lane: "lane-b", state: "owes-reply", quietMinutes: 2, box: box() },
+      ]);
+    });
+  });
+
+  describe("a lane parked on two logs", () => {
+    const two = (first, second, secondAt) => {
+      const dir = mkdtempSync(join(tmpdir(), "watch-lanes-"));
+      const [a, b] = [join(dir, "e2e.log"), join(dir, "ci.log")];
+      const lane = join(dir, "lane-a.output");
+      writeFileSync(lane, [got(result), said({ type: "text", text: `Waiting on ${a} and ${b}.` })].join("\n") + "\n");
+      writeFileSync(a, first + "\n");
+      writeFileSync(b, second + "\n");
+      const at = (m) => new Date(Date.UTC(2026, 0, 1, 0, m));
+      utimesSync(lane, at(0), at(0));
+      utimesSync(a, at(1), at(1));
+      utimesSync(b, at(secondAt), at(secondAt));
+      const c = clock();
+      return { a, c, look: lookAtLanes([lane], { quietMinutes: 30, intervalMs: minute, now: c.now, box }) };
+    };
+
+    it("reports the log that failed, not the last one named", () => {
+      const { a, c, look } = two("EXIT 1", "EXIT 0", 2);
+      look();
+      c.advance(2);
+      expect(look()).toEqual([{ event: "finished", lane: "lane-a", log: a, exit: 1, quietMinutes: 2, box: box() }]);
+    });
+
+    it("holds while a named log has no EXIT, even one silent since before the lane parked", () => {
+      const { c, look } = two("EXIT 0", "stage 3 of 5", -1);
+      for (let i = 0; i < 5; i++) {
+        expect(look()).toEqual([]);
+        c.advance(1);
+      }
+    });
+  });
+
+  it("names only whole absolute log paths in the lane's last message", () => {
+    const at = (t) => namedLogs(said({ type: "text", text: t }));
+    expect(at("see (/tmp/a/e2e.log).")).toEqual(["/tmp/a/e2e.log"]);
+    expect(at("see `/tmp/a/e2e.log`, then")).toEqual(["/tmp/a/e2e.log"]);
+    expect(at("see ~/logs/e2e.log or $TMPDIR/x/e2e.log")).toEqual([]);
+    expect(at("see /tmp/e2e.log.1")).toEqual([]);
+    expect(at("Waiting on **/tmp/x/e2e.log**")).toEqual(["/tmp/x/e2e.log"]);
   });
 
   it("blames the box when a parked lane and a stalled one go quiet in the same look", () => {

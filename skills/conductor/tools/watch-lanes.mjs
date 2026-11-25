@@ -13,7 +13,9 @@
  *
  * Prints one JSON line, { events }, and exits 0. Events: { event: "stalled", lane, state, quietMinutes, box },
  * { event: "parked", lane, quietMinutes, box } for a lane that ended its turn without a report and never woke,
- * { event: "box-slow", lanes, box } when two or more stall or park in one look, { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
+ * { event: "finished", lane, log, exit, quietMinutes, box } for a parked lane once every named log written after it parked
+ * ends on `EXIT <n>` and has been still for FINISHED_MINUTES (log and exit are the first that failed, else the last named),
+ * { event: "box-slow", lanes, box } when two or more stall or park in one look (finished lanes are never grouped), { event: "gone", lane }, { event: "watch-error", message }, { event: "timeout" }.
  */
 
 import { closeSync, openSync, readSync, statSync, existsSync, realpathSync } from "node:fs";
@@ -67,6 +69,26 @@ function readTail(path, size, length) {
   return buffer.toString("utf8");
 }
 
+// An absolute path in the lane's last message, which roles.md "Lanes" has it write when it parks.
+const LOG_PATH = /(?<![\w.~$/-])\/[\w.@+-]+(?:\/[\w.@+-]+)*\.(?:log|output|txt)(?![\w.]*\w)/g;
+const EXIT_LINE = /(?:^|\n)EXIT (-?\d+)\s*$/;
+// The log must be still this long, so output that a child of the job writes after EXIT holds the nudge.
+const FINISHED_MINUTES = 2;
+
+/** The log paths the lane's last assistant message names. */
+export function namedLogs(text) {
+  const lines = text.split("\n").reverse();
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry?.type !== "assistant" || !entry.message) continue;
+      const said = blocksOf(entry).filter((b) => b?.type === "text").map((b) => b.text).join("\n");
+      return [...new Set(said.match(LOG_PATH) ?? [])];
+    } catch {}
+  }
+  return [];
+}
+
 /** The lane's turn state, widening the read until an entry with a message fits. Single entries reach megabytes. */
 export function lastEntryState(path, start = TAIL_BYTES, size = statSync(path).size) {
   for (let length = Math.min(start, size); ; length = Math.min(length * 4, size)) {
@@ -87,6 +109,26 @@ const machine = () => ({ load1: Math.round(loadavg()[0] * 10) / 10, cores: avail
 
 export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now, box = machine }) {
   const seen = new Map();
+  const logs = new Map();
+  // undefined: missing or not written since the lane parked. null: still running. A number: its exit code.
+  const finished = (log, parkedMs, t, woke) => {
+    let stat;
+    try {
+      stat = statSync(log);
+    } catch {
+      return undefined;
+    }
+    const before = logs.get(log);
+    if (woke || before?.mtimeMs !== stat.mtimeMs || before?.size !== stat.size) {
+      logs.set(log, { mtimeMs: stat.mtimeMs, size: stat.size, since: t });
+      return null;
+    }
+    const exit = readTail(log, stat.size, Math.min(stat.size, 4096)).match(EXIT_LINE);
+    // A log that ended before the lane parked is an old run; one still open is a job that may be silent mid-run.
+    if (stat.mtimeMs <= parkedMs) return exit ? undefined : null;
+    if (t - before.since < FINISHED_MINUTES * 60_000) return null;
+    return exit ? Number(exit[1]) : null;
+  };
   let lastLook = null;
   let started = null;
   return () => {
@@ -107,23 +149,34 @@ export function lookAtLanes(paths, { quietMinutes, intervalMs, now = Date.now, b
       }
       const before = seen.get(path);
       if (woke || before?.mtimeMs !== stat.mtimeMs || before?.size !== stat.size) {
-        seen.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, since: t });
+        const names = namedLogs(readTail(path, stat.size, Math.min(stat.size, TAIL_BYTES)));
+        seen.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, since: t, logs: names });
+        for (const log of names) finished(log, stat.mtimeMs, t, true);
         continue;
       }
       const quiet = Math.floor((t - before.since) / 60_000);
-      if (quiet < quietMinutes) continue;
+      if (quiet < Math.min(quietMinutes, FINISHED_MINUTES)) continue;
       before.state ??= lastEntryState(path, TAIL_BYTES, stat.size);
+      if (before.state === "parked") {
+        const written = before.logs.map((log) => ({ log, exit: finished(log, stat.mtimeMs, t, false) })).filter((d) => d.exit !== undefined);
+        if (written.length && written.every((d) => d.exit !== null)) {
+          found.push({ event: "finished", lane, ...(written.find((d) => d.exit !== 0) ?? written.at(-1)), quietMinutes: quiet });
+          continue;
+        }
+      }
+      if (quiet < quietMinutes) continue;
       const factor = QUIET_FACTOR[before.state];
       if (!factor || quiet < quietMinutes * factor) continue;
       found.push(before.state === "parked" ? { event: "parked", lane, quietMinutes: quiet } : { event: "stalled", lane, state: before.state, quietMinutes: quiet });
     }
     const stalled = found.filter((f) => f.event === "stalled" || f.event === "parked");
-    if (!stalled.length) return found;
-    // Lanes going quiet together point at the box, and replacing them would only add load to it.
+    const done = found.filter((f) => f.event === "finished");
+    if (!stalled.length && !done.length) return found;
     const load = box();
-    const rest = found.filter((f) => !stalled.includes(f));
+    const rest = [...found.filter((f) => !stalled.includes(f) && !done.includes(f)), ...done.map((f) => ({ ...f, box: load }))];
+    // Lanes going quiet together point at the box, and replacing them would only add load to it.
     if (stalled.length > 1) return [...rest, { event: "box-slow", lanes: stalled.map((f) => f.lane), box: load }];
-    return [...rest, { ...stalled[0], box: load }];
+    return stalled.length ? [...rest, { ...stalled[0], box: load }] : rest;
   };
 }
 
