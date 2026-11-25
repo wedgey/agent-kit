@@ -2,13 +2,15 @@
 // agent-kit's copy is canonical. A repo may vendor it and must keep the protocol version and state layout.
 /**
  * A PreToolUse command hook on Bash that warns when an e2e spec is rerun with no look since the
- * last e2e run in the same worktree. An `agent-browser` call is a look. CONDUCTOR_LOOK_GATE=deny
- * denies instead, =off silences it; E2E_NO_LOOK="<reason>" in the command passes one run.
+ * last e2e run in the same worktree, and on the first run when the worktree has changed more than
+ * e2e specs and no look has been recorded. An `agent-browser` call is a look. CONDUCTOR_LOOK_GATE=deny
+ * denies instead, =off silences it; E2E_NO_LOOK="<reason>" in the command passes one run. It stays
+ * silent on a first run with no diff or only spec changes against the base, and when git fails.
  */
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
@@ -29,6 +31,9 @@ const STALE_MS = 12 * 3_600_000;
 
 export const MESSAGE =
   "This reruns an e2e spec with no look since its last run in this worktree. Look at the failing step first: drive it with agent-browser against the dev server this worktree keeps warm, and rerun the spec once the look shows the fix. If a look cannot help, prefix the command with E2E_NO_LOOK=\"<reason>\".";
+
+export const FIRST_RUN_MESSAGE =
+  "No agent-browser look is recorded in this worktree, and it has changes beyond e2e specs. Start the dev server, look at the change with agent-browser, then run the spec once to lock in what the look showed. If a look cannot help, prefix the command with E2E_NO_LOOK=\"<reason>\".";
 
 const isE2e = (segments, command) => findUnqueuedHeavy(command)?.queue === "e2e" || segments.some((s) => classifyQueued(s) === "e2e");
 
@@ -76,19 +81,45 @@ function readState(file) {
   }
 }
 
+/** A log path relative to the worktree top, resolved through symlinks so a symlinked cwd still matches. */
+function inTree(top, log) {
+  try {
+    return relative(top, realpathSync(log));
+  } catch {
+    return relative(top, log);
+  }
+}
+
 function changedSince(top, last, tree) {
   try {
-    const log = last.log ? relative(top, last.log) : null;
+    const log = last.log ? inTree(top, last.log) : null;
     return git(top, ["diff", "--name-only", last.tree, tree]).split("\n").filter((f) => f && f !== log);
   } catch {
     return [];
   }
 }
 
-function output(mode) {
+/** The files that differ between the tree and the base branch, minus the given logs; null when git cannot say. */
+function changedFromBase(top, tree, logs) {
+  try {
+    const base = (() => {
+      try {
+        return git(top, ["merge-base", "HEAD", "origin/HEAD"]);
+      } catch {
+        return git(top, ["merge-base", "HEAD", "origin/main"]);
+      }
+    })();
+    const skip = logs.filter(Boolean).map((l) => inTree(top, l));
+    return git(top, ["diff", "--name-only", base, tree]).split("\n").filter((f) => f && !skip.includes(f));
+  } catch {
+    return null;
+  }
+}
+
+function output(mode, message) {
   const hookSpecificOutput = { hookEventName: "PreToolUse" };
-  if (mode === "deny") Object.assign(hookSpecificOutput, { permissionDecision: "deny", permissionDecisionReason: MESSAGE });
-  else hookSpecificOutput.additionalContext = MESSAGE;
+  if (mode === "deny") Object.assign(hookSpecificOutput, { permissionDecision: "deny", permissionDecisionReason: message });
+  else hookSpecificOutput.additionalContext = message;
   return { hookSpecificOutput };
 }
 
@@ -108,7 +139,7 @@ export function lookGateDecision(input, env, { stateDir = join(tmpdir(), "conduc
   const key = join(stateDir, createHash("sha1").update(top).digest("hex"));
   const file = `${key}.json`;
   const state = readState(file);
-  if (look) state.lookSince = true;
+  if (look) Object.assign(state, { lookAt: now, lookSince: undefined });
   if (!e2e) {
     writeFileSync(file, JSON.stringify(state));
     return null;
@@ -116,13 +147,24 @@ export function lookGateDecision(input, env, { stateDir = join(tmpdir(), "conduc
 
   const tree = workingTree(top, `${key}.index`);
   const last = state.lastRun && now - state.lastRun.at < STALE_MS ? state.lastRun : null;
+  const looked = state.lookAt != null ? now - state.lookAt < STALE_MS : state.lookSince === true;
   const escaped = command.includes(ESCAPE);
-  if (last?.tree === tree && now - last.at < SAME_RUN_MS && !state.lookSince && !escaped) return last.warned ? output(mode) : null;
-  const changed = last ? changedSince(top, last, tree) : [];
-  const specOnly = changed.length > 0 && changed.every((f) => SPEC.test(f));
-  const warned = !(!last || state.lookSince || specOnly || last.specOnly || neverReachedATest(last.log) || escaped);
-  writeFileSync(file, JSON.stringify({ lastRun: { tree, at: now, specOnly, warned, log: logTarget(segments, command, cwd) }, lookSince: false }));
-  return warned ? output(mode) : null;
+  const log = logTarget(segments, command, cwd);
+  if (last?.tree === tree && now - last.at < SAME_RUN_MS && !looked && !escaped) return last.warned ? output(mode, last.first ? FIRST_RUN_MESSAGE : MESSAGE) : null;
+  // A warned first run stays a first run until a look: the denied command never ran, so a rerun's exemptions do not apply.
+  const first = !last || (last.first && last.warned);
+  let specOnly, warned;
+  if (first) {
+    const files = changedFromBase(top, tree, [log, state.lastRun?.log]) ?? [];
+    specOnly = files.length > 0 && files.every((f) => SPEC.test(f));
+    warned = !(looked || escaped) && files.some((f) => !SPEC.test(f));
+  } else {
+    const changed = changedSince(top, last, tree);
+    specOnly = changed.length > 0 && changed.every((f) => SPEC.test(f));
+    warned = !(looked || escaped || (!last.warned && (specOnly || last.specOnly || neverReachedATest(last.log))));
+  }
+  writeFileSync(file, JSON.stringify({ lastRun: { tree, at: now, specOnly, warned, first, log }, lookAt: null }));
+  return warned ? output(mode, first ? FIRST_RUN_MESSAGE : MESSAGE) : null;
 }
 
 /* c8 ignore start -- process wiring */
