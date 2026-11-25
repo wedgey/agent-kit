@@ -35,6 +35,7 @@ ADR 0025 says instruction files hold only what to do. This change moves the date
 
 ## Lanes
 
+- The lane watch gives a lane inside a tool call three quiet limits, because healthy foreground calls ran 18 to 22 minutes. It gives a parked lane two, because a legitimate wait behind the queue ran about an hour. These figures also left the code comment in `tools/watch-lanes.mjs`.
 - On 2026-11-10 an orchestrator dispatched 11 of 27 `general-purpose` lanes on `opus`, 9 of them with no effort, and they cost 29% of the window.
 - A probe on v2.1.322, 2026-11-11, ran a plugin agent that spawned `conductor:explorer` and returned its reply, at depth 2.
 

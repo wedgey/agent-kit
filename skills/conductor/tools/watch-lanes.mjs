@@ -75,8 +75,8 @@ export function lastEntryState(path, start = TAIL_BYTES, size = statSync(path).s
   }
 }
 
-// Healthy foreground calls ran 18 to 22 minutes, so a tool call gets three quiet limits before it counts.
-// A parked lane is waiting on background work, and a legitimate wait behind the queue ran about an hour, so it gets two limits.
+// A healthy foreground call or a wait behind the queue outlasts one quiet limit.
+// Lowering these factors reports live lanes as stalled.
 const QUIET_FACTOR = { "owes-reply": 1, "tool-running": 3, parked: 2 };
 
 /**
