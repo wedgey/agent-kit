@@ -1,0 +1,11 @@
+# The session consults its advisor at three moments
+
+Claude Code can attach an advisor model to a session. The session model calls it as a server-side tool, and the advisor reads the whole conversation and returns advice. Running the session on `sonnet` with an `opus` advisor puts frontier judgment where it counts at strong-code prices for the rest. `opus` costs $4/$20 per million tokens against $2/$10 for `sonnet`, so the saving is at most half. Each call also reads the whole conversation on `opus`. On 2026-11-25 a `claude -p --model sonnet --advisor opus` session made one call. Its `modelUsage` shows `claude-opus-5-5` reading 32,399 tokens with no cache reads, for $0.14, while the `sonnet` model's own usage in that run cost $0.13.
+
+So conductor consults the advisor at three moments only, where a wrong call costs the most. They are before locking a plan, after a second failure on one premise, and before calling the work done. The advisor never replaces a reviewer or a verifier. It reads the same conversation as the session it advises, so it shares that session's blind spots, while a reviewer and a verifier start fresh.
+
+Only the orchestrator's session and a lane run as a separate session have the tool. On v2.1.331, 2026-11-25, a subagent's search found no advisor, as on v2.1.308. Subagent lanes stay the default, because a separate session costs more to manage. Its permission prompts can go unseen, it is reaped when idle, and its state is read through the CLI. Conductor still runs a lane as a separate session only when the epic must outlive the orchestrator's session or the operator takes the lane over. Such a lane gets `--advisor opus` only when it runs on `sonnet`.
+
+The binding states the rules without their evidence, which lives here. The advisor model is set by `/advisor`, the `advisorModel` setting or `--advisor <model>`, as read in the v2.1.331 CLI. The rule that the advisor must be at least as capable as the session model, or the request returns a 400, comes from the Claude API tool-use docs, read 2026-11-25.
+
+Whether the advisor saves tokens is not measured yet. Count its calls in the session's transcript over one epic, and compare them with what the same work cost on `opus`. Revisit the three moments and the lane flag once that record exists.

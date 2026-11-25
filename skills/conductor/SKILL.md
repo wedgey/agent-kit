@@ -45,6 +45,7 @@ Playbooks use these. The binding says how each one works in your harness.
 - **clean worktrees**: remove the worktrees and branches of finished delegates, keeping anything the remote does not hold, except gitignored files.
 - **background** a command so the turn is free, then wait for its completion notice.
 - **hand over in place**: hand the session to itself: shrink its context to what you keep, then go on, without ending it.
+- **consult** the advisor, a stronger model that reads this conversation and answers, where the binding offers one.
 
 ## The todo list
 
@@ -100,6 +101,18 @@ Read `roles.md` before the first spawn of a session.
 **You own their work.** Read the diff or the report yourself. Write your own summary. A delegate saying "done" is a claim, not evidence. Once you have taken an isolated delegate's work, remove its worktree as the binding says.
 
 **Never downgrade yourself.** The orchestrator stays on the session's model. Conductor never switches it.
+
+## Second opinions
+
+Where the binding offers an advisor, consult it at these three moments. The advisor takes no question. It reads the conversation, so write what you need weighed in your own text just before you consult.
+
+| Moment | When | What to put before it |
+|---|---|---|
+| Before locking a plan | The data shape or root cause is named, before the first edit or dispatch | The plan, and what would make it wrong |
+| After a second failure on one premise | [attack-the-premise](principles/attack-the-premise.md) applies, before a third attempt | The premise and both failures |
+| Before calling it done | Before you spawn the verifier, or write a reply that says done | What you claim, and the evidence for each part |
+
+A consult replaces no step. A reviewer and a verifier still run, and a lane still reports a second failure as roles.md Escalation says. Consult at no other moment.
 
 ## Autonomy
 

@@ -104,6 +104,10 @@ _Avoid_: Adapter, config, provider file
 An agent definition a binding ships for one delegate role, carrying the role's default tier, its tools, its rules and the report shape.
 _Avoid_: Tier agent, custom agent, subagent type
 
+**Advisor**:
+A stronger model the harness attaches to a session, which reads that session's conversation and answers when consulted. It is a second opinion inside the work, never a fresh reviewer or verifier.
+_Avoid_: Mentor, supervisor, escalation
+
 **Doctor**:
 The check that spawns each role agent in a harness and confirms the model and effort that actually ran, so a silent fallback is caught.
 _Avoid_: Health check, smoke test

@@ -15,6 +15,13 @@ The orchestrator runs on the session model.
 
 Claude Code has one model family. Spawn reviewers and verifiers fresh at their own tier.
 
+## The advisor
+
+A session has the `advisor` tool only when it starts with an advisor model, set by `/advisor`, the `advisorModel` setting or `--advisor <model>`. Subagents never have it. The tool takes empty input and reads the whole conversation. Consult it at the moments SKILL.md "Second opinions" names.
+
+- Pair a `sonnet` session with an `opus` advisor. The advisor must be at least as capable as the session model.
+- Count each call as frontier spend. It is a `server_tool_use` block named `advisor` in the session's `.jsonl`.
+
 ## Verbs
 
 | Verb | Mechanism | Fallback |
@@ -27,6 +34,7 @@ Claude Code has one model family. Spawn reviewers and verifiers fresh at their o
 | show | Mermaid in the reply for flows. For a mockup, write a throwaway HTML file and publish it with the `Artifact` tool. Screenshots by path | Without `Artifact`, give the file path |
 | background | The `Bash` tool with `run_in_background: true`. It notifies on completion. Do not poll | None. Run it in the foreground only when the queue has a free slot |
 | hand over in place | `mcp__conductor__handover` as the turn's last call. See [Handing over in place](#handing-over-in-place) | epic.md step 9's fallback to a fresh session. Outside an epic, tell the operator in one line that a fresh session would be cheaper |
+| consult | The built-in `advisor` tool. See [The advisor](#the-advisor) | None. Without it, skip consult |
 | isolate | `Agent` with `isolation: "worktree"` | Tell the delegate to `git worktree add` its own path and stay inside it |
 | clean worktrees | `node <skill dir>/tools/sweep-worktrees.mjs`. See [Cleaning up worktrees](#cleaning-up-worktrees) | `git worktree remove` each finished worktree, never with `--force` |
 
@@ -105,7 +113,7 @@ The lane's worktree branches from `origin`'s default branch tip, not the local c
 
 ### When lanes must outlive this session
 
-Dispatch a separate session instead, with `claude --bg --name <lane name> --permission-mode <your mode> --model <model> --effort <effort> "<lane brief>"`, with the lane's tier as above, from the repo's root, through the background verb. continue it with `SendMessage` to its name, read its state with `claude agents --json`, and stop it with `claude stop <id>`. Set the brief's REPORT TO to your session name so it can report by message. `ListAgents` prints your name on its first line. When you track the ticket, pass the lane's name in the todo tool's `lane` field so the pane can show it under the ticket. The pitfalls marked "separate sessions" apply only here.
+Dispatch a separate session instead, with `claude --bg --name <lane name> --permission-mode <your mode> --model <model> --effort <effort> [--advisor opus] "<lane brief>"`, with the lane's tier as above, from the repo's root, through the background verb. Add `--advisor opus` only when the lane runs on `sonnet`. A lane on `opus` gets no advisor. A lane with an advisor consults at the three moments in SKILL.md "Second opinions". continue it with `SendMessage` to its name, read its state with `claude agents --json`, and stop it with `claude stop <id>`. Set the brief's REPORT TO to your session name so it can report by message. `ListAgents` prints your name on its first line. When you track the ticket, pass the lane's name in the todo tool's `lane` field so the pane can show it under the ticket. The pitfalls marked "separate sessions" apply only here.
 
 ## Cleaning up worktrees
 
@@ -133,7 +141,7 @@ The sweep cannot see a delegate's commits once you take them by cherry-pick or m
 - **Separate sessions: idle ones are reaped.** The supervisor stops a session that has sat idle and unattached for about an hour. A stopped session loses nothing, so resume it when its next instruction is ready. Per the agent view docs, read 2026-10-23.
 - **A parked lane may never wake.** On 2026-11-19 a lane ran an e2e in the background and ended its turn with "waiting for its result". The e2e passed 32 minutes before the operator asked whether the epic had stalled, the lane never resumed, and the watch printed nothing because a finished turn never counted. Observed 2026-11-19.
 - **Stall notices arrive late.** A delegate whose model stream stalls gets "Agent stalled: no progress for 600s", but four such notices on 2026-10-29 reached an idle orchestrator 114 to 447 minutes after the lane's last entry, each when the session woke for another reason. The lane watch exists for this. A continue resumes the stalled lane with its context. Observed on v2.1.312, 2026-10-29.
-- **The advisor tool.** Every delegate's request carries a built-in `advisor` tool on `opus`, deferred so the delegate must find it by search. A delegate's search does not find it, an agent file cannot remove it, and no delegate has called it. A UI may show the advisor model and make routing look broken when it is not. Briefs say nothing about it. The doctor and the routing log still count its calls, because a call would be frontier spend outside the escalation rule. Observed on v2.1.308, 2026-10-22.
+- **The advisor tool in delegates.** Every delegate's request carries a built-in `advisor` tool on `opus`, deferred so the delegate must find it by search. A delegate's search does not find it, an agent file cannot remove it, and no delegate has called it. A UI may show the advisor model and make routing look broken when it is not. Briefs say nothing about it. The doctor and the routing log still count its calls, because a call would be frontier spend outside the escalation rule. Observed on v2.1.308, 2026-10-22.
 - **Silent override.** `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` makes every spawn ignore the requested `model` without a message. A per-spawn `model` beats plain `CLAUDE_CODE_SUBAGENT_MODEL`. Per the sub-agents docs, read 2026-10-17.
 - **Fork locks the model.** A fork runs on the session model and takes no `model` or `effort`. It saves context, not cost.
 - **Effort.** Per-spawn `effort` works on non-fork delegates. `CLAUDE_CODE_EFFORT_LEVEL` overrides it. Observed on v2.1.302, 2026-10-17.
