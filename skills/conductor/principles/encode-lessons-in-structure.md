@@ -9,7 +9,7 @@ The second time you write a rule into a brief, reply or comment is the signal to
 1. Make the mistake impossible. Change the type, the default or the API so the wrong thing cannot be written.
 2. Add a check that fails the build, with an error message that names the fix. Use a type, a lint rule or a CI step.
 3. Add a test that fails when the rule breaks.
-4. Write the rule where it is read first, in the playbook step, the brief template or the repo's rules. Give it one line on why it exists, and keep one copy.
+4. Write the rule where it is read first, in the playbook step, the brief template or the repo's rules. Keep one copy. Add a reason only as SKILL.md "Instruction files" allows.
 
 Fix the shape that let the mistake happen, not only the instance.
 
