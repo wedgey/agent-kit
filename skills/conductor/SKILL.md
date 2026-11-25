@@ -112,7 +112,7 @@ Where the binding offers an advisor, consult it at these three moments. The advi
 | After a second failure on one premise | [attack-the-premise](principles/attack-the-premise.md) applies, before a third attempt | The premise and both failures |
 | Before calling it done | Before you spawn the verifier, or write a reply that says done | What you claim, and the evidence for each part |
 
-A consult replaces no step. A reviewer and a verifier still run, because the advisor shares the conversation's blind spots and they start fresh. A lane that hits a second failure still reports it as roles.md Escalation says, after its consult. Each call is frontier spend, so consult at no other moment.
+A consult replaces no step. A reviewer and a verifier still run, and a lane still reports a second failure as roles.md Escalation says. Consult at no other moment.
 
 ## Autonomy
 
