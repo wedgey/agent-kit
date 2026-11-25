@@ -20,7 +20,7 @@ Claude Code has one model family. Spawn reviewers and verifiers fresh at their o
 A session has the `advisor` tool only when it starts with an advisor model, set by `/advisor`, the `advisorModel` setting or `--advisor <model>`. Subagents never have it. The tool takes empty input and reads the whole conversation. Consult it at the moments SKILL.md "Second opinions" names.
 
 - Pair a `sonnet` session with an `opus` advisor. The advisor must be at least as capable as the session model.
-- Each call reads the whole context at `opus` input price, so it costs more as the session grows. Count each call as frontier spend. It is a `server_tool_use` block named `advisor` in the session's `.jsonl`.
+- Count each call as frontier spend. It is a `server_tool_use` block named `advisor` in the session's `.jsonl`.
 
 ## Verbs
 
@@ -141,7 +141,7 @@ The sweep cannot see a delegate's commits once you take them by cherry-pick or m
 - **Separate sessions: idle ones are reaped.** The supervisor stops a session that has sat idle and unattached for about an hour. A stopped session loses nothing, so resume it when its next instruction is ready. Per the agent view docs, read 2026-10-23.
 - **A parked lane may never wake.** On 2026-11-19 a lane ran an e2e in the background and ended its turn with "waiting for its result". The e2e passed 32 minutes before the operator asked whether the epic had stalled, the lane never resumed, and the watch printed nothing because a finished turn never counted. Observed 2026-11-19.
 - **Stall notices arrive late.** A delegate whose model stream stalls gets "Agent stalled: no progress for 600s", but four such notices on 2026-10-29 reached an idle orchestrator 114 to 447 minutes after the lane's last entry, each when the session woke for another reason. The lane watch exists for this. A continue resumes the stalled lane with its context. Observed on v2.1.312, 2026-10-29.
-- **The advisor tool.** Every delegate's request carries a built-in `advisor` tool on `opus`, deferred so the delegate must find it by search. A delegate's search does not find it, an agent file cannot remove it, and no delegate has called it. A UI may show the advisor model and make routing look broken when it is not. Briefs say nothing about it. The doctor and the routing log still count its calls, because a call would be frontier spend outside the escalation rule. Observed on v2.1.308, 2026-10-22.
+- **The advisor tool in delegates.** Every delegate's request carries a built-in `advisor` tool on `opus`, deferred so the delegate must find it by search. A delegate's search does not find it, an agent file cannot remove it, and no delegate has called it. A UI may show the advisor model and make routing look broken when it is not. Briefs say nothing about it. The doctor and the routing log still count its calls, because a call would be frontier spend outside the escalation rule. Observed on v2.1.308, 2026-10-22.
 - **Silent override.** `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` makes every spawn ignore the requested `model` without a message. A per-spawn `model` beats plain `CLAUDE_CODE_SUBAGENT_MODEL`. Per the sub-agents docs, read 2026-10-17.
 - **Fork locks the model.** A fork runs on the session model and takes no `model` or `effort`. It saves context, not cost.
 - **Effort.** Per-spawn `effort` works on non-fork delegates. `CLAUDE_CODE_EFFORT_LEVEL` overrides it. Observed on v2.1.302, 2026-10-17.
