@@ -38,6 +38,7 @@ beforeEach(() => {
   write("e2e/login.spec.ts", "s");
   git("add", "-A");
   git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
 });
 
 describe("the look gate, which warns when an e2e spec is rerun with no look", () => {
@@ -47,6 +48,52 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     const out = call(E2E);
     expect(context(out)).toMatch(/no look since its last run.*agent-browser.*E2E_NO_LOOK=/);
     expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
+  });
+
+  it("warns on a first run with changes beyond specs and no look, and passes it after a look", () => {
+    write("src/app.ts", "b");
+    const out = call(E2E, { CONDUCTOR_LOOK_GATE: "deny" });
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/first e2e run.*Start the dev server.*agent-browser.*E2E_NO_LOOK=/);
+    expect(context(call(E2E))).toMatch(/no look since its last run/);
+    call("agent-browser snapshot");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("gives a retry of a warned first run the first-run message", () => {
+    write("src/new.ts", "n");
+    expect(context(call(E2E))).toMatch(/first e2e run/);
+    clock -= 9 * 60_000;
+    expect(context(call(E2E))).toMatch(/first e2e run/);
+  });
+
+  it("passes a first run after a look", () => {
+    write("src/app.ts", "b");
+    call("agent-browser open http://localhost:3000");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("passes a first run whose changes are only specs", () => {
+    write("e2e/login.spec.ts", "red first");
+    write("e2e/new.spec.ts", "n");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("passes a first run with E2E_NO_LOOK", () => {
+    write("src/app.ts", "b");
+    expect(call(`E2E_NO_LOOK="pure refactor" ${E2E}`)).toBeNull();
+  });
+
+  it("passes a first run when git cannot name a base", () => {
+    write("src/app.ts", "b");
+    git("update-ref", "-d", "refs/remotes/origin/main");
+    expect(call(E2E)).toBeNull();
+  });
+
+  it("measures a first run against origin/HEAD's merge-base, so committed work counts", () => {
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "work", "--allow-empty");
+    write("src/app.ts", "b");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-aqm", "code");
+    expect(context(call(E2E))).toMatch(/first e2e run/);
   });
 
   it("warns on a plain rerun with nothing changed, and on the queued form", () => {
@@ -121,7 +168,7 @@ describe("the look gate, which warns when an e2e spec is rerun with no look", ()
     call(E2E);
     write("src/app.ts", "b");
     clock += 12 * 3_600_000;
-    expect(call(E2E)).toBeNull();
+    expect(context(call(E2E))).toMatch(/first e2e run/);
   });
 
   it("does not count the last run's own log as a change", () => {

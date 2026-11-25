@@ -111,7 +111,7 @@ A lane follows its playbook with these changes:
 
 It reports by ending its turn with the report, or by messaging REPORT TO when the brief sets it, and only at these points. Between them it keeps working. The orchestrator answers by message.
 
-- **Merge-ready.** The PR's full URL, the reviewer's STATUS and the verifier's verdict in one line each, and what it left out.
+- **Merge-ready.** The PR's full URL, the reviewer's STATUS and the verifier's verdict in one line each, and what it left out. For a change with a UI it also gives the LOOK evidence: the screenshot paths from its agent-browser look, what it compared and fixed, and every `E2E_NO_LOOK` reason it used.
 - **Head moved.** After merge-ready, any push to its branch, with the new head, so lanes stacked on it can rebase.
 - **Blocked.** The one question it cannot settle, with the options it sees.
 - **Failed.** What it tried, the evidence, and what it would try next.
