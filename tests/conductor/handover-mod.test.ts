@@ -194,6 +194,15 @@ describe('the handover', () => {
     expect(w.submitted).toEqual([RESUME])
   })
 
+  test('puts a question that spans lines on one line, so the list stays a list', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    await handover($, { keep: KEEP, resume: RESUME, questions: ['Merge #12\n  or wait for #13?'] })
+    await turnEnds($)
+    await clock.advance(0)
+    expect(w.submitted[0]).toContain('- Merge #12 or wait for #13?')
+  })
+
   test('refuses questions that are not a list of strings', async ($, on) => {
     harness(on)
     expect((await handover($, { keep: KEEP, resume: RESUME, questions: 'Merge it?' })).isError).toBe(true)

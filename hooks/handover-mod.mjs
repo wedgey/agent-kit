@@ -7,7 +7,7 @@ const TRIES = 30;
 
 const DESCRIPTION =
   "Hands this session over to itself: when your turn ends, the conversation is compacted to `keep` and `resume` is submitted as the next prompt. " +
-  "Call it only when conductor's context note says your context passed the limit, at the end of the stage in hand, as the last call of your turn. Never while waiting on the operator, and never from a lane, which reports Context full instead. " +
+  "Call it only when conductor's context note says your context passed the limit, at the end of the stage in hand, as the last call of your turn. Never while the stage in hand cannot go on without the operator's answer; list any other open question in `questions`. Never from a lane, which reports Context full instead. " +
   "First write anything that must outlive the summary to the tracker issue, or the PR body when there is none. Running lanes, delegates and watches keep running.";
 
 const SCHEMA = {
@@ -34,16 +34,15 @@ let pending = null;
 /** Whether a handover is compacting or submitting now. */
 let running = false;
 
-const listed = (questions) => questions.map((q) => `- ${q}`).join("\n");
+const listed = (questions) => questions.map((q) => `- ${q.replace(/\s*\n\s*/g, " ")}`).join("\n");
 
 const instructionsFor = ({ keep, questions }) =>
   `This session is handing over to itself to shrink its context. Keep only what follows, word for word where it names ids, and drop the rest of the conversation.\n\n${keep}` +
-  (questions.length ? `\n\nThe operator has not answered these questions yet. Keep each one word for word:\n${listed(questions)}` : "");
+  (questions.length ? `\n\nThese questions to the operator were open when the handover was called. Keep each word for word, and keep any answer the operator has given since:\n${listed(questions)}` : "");
 
-// Lane notices and the resume prompt push a question up the transcript, so the operator can miss it.
 const resumeFor = ({ resume, questions }) =>
   questions.length
-    ? `${resume}\n\nThe operator has not answered these questions yet. End your next reply to the operator by asking them again, word for word:\n${listed(questions)}`
+    ? `${resume}\n\nEnd your next reply to the operator by asking again, word for word, each of these questions the operator has not answered yet:\n${listed(questions)}`
     : resume;
 
 async function compactThenResume($, handover) {
