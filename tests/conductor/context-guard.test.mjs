@@ -166,7 +166,7 @@ describe("the context guard, a PostToolUse and UserPromptSubmit hook for delegat
 
   it("tells any other session to hand over in place when its stage ends, not to suggest a fresh session", () => {
     const out = note(guard(ownSession([turn("m1", 149_000), result(), turn("m2", 151_000)]), {}));
-    expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place: call mcp__conductor__handover.*waiting on the operator, wait for the answer first.*Without that tool, tell the operator/);
+    expect(out).toMatch(/Otherwise, when the stage in hand ends, hand over in place: call mcp__conductor__handover.*cannot go on without the operator's answer, wait for it first.*Without that tool, tell the operator/);
   });
 
   it("reminds the session on every operator prompt while it is still past its limit", () => {

@@ -170,4 +170,42 @@ describe('the handover', () => {
     expect((await handover($, { keep: KEEP })).isError).toBe(true)
     expect((await handover($, { keep: ' ', resume: RESUME })).isError).toBe(true)
   })
+
+  test('carries each unanswered operator question into the summary and asks it again after the resume', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    const asked = ['Should I open the agent-kit PR?', 'Is redrawing unpicked screens the rule you want?']
+    await handover($, { keep: KEEP, resume: RESUME, questions: asked })
+    await turnEnds($)
+    await clock.advance(0)
+    for (const q of asked) {
+      expect(w.compacted[0]).toContain(q)
+      expect(w.submitted[0]).toContain(q)
+    }
+    expect(w.submitted[0].startsWith(RESUME)).toBe(true)
+  })
+
+  test('submits the resume prompt unchanged when no question is open', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    await handover($, { keep: KEEP, resume: RESUME, questions: [' '] })
+    await turnEnds($)
+    await clock.advance(0)
+    expect(w.submitted).toEqual([RESUME])
+  })
+
+  test('puts a question that spans lines on one line, so the list stays a list', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = harness(on)
+    await handover($, { keep: KEEP, resume: RESUME, questions: ['Merge #12\n  or wait for #13?'] })
+    await turnEnds($)
+    await clock.advance(0)
+    expect(w.submitted[0]).toContain('- Merge #12 or wait for #13?')
+  })
+
+  test('refuses questions that are not a list of strings', async ($, on) => {
+    harness(on)
+    expect((await handover($, { keep: KEEP, resume: RESUME, questions: 'Merge it?' })).isError).toBe(true)
+    expect((await handover($, { keep: KEEP, resume: RESUME, questions: [3] })).isError).toBe(true)
+  })
 })

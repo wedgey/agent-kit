@@ -137,7 +137,7 @@ const SESSION_ACTION =
   `If you are a lane, push your branch and send a Context full report to REPORT TO, per roles.md "Lanes". ` +
   `Otherwise, if you steer an epic, finish the notice in hand, then hand over per epic.md "Hand over the epic". ` +
   `Otherwise, when the stage in hand ends, hand over in place: call ${HANDOVER_TOOL} as your turn's last call, per the binding's "Handing over in place". ` +
-  `If you are waiting on the operator, wait for the answer first. Without that tool, tell the operator in one line that a fresh session would be cheaper.`;
+  `If the stage in hand cannot go on without the operator's answer, wait for it first; list any other open question in the tool's questions. Without that tool, tell the operator in one line that a fresh session would be cheaper.`;
 // The operator's answer ends any wait, so this note says when to act rather than repeating every branch.
 const PROMPT_ACTION =
   `If you are a lane, report Context full per roles.md "Lanes" instead. ` +
