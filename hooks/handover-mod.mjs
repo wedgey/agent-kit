@@ -18,8 +18,13 @@ const SCHEMA = {
       description: "What the compacted session must still know: the task and its issue, the playbook step, branch and PR, what is done and what is next, each running lane or delegate's ticket, agent id, task id and state, its watches' task ids, and the operator's standing instructions quoted",
     },
     resume: { type: "string", description: "The prompt that continues the work after the compaction, such as: Continue the epic from #431's latest hand-over comment." },
+    questions: {
+      type: "array",
+      items: { type: "string" },
+      description: "Every question you asked the operator that they have not answered yet, each quoted word for word. Give an empty list when none is open. The session asks them again after the handover.",
+    },
   },
-  required: ["keep", "resume"],
+  required: ["keep", "resume", "questions"],
 };
 
 // shortcut: a plugin reload between the tool call and the compaction drops the handover, and the
@@ -29,15 +34,24 @@ let pending = null;
 /** Whether a handover is compacting or submitting now. */
 let running = false;
 
-const instructionsFor = (keep) =>
-  `This session is handing over to itself to shrink its context. Keep only what follows, word for word where it names ids, and drop the rest of the conversation.\n\n${keep}`;
+const listed = (questions) => questions.map((q) => `- ${q}`).join("\n");
+
+const instructionsFor = ({ keep, questions }) =>
+  `This session is handing over to itself to shrink its context. Keep only what follows, word for word where it names ids, and drop the rest of the conversation.\n\n${keep}` +
+  (questions.length ? `\n\nThe operator has not answered these questions yet. Keep each one word for word:\n${listed(questions)}` : "");
+
+// Lane notices and the resume prompt push a question up the transcript, so the operator can miss it.
+const resumeFor = ({ resume, questions }) =>
+  questions.length
+    ? `${resume}\n\nThe operator has not answered these questions yet. End your next reply to the operator by asking them again, word for word:\n${listed(questions)}`
+    : resume;
 
 async function compactThenResume($, handover) {
   for (let tried = 1; ; tried++) {
     try {
-      const done = await $.session.compact({ instructions: instructionsFor(handover.keep) });
+      const done = await $.session.compact({ instructions: instructionsFor(handover) });
       if (done?.skip) {
-        $.ui.toast(`conductor: the handover's compaction was skipped (${done.skip}). Run /compact, then send: ${handover.resume}`);
+        $.ui.toast(`conductor: the handover's compaction was skipped (${done.skip}). Run /compact, then send: ${resumeFor(handover)}`);
         return;
       }
       break;
@@ -50,10 +64,10 @@ async function compactThenResume($, handover) {
     }
   }
   try {
-    await $.prompt.submit({ text: handover.resume });
+    await $.prompt.submit({ text: resumeFor(handover) });
   } catch (error) {
-    $.ui.log(`conductor: the handover could not submit its resume prompt: ${handover.resume}`, { to: "debug" });
-    $.ui.toast(`conductor: the session compacted but could not continue (${error?.message ?? error}). Send: ${handover.resume}`);
+    $.ui.log(`conductor: the handover could not submit its resume prompt: ${resumeFor(handover)}`, { to: "debug" });
+    $.ui.toast(`conductor: the session compacted but could not continue (${error?.message ?? error}). Send: ${resumeFor(handover)}`);
   }
 }
 
@@ -72,7 +86,10 @@ export const register = (on) => {
     const keep = typeof e.keep === "string" ? e.keep.trim() : "";
     const resume = typeof e.resume === "string" ? e.resume.trim() : "";
     if (!keep || !resume) return { result: "Not handed over: give both keep and resume.", isError: true };
-    pending = { keep, resume };
+    const asked = e.questions ?? [];
+    if (!Array.isArray(asked) || asked.some((q) => typeof q !== "string"))
+      return { result: "Not handed over: questions must be a list of strings, empty when none is open.", isError: true };
+    pending = { keep, resume, questions: asked.map((q) => q.trim()).filter(Boolean) };
     return { result: "Handover queued. End your turn now with no further calls; the session compacts and continues with your resume prompt." };
   });
 
